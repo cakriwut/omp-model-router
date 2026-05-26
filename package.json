@@ -1,6 +1,6 @@
 {
   "name": "@cakriwut/omp-model-router",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cost-optimized model routing for Oh-My-Pi — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs.",
   "type": "module",
   "main": "index.ts",
@@ -50,9 +50,15 @@
     "@oh-my-pi/pi-ai": ">=0.1.0"
   },
   "peerDependenciesMeta": {
-    "@oh-my-pi/pi-coding-agent": { "optional": false },
-    "@oh-my-pi/pi-agent-core": { "optional": false },
-    "@oh-my-pi/pi-ai": { "optional": false }
+    "@oh-my-pi/pi-coding-agent": {
+      "optional": false
+    },
+    "@oh-my-pi/pi-agent-core": {
+      "optional": false
+    },
+    "@oh-my-pi/pi-ai": {
+      "optional": false
+    }
   },
   "engines": {
     "bun": ">=1.0.0"
@@ -63,6 +69,8 @@
   "omp": {
     "repository": "https://github.com/can1357/oh-my-pi",
     "type": "extension",
-    "extensions": ["index.ts"]
+    "extensions": [
+      "index.ts"
+    ]
   }
 }
