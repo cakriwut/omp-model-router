@@ -450,7 +450,6 @@ export const registerRouterProvider = (
 								},
 							);
 
-							let contentReceived = false;
 							for await (const event of delegatedStream) {
 								if (event.type === "done") {
 									const u = event.message.usage;
@@ -464,18 +463,12 @@ export const registerRouterProvider = (
 										cost: (decision.usage?.cost ?? 0) + cost,
 									};
 								}
-								if (event.type === "error" && !contentReceived) {
+								if (event.type === "error") {
 									throw new Error(
 										(event as any).error?.errorMessage ||
-											"Model failed before sending content.",
+											"Model failed.",
 									);
 								}
-								const isContent =
-									event.type === "text_delta" ||
-									event.type === "thinking_delta" ||
-									event.type === "toolcall_delta" ||
-									event.type === "toolcall_end";
-								if (isContent) contentReceived = true;
 								stream.push(event);
 							}
 							success = true;
