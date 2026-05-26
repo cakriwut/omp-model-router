@@ -1,0 +1,56 @@
+{
+  "defaultProfile": "auto",
+  "debug": false,
+  "phaseBias": 0.5,
+  "maxSessionBudget": 2.0,
+  "largeContextThreshold": 100000,
+  "rules": [
+    {
+      "matches": ["deploy", "production", "release"],
+      "tier": "high",
+      "reason": "Safety check for production tasks"
+    },
+    { "matches": "changelog", "tier": "low" }
+  ],
+  "profiles": {
+    "auto": {
+      "high": {
+        "model": "anthropic/claude-sonnet-4-5",
+        "thinking": "high",
+        "fallbacks": ["anthropic/claude-sonnet-4-20250514"]
+      },
+      "medium": {
+        "model": "anthropic/claude-sonnet-4-20250514",
+        "thinking": "medium"
+      },
+      "low": {
+        "model": "anthropic/claude-haiku-4-5",
+        "thinking": "low"
+      }
+    },
+    "cheap": {
+      "high": { "model": "anthropic/claude-sonnet-4-20250514", "thinking": "medium" },
+      "medium": { "model": "anthropic/claude-haiku-4-5", "thinking": "low" },
+      "low": { "model": "anthropic/claude-haiku-4-5", "thinking": "off" }
+    },
+    "deep": {
+      "high": { "model": "anthropic/claude-sonnet-4-5", "thinking": "xhigh" },
+      "medium": { "model": "anthropic/claude-sonnet-4-5", "thinking": "high" },
+      "low": { "model": "anthropic/claude-sonnet-4-20250514", "thinking": "medium" }
+    },
+    "bedrock": {
+      "high": {
+        "model": "amazon-bedrock/global.anthropic.claude-opus-4-6-v1",
+        "thinking": "high"
+      },
+      "medium": {
+        "model": "amazon-bedrock/global.anthropic.claude-sonnet-4-6",
+        "thinking": "medium"
+      },
+      "low": {
+        "model": "amazon-bedrock/global.anthropic.claude-haiku-4-5-v1",
+        "thinking": "low"
+      }
+    }
+  }
+}
