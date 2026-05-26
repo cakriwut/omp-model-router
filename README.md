@@ -135,7 +135,7 @@ Test files:
 
 ## Related Projects
 
-- [Oh-My-Pi](https://github.com/can1357/oh-my-pi) - Parent project
+- [Oh-My-Pi](https://github.com/can1357/oh-my-pi) - Required runtime environment
 - [@oh-my-pi/pi-coding-agent](https://npmjs.com/package/@oh-my-pi/pi-coding-agent) - Required dependency
 
 ## License

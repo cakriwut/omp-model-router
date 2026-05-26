@@ -59,6 +59,7 @@
   },
   "publishConfig": {
     "access": "public"
+  },
   "omp": {
     "repository": "https://github.com/can1357/oh-my-pi", 
     "type": "extension"
