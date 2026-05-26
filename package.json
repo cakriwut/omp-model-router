@@ -62,6 +62,7 @@
   },
   "omp": {
     "repository": "https://github.com/can1357/oh-my-pi",
-    "type": "extension"
+    "type": "extension",
+    "extensions": ["index.ts"]
   }
 }
