@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
 
 jobs:
   publish:
@@ -25,27 +25,29 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Publishing version: ${VERSION}"
 
-      - name: Set package version
-        run: npm version ${{ steps.version.outputs.version }} --no-git-tag-version
+      - name: Sync package.json version to tag
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
+            pkg.version = '${{ steps.version.outputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
 
-      - name: Install dependencies
-        run: bun install
-
-      - name: Run tests
-        run: bun test
-        continue-on-error: true
+      - name: Verify package contents
+        run: |
+          echo "=== package.json ==="
+          cat package.json
+          echo "=== files to publish ==="
+          npm pack --dry-run
 
       - name: Configure NPM auth
         run: |
-          echo "@cakriwut:registry=https://registry.npmjs.org/" >> .npmrc
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN_CAKRIWUT}" >> .npmrc
-        env:
-          NPM_TOKEN_CAKRIWUT: ${{ secrets.NPM_TOKEN_CAKRIWUT }}
+          echo "@cakriwut:registry=https://registry.npmjs.org/" >> $HOME/.npmrc
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN_CAKRIWUT }}" >> $HOME/.npmrc
 
       - name: Publish to NPM
         run: npm publish --access public
-        env:
-          NPM_TOKEN_CAKRIWUT: ${{ secrets.NPM_TOKEN_CAKRIWUT }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
