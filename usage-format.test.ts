@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import type { RoutingDecision, RouterTier } from "./types";
+import type { RoutingDecision, RoutingDecisionUsage, RouterTier } from "./types";
 
 // Simulate theme.fg — wraps text in identifiable ANSI markers
 function createMockTheme() {
@@ -26,7 +26,6 @@ function createMockTheme() {
 // Reproduce the handleUsage logic in isolation for testability
 function renderUsageReport(opts: {
 	selectedProfile: string;
-	accumulatedCost: number;
 	maxSessionBudget?: number;
 	debugHistory: RoutingDecision[];
 	profileConfig: {
@@ -54,14 +53,15 @@ function renderUsageReport(opts: {
 	};
 
 	// Gather per-model usage
-	const modelUsage: Record<string, { count: number; tier: string }> = {};
+	const modelUsage: Record<string, { count: number; tier: string; cost: number }> = {};
 	for (const decision of opts.debugHistory) {
 		if (decision.profile !== opts.selectedProfile) continue;
 		const key = decision.targetLabel;
 		if (!modelUsage[key]) {
-			modelUsage[key] = { count: 0, tier: decision.tier };
+			modelUsage[key] = { count: 0, tier: decision.tier, cost: 0 };
 		}
 		modelUsage[key].count++;
+		modelUsage[key].cost += decision.usage?.cost ?? 0;
 	}
 
 	// Tier distribution
@@ -74,11 +74,12 @@ function renderUsageReport(opts: {
 	}
 	const totalDecisions = tierCounts.high + tierCounts.medium + tierCounts.low;
 
-	// Header line
+	// Header line: cost derived from modelUsage sum to match breakdown
+	const sessionCost = Object.values(modelUsage).reduce((s, m) => s + m.cost, 0);
 	const budget = opts.maxSessionBudget;
 	const costStr = budget
-		? `$${opts.accumulatedCost.toFixed(4)} / $${budget.toFixed(2)}`
-		: `$${opts.accumulatedCost.toFixed(4)}`;
+		? `$${sessionCost.toFixed(4)} / $${budget.toFixed(2)}`
+		: `$${sessionCost.toFixed(4)}`;
 	const headerLeft = `Router: ${opts.selectedProfile}`;
 	const headerPad = Math.max(1, BAR_WIDTH + 2 - headerLeft.length - costStr.length);
 	const headerLine = `${headerLeft}${" ".repeat(headerPad)}${costStr}`;
@@ -134,13 +135,10 @@ function renderUsageReport(opts: {
 		const parts = modelRef.split("/");
 		const modelId = parts.length > 1 ? parts.slice(1).join("/") : parts[0];
 		const usageCount = modelUsage[modelRef]?.count ?? 0;
+		const trackedCost = modelUsage[modelRef]?.cost ?? 0;
 
 		const modelMeta = opts.models[modelRef];
-		const tierCost = modelMeta?.cost
-			? usageCount > 0
-				? `$${(usageCount * ((modelMeta.cost.input + modelMeta.cost.output) / 2)).toFixed(4)}`
-				: "$0"
-			: "";
+		const tierCost = modelMeta?.cost ? `$${trackedCost.toFixed(4)}` : "";
 
 		const tierLabel = tierColor(tier, tier.toUpperCase().padEnd(8));
 		const modelName = modelId.padEnd(38);
@@ -194,7 +192,6 @@ function stripAnsi(str: string): string {
 describe("/router usage format", () => {
 	const baseOpts = {
 		selectedProfile: "default",
-		accumulatedCost: 0.1234,
 		maxSessionBudget: 5.0,
 		profileConfig: {
 			high: { model: "anthropic/claude-sonnet-4-20250514" },
@@ -260,7 +257,7 @@ describe("/router usage format", () => {
 		// Structural assertions on stripped version
 		const plain = stripAnsi(output);
 		expect(plain).toContain("Router: default");
-		expect(plain).toContain("$0.1234 / $5.00");
+		expect(plain).toContain("$0.0000 / $5.00");
 		expect(plain).toContain("20 decisions");
 		expect(plain).toContain("high 25%");
 		expect(plain).toContain("medium 60%");
@@ -337,7 +334,7 @@ describe("/router usage format", () => {
 		const plain = stripAnsi(renderUsageReport(baseOpts));
 		const headerLine = plain.split("\n")[0];
 		expect(headerLine.startsWith("Router: default")).toBe(true);
-		expect(headerLine.endsWith("$0.1234 / $5.00")).toBe(true);
+		expect(headerLine.endsWith("$0.0000 / $5.00")).toBe(true);
 	});
 
 	it("shows cost without budget when maxSessionBudget is not set", () => {
@@ -347,7 +344,42 @@ describe("/router usage format", () => {
 		});
 		const plain = stripAnsi(output);
 		const headerLine = plain.split("\n")[0];
-		expect(headerLine).toContain("$0.1234");
+		expect(headerLine).toContain("$0.0000");
 		expect(headerLine).not.toContain("/");
+	});
+
+	it("shows real tracked cost from decision.usage, not an estimate", () => {
+		// 2 high decisions each costing $0.05 = $0.1000 total for that tier
+		const usage: RoutingDecisionUsage = {
+			inputTokens: 1000,
+			outputTokens: 200,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			cost: 0.05,
+		};
+		const plain = stripAnsi(
+			renderUsageReport({
+				...baseOpts,
+				debugHistory: [
+					makeDecision({
+						tier: "high",
+						targetLabel: "anthropic/claude-sonnet-4-20250514",
+						usage,
+					}),
+					makeDecision({
+						tier: "high",
+						targetLabel: "anthropic/claude-sonnet-4-20250514",
+						usage,
+					}),
+				],
+			}),
+		);
+		// HIGH tier line must show $0.1000 (0.05 + 0.05), not a made-up estimate
+		const highLine = plain.split("\n").find((l) => l.includes("HIGH"));
+		expect(highLine).toBeDefined();
+		expect(highLine).toContain("$0.1000");
+		// Header total must match the breakdown sum (2 * $0.05 = $0.1000)
+		const headerLine = plain.split("\n")[0];
+		expect(headerLine).toContain("$0.1000");
 	});
 });

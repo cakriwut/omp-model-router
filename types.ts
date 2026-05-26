@@ -36,6 +36,14 @@ export interface RouterConfig {
 	profiles: Record<string, RouterProfile>;
 }
 
+export interface RoutingDecisionUsage {
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	cost: number;
+}
+
 export interface RoutingDecision {
 	profile: string;
 	tier: RouterTier;
@@ -46,6 +54,7 @@ export interface RoutingDecision {
 	reasoning: string;
 	thinking: ThinkingLevel;
 	timestamp: number;
+	usage?: RoutingDecisionUsage;
 	isClassifier?: boolean;
 	isFallback?: boolean;
 	isContextTriggered?: boolean;

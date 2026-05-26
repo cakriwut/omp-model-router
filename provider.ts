@@ -453,9 +453,16 @@ export const registerRouterProvider = (
 							let contentReceived = false;
 							for await (const event of delegatedStream) {
 								if (event.type === "done") {
-									const cost =
-										event.message.usage?.cost?.total ?? 0;
+									const u = event.message.usage;
+									const cost = u?.cost?.total ?? 0;
 									state.accumulatedCost += cost;
+									decision.usage = {
+										inputTokens: (decision.usage?.inputTokens ?? 0) + (u?.input ?? 0),
+										outputTokens: (decision.usage?.outputTokens ?? 0) + (u?.output ?? 0),
+										cacheReadTokens: (decision.usage?.cacheReadTokens ?? 0) + (u?.cacheRead ?? 0),
+										cacheWriteTokens: (decision.usage?.cacheWriteTokens ?? 0) + (u?.cacheWrite ?? 0),
+										cost: (decision.usage?.cost ?? 0) + cost,
+									};
 								}
 								if (event.type === "error" && !contentReceived) {
 									throw new Error(

@@ -396,14 +396,15 @@ export const registerCommands = (
 		};
 
 		// Gather per-model usage from debug history
-		const modelUsage: Record<string, { count: number; tier: string }> = {};
+		const modelUsage: Record<string, { count: number; tier: string; cost: number }> = {};
 		for (const decision of state.debugHistory) {
 			if (decision.profile !== state.selectedProfile) continue;
 			const key = decision.targetLabel;
 			if (!modelUsage[key]) {
-				modelUsage[key] = { count: 0, tier: decision.tier };
+				modelUsage[key] = { count: 0, tier: decision.tier, cost: 0 };
 			}
 			modelUsage[key].count++;
+			modelUsage[key].cost += decision.usage?.cost ?? 0;
 		}
 
 		// Tier distribution
@@ -417,11 +418,12 @@ export const registerCommands = (
 		const totalDecisions =
 			tierCounts.high + tierCounts.medium + tierCounts.low;
 
-		// Header line: profile + cost
+		// Header line: profile + cost (derived from per-decision tracking, not cross-profile accumulator)
+		const sessionCost = Object.values(modelUsage).reduce((s, m) => s + m.cost, 0);
 		const budget = state.currentConfig.maxSessionBudget;
 		const costStr = budget
-			? `$${state.accumulatedCost.toFixed(4)} / $${budget.toFixed(2)}`
-			: `$${state.accumulatedCost.toFixed(4)}`;
+			? `$${sessionCost.toFixed(4)} / $${budget.toFixed(2)}`
+			: `$${sessionCost.toFixed(4)}`;
 		const headerLeft = `Router: ${state.selectedProfile}`;
 		const headerPad = Math.max(
 			1,
@@ -498,15 +500,11 @@ export const registerCommands = (
 			const tierConfig = profile[tier];
 			const { provider, modelId } = parseCanonicalModelRef(tierConfig.model);
 			const usageCount = modelUsage[tierConfig.model]?.count ?? 0;
+			const trackedCost = modelUsage[tierConfig.model]?.cost ?? 0;
 			const registeredModel = ctx.modelRegistry.find(provider, modelId);
 
-			const costInfo = registeredModel?.cost;
-			const tierCost = costInfo
-				? (
-						usageCount > 0
-							? `$${(usageCount * ((costInfo.input + costInfo.output) / 2)).toFixed(4)}`
-							: "$0"
-					)
+			const tierCost = registeredModel?.cost
+				? `$${trackedCost.toFixed(4)}`
 				: "";
 
 			const tierLabel = tierColor(tier, tier.toUpperCase().padEnd(8));
