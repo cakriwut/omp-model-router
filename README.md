@@ -16,13 +16,45 @@ Cost-optimized model routing for [Oh-My-Pi](https://github.com/can1357/oh-my-pi)
 
 ## Installation
 
-```bash
-# Install in OMP environment
-npm install @cakriwut/omp-model-router
+### For Coding Agents (Oh-My-Pi)
 
-# Or include in OMP extensions folder
-cp -r node_modules/@cakriwut/omp-model-router/* ~/.omp/agent/extensions/model-router/
+To install this extension in your OMP environment, use this prompt:
+
 ```
+Install the omp-model-router extension from npm package @cakriwut/omp-model-router.
+Create the extension at ~/.omp/agent/extensions/model-router/ with:
+1. package.json with dependency "@cakriwut/omp-model-router": "latest"
+2. index.ts that re-exports: export { default } from "@cakriwut/omp-model-router";
+3. Run npm install in that directory
+```
+
+### Manual Installation
+
+```bash
+# Create extension directory
+mkdir -p ~/.omp/agent/extensions/model-router
+cd ~/.omp/agent/extensions/model-router
+
+# Create package.json
+cat > package.json << 'EOF'
+{
+  "name": "model-router-extension",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@cakriwut/omp-model-router": "latest"
+  }
+}
+EOF
+
+# Install dependencies
+npm install
+
+# Create entry point
+echo 'export { default } from "@cakriwut/omp-model-router";' > index.ts
+```
+
+After installation, run `/reload` in your OMP session to activate the extension.
 
 ## Configuration
 
