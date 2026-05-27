@@ -115,20 +115,23 @@ const EXPLICIT_LOW_HINTS: readonly string[] = [
 	"small",
 ];
 
-const PLANNING_KEYWORDS: readonly string[] = [
-	"plan",
-	"planning",
+const STRONG_PLANNING_KEYWORDS: readonly string[] = [
 	"architecture",
 	"architect",
-	"design",
 	"tradeoff",
 	"trade-off",
-	"research",
-	"investigate",
 	"root cause",
+	"investigate",
+	"migration",
 	"analyze",
 	"analysis",
-	"migration",
+];
+
+const WEAK_PLANNING_KEYWORDS: readonly string[] = [
+	"plan",
+	"planning",
+	"design",
+	"research",
 	"strategy",
 	"compare",
 	"options",
@@ -180,6 +183,27 @@ const LOOKUP_KEYWORDS: readonly string[] = [
 	"grep",
 ];
 
+const GIT_KEYWORDS: readonly string[] = [
+	"commit",
+	"push",
+	"pull",
+	"merge",
+	"rebase",
+	"cherry-pick",
+	"stash",
+	"checkout",
+	"branch",
+	"tag",
+	"fetch",
+	"clone",
+	"reset",
+	"revert",
+	"amend",
+	"git status",
+	"git log",
+	"git diff",
+	"git add",
+];
 interface KeywordMatcher {
 	singleWord: RegExp[];
 	multiWord: readonly string[];
@@ -202,10 +226,12 @@ const buildKeywordMatcher = (keywords: readonly string[]): KeywordMatcher => {
 // Pre-compile all matchers at module load — zero per-call allocation.
 const HIGH_HINT_MATCHER = buildKeywordMatcher(EXPLICIT_HIGH_HINTS);
 const LOW_HINT_MATCHER = buildKeywordMatcher(EXPLICIT_LOW_HINTS);
-const PLANNING_MATCHER = buildKeywordMatcher(PLANNING_KEYWORDS);
+const STRONG_PLANNING_MATCHER = buildKeywordMatcher(STRONG_PLANNING_KEYWORDS);
 const SUMMARY_MATCHER = buildKeywordMatcher(SUMMARY_KEYWORDS);
+const WEAK_PLANNING_MATCHER = buildKeywordMatcher(WEAK_PLANNING_KEYWORDS);
 const IMPLEMENTATION_MATCHER = buildKeywordMatcher(IMPLEMENTATION_KEYWORDS);
 const LOOKUP_MATCHER = buildKeywordMatcher(LOOKUP_KEYWORDS);
+const GIT_MATCHER = buildKeywordMatcher(GIT_KEYWORDS);
 
 /**
  * Returns true if any keyword in the matcher appears in text, using
@@ -225,12 +251,27 @@ export const matchesKeywords = (
 	return false;
 };
 
+/** Count how many keywords from a matcher appear in the text. */
+const countKeywordMatches = (text: string, matcher: KeywordMatcher): number => {
+	let count = 0;
+	for (const re of matcher.singleWord) {
+		if (re.test(text)) count++;
+	}
+	for (const phrase of matcher.multiWord) {
+		if (text.includes(phrase)) count++;
+	}
+	return count;
+};
+
 /**
  * @deprecated Use matchesKeywords with a pre-built matcher instead.
  * Kept for external callers that may depend on it.
  */
 export const containsAny = (text: string, keywords: string[]): boolean => {
-	return keywords.some((keyword) => text.includes(keyword));
+	return keywords.some((keyword) => {
+		if (keyword.includes(" ")) return text.includes(keyword);
+		return new RegExp(`\\b${keyword}\\b`, "i").test(text);
+	});
 };
 
 // ─── Routing primitives ───────────────────────────────────────────────────────
@@ -286,7 +327,6 @@ export const decideRouting = (
 	const recentConversation = getRecentConversationText(context);
 	const toolResultCount = countToolResults(context);
 	const wordCount = countWords(prompt);
-	const multiLinePrompt = prompt.split("\n").length >= 4;
 
 	let phase: RouterPhase = previousDecision?.phase ?? "implementation";
 	let tier: RouterTier = "medium";
@@ -346,12 +386,25 @@ export const decideRouting = (
 				phase = "lightweight";
 				tier = "low";
 				reasoning = "Detected summary or lightweight transformation keywords.";
+			} else if (matchesKeywords(prompt, GIT_MATCHER)) {
+				phase = "lightweight";
+				tier = "low";
+				reasoning = "Detected a git operation — low model sufficient.";
+			} else if (matchesKeywords(prompt, STRONG_PLANNING_MATCHER)) {
+				phase = "planning";
+				tier = "high";
+				reasoning = "Detected strong planning keyword indicating architectural or investigative work.";
 			} else if (
-				matchesKeywords(prompt, PLANNING_MATCHER) ||
-				prompt.startsWith("why ") ||
-				wordCount >= highThreshold ||
-				multiLinePrompt
+				matchesKeywords(prompt, WEAK_PLANNING_MATCHER) &&
+				(wordCount >= 12 ||
+					prompt.startsWith("why ") ||
+					previousDecision?.phase === "planning" ||
+					countKeywordMatches(prompt, WEAK_PLANNING_MATCHER) >= 2)
 			) {
+				phase = "planning";
+				tier = "high";
+				reasoning = "Detected planning keyword corroborated by prompt length, context, or multiple signals.";
+			} else if (prompt.startsWith("why ") || wordCount >= highThreshold) {
 				phase = "planning";
 				tier = "high";
 				reasoning =
