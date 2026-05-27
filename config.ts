@@ -92,6 +92,7 @@ export const mergeConfig = (
 				...(existing?.low ?? FALLBACK_CONFIG.profiles.auto.low),
 				...(nextProfile.low ?? {}),
 			},
+			historyCompression: nextProfile.historyCompression ?? existing?.historyCompression,
 		};
 	}
 	return {
@@ -103,6 +104,7 @@ export const mergeConfig = (
 			override.largeContextThreshold ?? base.largeContextThreshold,
 		maxSessionBudget: override.maxSessionBudget ?? base.maxSessionBudget,
 		rules: override.rules ?? base.rules,
+		historyCompression: override.historyCompression ?? base.historyCompression,
 		profiles: mergedProfiles,
 	};
 };
@@ -212,6 +214,7 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 				"low",
 				warnings,
 			),
+			historyCompression: profile?.historyCompression,
 		};
 	}
 
@@ -304,6 +307,7 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 			largeContextThreshold,
 			maxSessionBudget,
 			rules: rules.length > 0 ? rules : undefined,
+			historyCompression: raw.historyCompression,
 			profiles: normalizedProfiles,
 		},
 		warnings,

@@ -57,6 +57,11 @@ export class RouterState {
 	lastNonRouterModel: string | undefined;
 	lastRegisteredModels = "";
 
+	// ─── Compression stats (session-level) ──────────────────────────────
+	compressionRequestCount = 0;
+	compressionTotalOriginalChars = 0;
+	compressionTotalCompressedChars = 0;
+
 	// ─── Internal ────────────────────────────────────────────────────────
 	private lastPersistedSnapshot: string | undefined;
 	private readonly pi: ExtensionAPI;

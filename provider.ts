@@ -19,6 +19,7 @@ import {
 	hasImageAttachment,
 } from "./routing";
 import type { RouterState } from "./state";
+import { resolveCompressionConfig, compressHistory, isModelExcludedFromCompression } from "./context-compression";
 
 export const createErrorMessage = (
 	model: Model<Api>,
@@ -46,6 +47,45 @@ export const createErrorMessage = (
 
 /** Heuristic token estimator (conservative: 3 characters per token) */
 const estimateTokens = (text: string): number => Math.ceil(text.length / 3);
+
+/** Valid tool name pattern per Bedrock/Anthropic API constraints */
+export const VALID_TOOL_NAME_RE = /^[a-zA-Z0-9_-]+$/;
+
+/**
+ * Sanitize a tool name to match API constraints ([a-zA-Z0-9_-]+).
+ * Replaces invalid characters with underscores and truncates to 64 chars.
+ */
+export const sanitizeToolName = (name: string): string => {
+	if (VALID_TOOL_NAME_RE.test(name)) return name;
+	const sanitized = name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+	return sanitized || "unknown_tool";
+};
+
+/**
+ * Sanitize context messages to ensure tool call names are valid.
+ * Some models (e.g. with leaked special tokens) may produce malformed tool names
+ * that fail API validation when replayed in conversation history.
+ */
+export const sanitizeContext = (context: Context): Context => {
+	let modified = false;
+	const messages = context.messages.map((msg) => {
+		if (!Array.isArray(msg.content)) return msg;
+		let contentModified = false;
+		const content = msg.content.map((block: any) => {
+			if (block.type === "toolCall" && block.name && !VALID_TOOL_NAME_RE.test(block.name)) {
+				contentModified = true;
+				return { ...block, name: sanitizeToolName(block.name) };
+			}
+			return block;
+		});
+		if (contentModified) {
+			modified = true;
+			return { ...msg, content };
+		}
+		return msg;
+	});
+	return modified ? { ...context, messages } : context;
+};
 
 /**
  * Returns true if the given model ref supports image input.
@@ -282,6 +322,23 @@ export const registerRouterProvider = (
 									? truncateContext(context, targetLimit)
 									: context;
 
+							// ── History compression (TOON) ───────────────────────────────
+							const compressionCfg = resolveCompressionConfig(
+								state.currentConfig.historyCompression,
+								state.currentConfig.profiles[model.id]?.historyCompression,
+							);
+							let finalContext = effectiveContext;
+							if (compressionCfg?.enabled && !isModelExcludedFromCompression(compressionCfg, targetProvider, targetModelId)) {
+								const result = compressHistory(effectiveContext, compressionCfg);
+								finalContext = result.context;
+								if (result.stats) {
+									decision.compression = result.stats;
+									state.compressionTotalOriginalChars += result.stats.originalChars;
+									state.compressionTotalCompressedChars += result.stats.compressedChars;
+									state.compressionRequestCount++;
+								}
+							}
+
 							const thinkingOverride = actions.getThinkingOverride(
 								model.id,
 								decision.tier,
@@ -302,7 +359,7 @@ export const registerRouterProvider = (
 								}
 							}
 
-							const delegatedStream = streamSimple(targetModel, effectiveContext, {
+							const delegatedStream = streamSimple(targetModel, sanitizeContext(finalContext), {
 								...options,
 								apiKey,
 								headers: targetModel.headers,

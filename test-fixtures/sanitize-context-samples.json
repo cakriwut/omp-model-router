@@ -1,0 +1,119 @@
+{
+  "description": "Sample inputs/outputs for sanitizeContext — tool name validation",
+  "reference_error": "Bedrock HTTP 400: messages.54.member.content.2.member.toolUse.name failed to satisfy constraint: [a-zA-Z0-9_-]+",
+  "reference_log": "/home/riwut/.omp/logs/http-400-requests/1779849244165-3bwr2pjkrd8jh.json",
+  "constraint_pattern": "[a-zA-Z0-9_-]+",
+  "test_cases": [
+    {
+      "id": "valid_name_passthrough",
+      "description": "Valid tool names are returned unchanged",
+      "input": "read",
+      "expected_output": "read",
+      "should_modify": false
+    },
+    {
+      "id": "valid_name_with_hyphens_underscores",
+      "description": "Hyphens and underscores are allowed",
+      "input": "context-mode_ctx_search",
+      "expected_output": "context-mode_ctx_search",
+      "should_modify": false
+    },
+    {
+      "id": "leaked_special_tokens_real_bug",
+      "description": "Real-world bug: model leaked <|tool_call_argument_begin|> into name field",
+      "input": "functions_read_1 <|tool_call_argument_begin|> {\"path\"",
+      "expected_output": "functions_read_1___tool_call_argument_begin_____path_",
+      "should_modify": true
+    },
+    {
+      "id": "dots_slashes_spaces",
+      "description": "Tool name with dots, slashes, and spaces",
+      "input": "my.tool/name with spaces",
+      "expected_output": "my_tool_name_with_spaces",
+      "should_modify": true
+    },
+    {
+      "id": "all_invalid_characters",
+      "description": "Name entirely made of invalid characters",
+      "input": "<<<>>>!!!@@@",
+      "expected_output": "____________",
+      "should_modify": true
+    },
+    {
+      "id": "empty_string",
+      "description": "Empty string falls back to unknown_tool",
+      "input": "",
+      "expected_output": "unknown_tool",
+      "should_modify": true
+    },
+    {
+      "id": "long_name_truncation",
+      "description": "Names longer than 64 chars are truncated after sanitization",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa invalid chars bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected_output_max_length": 64,
+      "should_modify": true
+    }
+  ],
+  "context_sanitization_cases": [
+    {
+      "id": "valid_context_no_allocation",
+      "description": "Valid context returns same object reference (zero-cost path)",
+      "input_context": {
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              { "type": "toolCall", "id": "call_1", "name": "read", "arguments": { "path": "/tmp/x" } }
+            ]
+          }
+        ]
+      },
+      "expected": "same reference returned"
+    },
+    {
+      "id": "real_world_malformed_bedrock_request",
+      "description": "Reproduces the actual Bedrock 400 error from leaked special tokens",
+      "input_context": {
+        "messages": [
+          { "role": "user", "content": [{ "type": "text", "text": "Read the config" }] },
+          {
+            "role": "assistant",
+            "content": [
+              { "type": "text", "text": "The command failed. Better approach:" },
+              {
+                "type": "toolCall",
+                "id": "functions_read_1___tool_call_argument_begin_____path_____home_ri",
+                "name": "functions_read_1 <|tool_call_argument_begin|> {\"path\"",
+                "arguments": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              { "type": "toolResult", "toolCallId": "functions_read_1___tool_call_argument_begin_____path_____home_ri", "content": [{ "type": "text", "text": "error" }] }
+            ]
+          }
+        ]
+      },
+      "expected_tool_name": "functions_read_1___tool_call_argument_begin_____path_",
+      "expected_valid": true
+    },
+    {
+      "id": "mixed_valid_and_invalid",
+      "description": "Only invalid tool names are modified; valid ones kept as-is",
+      "input_context": {
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              { "type": "toolCall", "id": "c1", "name": "bash_execute", "arguments": {} },
+              { "type": "toolCall", "id": "c2", "name": "bash execute (run)", "arguments": {} }
+            ]
+          }
+        ]
+      },
+      "expected_names": ["bash_execute", "bash_execute__run_"]
+    }
+  ]
+}

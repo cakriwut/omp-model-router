@@ -30,18 +30,40 @@ export const shortenModelId = (provider: string, modelId: string): string => {
 		.replace(/-v\d+:\d+$/, "")
 		.replace(/:\d+$/, "");
 
-	// Take everything after the last "." (vendor prefix separator)
-	const afterDot = cleaned.includes(".")
-		? cleaned.slice(cleaned.lastIndexOf(".") + 1)
-		: cleaned;
+	// Strip known vendor prefixes separated by dots.
+	// A vendor prefix is a segment before a dot where the segment after the dot
+	// starts with a letter (model names start with letters, version numbers don't).
+	// Examples: "global.anthropic.claude-sonnet-4-6" → "claude-sonnet-4-6"
+	//           "deepseek.v3.2" → "deepseek-v3.2" (no strip, "v3" starts with letter but is short version)
+	//           "zai.glm-5" → "glm-5"
+	let result = cleaned;
 
-	// If still has provider prefix like "anthropic.claude-...", strip to after last "."
-	// already handled above. Strip known boilerplate prefixes.
-	const stripped = afterDot
+	// Known vendor prefixes to strip (first dot-separated segment)
+	const vendorPrefixes = ["global", "anthropic", "amazon", "nvidia", "mistral", "zai", "moonshotai"];
+
+	// Repeatedly strip leading vendor prefixes
+	let changed = true;
+	while (changed) {
+		changed = false;
+		const dotIdx = result.indexOf(".");
+		if (dotIdx >= 0) {
+			const prefix = result.slice(0, dotIdx).toLowerCase();
+			if (vendorPrefixes.includes(prefix)) {
+				result = result.slice(dotIdx + 1);
+				changed = true;
+			}
+		}
+	}
+
+	// Replace remaining dots with hyphens (version separators like "v3.2" → "v3-2")
+	result = result.replace(/\./g, "-");
+
+	// Strip known boilerplate prefixes
+	const stripped = result
 		.replace(/^claude-/, "")
 		.replace(/^anthropic-/, "");
 
-	return stripped || afterDot || modelId;
+	return stripped || result || modelId;
 };
 
 // ─── Thinking level → theme ───────────────────────────────────────────────────
@@ -143,6 +165,7 @@ const getDecisionFlags = (decision: RoutingDecision): string[] => {
 	if (decision.isContextTriggered) flags.push("ctx");
 	if (decision.isBudgetForced) flags.push("budget");
 	if (decision.isRuleMatched) flags.push("rule");
+	if (decision.compression) flags.push("toon");
 	return flags;
 };
 
@@ -215,6 +238,7 @@ export const buildStatusText = (
 	lastDecision: RoutingDecision | undefined,
 	lastNonRouterModel: string | undefined,
 	isStreaming: boolean,
+	compressionEnabled = false,
 ): string => {
 	const activePin = pinnedTierByProfile[selectedProfile];
 	const pinSuffix = activePin ? theme.fg("accent", ` ⬣${activePin}`) : "";
@@ -245,7 +269,8 @@ export const buildStatusText = (
 				theme,
 			) + pinSuffix + theme.fg("dim", "  routing…");
 		}
-		return theme.fg("accent", profileText) + pinSuffix + theme.fg("dim", "  waiting…");
+		const toonWait = compressionEnabled ? theme.fg("dim", " ⟨toon⟩") : "";
+	return theme.fg("accent", profileText) + pinSuffix + toonWait + theme.fg("dim", "  waiting…");
 	}
 
 	const thinking = getEffectiveThinking(
@@ -286,9 +311,11 @@ export const buildStatusText = (
 		);
 	}
 
+	const toonTag = compressionEnabled ? theme.fg("dim", " ⟨toon⟩") : "";
 	return (
 		theme.fg("accent", profileText) +
 		pinSuffix +
+		toonTag +
 		"  " +
 		theme.fg(thinkingColor, modelText) +
 		costText +
@@ -326,7 +353,8 @@ export const updateStatus = (
 
 		if (!lastDecision || !matchesProfile || !matchesPin) {
 			segments = [{ text: `⬡ ${selectedProfile}`, palette: PROFILE_PALETTE }];
-			suffix = pinSuffix + theme.fg("dim", "  routing…");
+			const toonRouting = currentConfig.historyCompression?.enabled ? theme.fg("dim", " ⟨toon⟩") : "";
+			suffix = pinSuffix + toonRouting + theme.fg("dim", "  routing…");
 		} else {
 			const thinking = getEffectiveThinking(thinkingByProfile, selectedProfile, lastDecision);
 			const thinkingColor = THINKING_COLOR[thinking] ?? "muted";
@@ -344,7 +372,8 @@ export const updateStatus = (
 				{ text: "  ", palette: PROFILE_PALETTE },
 				{ text: `${thinkingIcon} ${shortModel}`, palette: tierPalette },
 			];
-			suffix = pinSuffix + costText + flagText;
+			const toonStreamTag = currentConfig.historyCompression?.enabled ? theme.fg("dim", " ⟨toon⟩") : "";
+			suffix = pinSuffix + toonStreamTag + costText + flagText;
 		}
 
 		if (activeShimmerWidget) {
@@ -375,6 +404,7 @@ export const updateStatus = (
 		lastDecision,
 		lastNonRouterModel,
 		false,
+		currentConfig.historyCompression?.enabled ?? false,
 	);
 	ctx.ui.setStatus("router", text);
 
@@ -432,8 +462,15 @@ export interface UsageReportInput {
 	profile: RouterConfig["profiles"][string];
 	debugHistory: RoutingDecision[];
 	lastDecision: RoutingDecision | undefined;
+	accumulatedCost?: number;
 	maxSessionBudget?: number;
 	modelRegistry: { find(provider: string, modelId: string): { cost?: unknown } | undefined };
+	compression?: {
+		enabled: boolean;
+		requestCount: number;
+		totalOriginalChars: number;
+		totalCompressedChars: number;
+	};
 }
 
 /**
@@ -554,5 +591,25 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 			`Last: ${tierColor(lastDecision.tier, lastDecision.tier)} → ${lastDecision.targetProvider}/${lastDecision.targetModelId} (${lastDecision.thinking})`,
 		);
 	}
+
+	// ── Compression stats ──────────────────────────────────────────────
+	const comp = opts.compression;
+	if (comp?.enabled) {
+		lines.push("");
+		if (comp.requestCount > 0) {
+			const savingsPct = comp.totalOriginalChars > 0
+				? Math.round((1 - comp.totalCompressedChars / comp.totalOriginalChars) * 100)
+				: 0;
+			// Estimate token savings (conservative: 4 chars/token)
+			const savedTokens = Math.round((comp.totalOriginalChars - comp.totalCompressedChars) / 4);
+			const savedK = (savedTokens / 1000).toFixed(1);
+			lines.push(
+				`  ${theme.fg("accent", "TOON")}    ${comp.requestCount} requests compressed | ${theme.fg("success", `↓${savingsPct}%`)} smaller | est. ~${savedK}k tokens saved`,
+			);
+		} else {
+			lines.push(`  ${theme.fg("accent", "TOON")}    enabled (no compressions yet — history too short)`);
+		}
+	}
+
 	return lines.join("\n");
 };

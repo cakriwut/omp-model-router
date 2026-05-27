@@ -2,6 +2,9 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { RouterTier } from "./types";
 import type { RouterState } from "./state";
 import {
@@ -19,6 +22,96 @@ import {
 	formatDecision,
 	renderUsageReport,
 } from "./ui";
+
+// ─── Config set helpers ───────────────────────────────────────────────────────
+
+const resolveConfigValue = (raw: Record<string, unknown>, key: string): unknown => {
+	// Profile dot-path: <profile>.<tier>.model|thinking|fallbacks
+	const profileMatch = key.match(/^([^.]+)\.(high|medium|low)\.(model|thinking|fallbacks)$/);
+	if (profileMatch) {
+		const [, profile, tier, field] = profileMatch;
+		const profiles = raw.profiles as Record<string, Record<string, Record<string, unknown>>> | undefined;
+		return profiles?.[profile]?.[tier]?.[field];
+	}
+	switch (key) {
+		case "phaseBias":           return raw.phaseBias;
+		case "budget":              return raw.maxSessionBudget;
+		case "contextThreshold":    return raw.largeContextThreshold;
+		case "debug":               return raw.debug;
+		case "defaultProfile":      return raw.defaultProfile;
+		case "compression":         return (raw.historyCompression as Record<string, unknown> | undefined)?.enabled;
+		case "compression.keepLastN": return (raw.historyCompression as Record<string, unknown> | undefined)?.keepLastN;
+		default:                    return undefined;
+	}
+};
+
+const applyConfigUpdate = (
+	raw: Record<string, unknown>,
+	key: string,
+	value: string,
+): string | null => {
+	// Profile dot-path: <profile>.<tier>.model|thinking|fallbacks
+	const profileMatch = key.match(/^([^.]+)\.(high|medium|low)\.(model|thinking|fallbacks)$/);
+	if (profileMatch) {
+		const [, profile, tier, field] = profileMatch;
+		const profiles = raw.profiles as Record<string, Record<string, Record<string, unknown>>> | undefined;
+		if (!profiles?.[profile]) return `Unknown profile: "${profile}"`;
+		if (!profiles[profile][tier]) return `Unknown tier: "${tier}"`;
+		if (field === "fallbacks") {
+			profiles[profile][tier].fallbacks = value.split(",").map((s) => s.trim()).filter(Boolean);
+		} else {
+			profiles[profile][tier][field] = value;
+		}
+		return null;
+	}
+
+	switch (key) {
+		case "phaseBias": {
+			const n = parseFloat(value);
+			if (isNaN(n) || n < 0 || n > 1) return "phaseBias must be a float between 0 and 1";
+			raw.phaseBias = n;
+			return null;
+		}
+		case "budget": {
+			const n = parseFloat(value);
+			if (isNaN(n) || n < 0) return "budget must be a non-negative number";
+			raw.maxSessionBudget = n;
+			return null;
+		}
+		case "contextThreshold": {
+			const n = parseInt(value, 10);
+			if (isNaN(n) || n < 0) return "contextThreshold must be a non-negative integer";
+			raw.largeContextThreshold = n;
+			return null;
+		}
+		case "debug": {
+			if (value !== "on" && value !== "off") return 'debug must be "on" or "off"';
+			raw.debug = value === "on";
+			return null;
+		}
+		case "defaultProfile": {
+			const profiles = raw.profiles as Record<string, unknown> | undefined;
+			if (!profiles?.[value]) return `Unknown profile: "${value}"`;
+			raw.defaultProfile = value;
+			return null;
+		}
+		case "compression": {
+			if (value !== "on" && value !== "off") return 'compression must be "on" or "off"';
+			if (!raw.historyCompression) raw.historyCompression = {};
+			(raw.historyCompression as Record<string, unknown>).enabled = value === "on";
+			return null;
+		}
+		case "compression.keepLastN": {
+			const n = parseInt(value, 10);
+			if (isNaN(n) || n < 1) return "compression.keepLastN must be an integer >= 1";
+			if (!raw.historyCompression) raw.historyCompression = {};
+			(raw.historyCompression as Record<string, unknown>).keepLastN = n;
+			return null;
+		}
+		default:
+			return `Unknown key: "${key}". Run /router set for available keys.`;
+	}
+};
 
 export const registerCommands = (
 	pi: ExtensionAPI,
@@ -58,6 +151,7 @@ export const registerCommands = (
 			`Last non-router model: ${formatModelRef(state.lastNonRouterModel)}`,
 			`Debug: ${state.debugEnabled ? "on" : "off"}`,
 			`Debug history: ${state.debugHistory.length} decisions`,
+			`History compression: ${state.currentConfig.historyCompression?.enabled ? `on (keepLastN: ${state.currentConfig.historyCompression.keepLastN ?? 4})` : "off"}`,
 		];
 		if (state.lastDecision) {
 			lines.push(
@@ -372,8 +466,98 @@ export const registerCommands = (
 			accumulatedCost: state.accumulatedCost,
 			maxSessionBudget: state.currentConfig.maxSessionBudget,
 			modelRegistry: ctx.modelRegistry,
+			compression: {
+				enabled: state.currentConfig.historyCompression?.enabled ?? false,
+				requestCount: state.compressionRequestCount,
+				totalOriginalChars: state.compressionTotalOriginalChars,
+				totalCompressedChars: state.compressionTotalCompressedChars,
+			},
 		});
 		ctx.ui.notify(report, "info");
+	};
+
+
+	const SET_KEYS = [
+		"phaseBias",
+		"budget",
+		"contextThreshold",
+		"debug",
+		"defaultProfile",
+		"compression",
+		"compression.keepLastN",
+	] as const;
+
+	const handleSet = async (args: string[], ctx: ExtensionContext) => {
+		if (args.length === 0) {
+			const lines = [
+				"Usage: /router set <key> [value]",
+				"",
+				"Global keys:",
+				"  phaseBias <float>              Phase bias weight (0-1)",
+				"  budget <float>                 Max session budget ($)",
+				"  contextThreshold <int>         Large context threshold (tokens)",
+				"  debug <on|off>                 Debug mode",
+				"  defaultProfile <name>          Default profile name",
+				"  compression <on|off>           Enable/disable TOON compression",
+				"  compression.keepLastN <int>    Messages to keep uncompressed",
+				"",
+				"Profile keys (dot-path):",
+				"  <profile>.<tier>.model <ref>         Primary model",
+				"  <profile>.<tier>.thinking <level>    Thinking level",
+				"  <profile>.<tier>.fallbacks <m1,m2>   Fallback models (comma-separated)",
+				"",
+				"Omit value to show current setting.",
+			];
+			ctx.ui.notify(lines.join("\n"), "info");
+			return;
+		}
+
+		const key = args[0];
+		const value = args.slice(1).join(" ");
+
+		const globalPath = join(getAgentDir(), "model-router.json");
+		let raw: Record<string, unknown>;
+		try {
+			raw = JSON.parse(readFileSync(globalPath, "utf-8"));
+		} catch {
+			ctx.ui.notify("Failed to read config file", "error");
+			return;
+		}
+
+		// Show current value when no value provided
+		if (!value) {
+			const current = resolveConfigValue(raw, key);
+			ctx.ui.notify(
+				`${key} = ${current === undefined ? "(unset)" : JSON.stringify(current)}`,
+				"info",
+			);
+			return;
+		}
+
+		// Apply the update
+		const error = applyConfigUpdate(raw, key, value);
+		if (error) {
+			ctx.ui.notify(error, "error");
+			return;
+		}
+
+		// Write back
+		try {
+			writeFileSync(globalPath, JSON.stringify(raw, null, 2) + "\n", "utf-8");
+		} catch (e) {
+			ctx.ui.notify(`Failed to write config: ${e}`, "error");
+			return;
+		}
+
+		// Reload
+		actions.reloadConfig(ctx, { preserveDebug: true });
+		await actions.ensureValidActiveRouterProfile(ctx);
+
+		const newValue = resolveConfigValue(raw, key);
+		ctx.ui.notify(
+			`Set ${key} = ${JSON.stringify(newValue)}  (config reloaded)`,
+			"info",
+		);
 	};
 
 	const handleReload = async (_args: string[], ctx: ExtensionContext) => {
@@ -394,18 +578,19 @@ export const registerCommands = (
 				trimmedLeft.length > 0 ? trimmedLeft.split(/\s+/) : [];
 
 		const SUBCOMMANDS = [
-				"status",
-				"usage",
-				"profile",
-				"pin",
-				"thinking",
-				"disable",
-				"fix",
-				"widget",
-				"debug",
-				"reload",
-				"help",
-			];
+			"status",
+			"usage",
+			"profile",
+			"pin",
+			"thinking",
+			"disable",
+			"fix",
+			"widget",
+			"debug",
+			"set",
+			"reload",
+			"help",
+		];
 
 			if (parts.length === 0 || (parts.length === 1 && !hasTrailingSpace)) {
 				const token = parts[0] ?? "";
@@ -458,6 +643,33 @@ export const registerCommands = (
 						.map((v) => ({ value: `debug ${v}`, label: v }));
 					return items.length > 0 ? items : null;
 				}
+				case "set": {
+					const setPrefix = subArgs[0] ?? "";
+					if (!hasTrailingSpace || subArgs.length <= 1) {
+						const SET_KEY_LIST = [
+							"phaseBias", "budget", "contextThreshold", "debug",
+							"defaultProfile", "compression", "compression.keepLastN",
+						];
+						const items = SET_KEY_LIST
+							.filter((k) => k.startsWith(setPrefix))
+							.map((k) => ({ value: `set ${k}`, label: k }));
+						return items.length > 0 ? items : null;
+					}
+					const setKey = subArgs[0];
+					const valPrefix = subArgs[1] ?? "";
+					if (setKey === "debug" || setKey === "compression") {
+						const items = ["on", "off"].filter((v) => v.startsWith(valPrefix))
+							.map((v) => ({ value: `set ${setKey} ${v}`, label: v }));
+						return items.length > 0 ? items : null;
+					}
+					if (setKey === "defaultProfile") {
+						const items = profileNames(state.currentConfig)
+							.filter((n) => n.startsWith(valPrefix))
+							.map((n) => ({ value: `set defaultProfile ${n}`, label: n }));
+						return items.length > 0 ? items : null;
+					}
+					return null;
+				}
 			}
 
 			return null;
@@ -492,6 +704,9 @@ export const registerCommands = (
 				case "reload":
 					await handleReload(subArgs, ctx);
 					break;
+				case "set":
+					await handleSet(subArgs, ctx);
+					break;
 				case "usage":
 					await handleUsage(subArgs, ctx);
 					break;
@@ -513,6 +728,7 @@ export const registerCommands = (
 							"  widget <on|off|toggle>      Control the persistent status widget visibility.",
 							"  debug <on|off|show|clear>   Control routing debug logging to notifications and history.",
 							"  reload                      Hot-reload the configuration JSON from .omp/model-router.json.",
+							"  set <key> [value]            Get or set config value (writes to model-router.json). Omit value to read.",
 							"  help, ?                     Show this help message.",
 						].join("\n"),
 						"info",

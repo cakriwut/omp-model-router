@@ -19,10 +19,38 @@ export interface RoutedTierConfig {
 	fallbacks?: string[];
 }
 
+export interface HistoryCompressionConfig {
+	/** Enable TOON compression of message history before sending to the LLM. */
+	enabled: boolean;
+	/**
+	 * Number of recent messages to keep as native JSON turns.
+	 * All older messages are compressed into a single prepended user message.
+	 * Must be >= 1 (the latest user message is always kept). Default: 4.
+	 */
+	keepLastN?: number;
+	/**
+	 * List of model patterns to exclude from compression.
+	 * When the resolved target model matches any pattern, compression is skipped.
+	 * Supports substring matching (e.g. "kimi" matches "moonshotai.kimi-k2.5").
+	 */
+	excludeModels?: string[];
+}
+
+export interface CompressionStats {
+	/** Number of messages that were compressed into the TOON block. */
+	compressedMessages: number;
+	/** Character count of the original JSON representation of compressed messages. */
+	originalChars: number;
+	/** Character count of the TOON block (including the wrapper text). */
+	compressedChars: number;
+}
+
 export interface RouterProfile {
 	high: RoutedTierConfig;
 	medium: RoutedTierConfig;
 	low: RoutedTierConfig;
+	/** Per-profile compression config. Overrides the global RouterConfig setting. */
+	historyCompression?: HistoryCompressionConfig;
 }
 
 export interface RouterConfig {
@@ -33,6 +61,8 @@ export interface RouterConfig {
 	largeContextThreshold?: number;
 	maxSessionBudget?: number;
 	rules?: RoutingRule[];
+	/** Global history compression config. Can be overridden per-profile. */
+	historyCompression?: HistoryCompressionConfig;
 	profiles: Record<string, RouterProfile>;
 }
 
@@ -60,6 +90,7 @@ export interface RoutingDecision {
 	isContextTriggered?: boolean;
 	isBudgetForced?: boolean;
 	isRuleMatched?: boolean;
+	compression?: CompressionStats;
 }
 
 export interface RouterPersistedState {
