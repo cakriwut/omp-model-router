@@ -47,6 +47,8 @@ const routerExtension = (pi: ExtensionAPI) => {
 	let lastPersistedSnapshot: string | undefined;
 	let isInitialized = false;
 	let isInternalModelSwitch = false;
+	let isStreaming = false;
+	let shimmerInterval: ReturnType<typeof setInterval> | undefined;
 
 	const setModelInternally = async (
 		model: NonNullable<ExtensionContext["model"]>,
@@ -94,7 +96,14 @@ const routerExtension = (pi: ExtensionAPI) => {
 		if (snapshot === lastPersistedSnapshot) {
 			return;
 		}
-		pi.appendEntry("router-state", state);
+		try {
+			pi.appendEntry("router-state", state);
+		} catch {
+			// Runtime not yet initialized (e.g. memory startup fires before
+			// extensionRunner.initialize wires the real appendEntry). Skip
+			// silently — state will persist on the next successful call.
+			return;
+		}
 		lastPersistedSnapshot = snapshot;
 	};
 
@@ -112,6 +121,7 @@ const routerExtension = (pi: ExtensionAPI) => {
 				accumulatedCost,
 				widgetEnabled,
 				currentConfig,
+				isStreaming,
 			),
 		reloadConfig: (
 			ctx?: ExtensionContext,
@@ -408,7 +418,27 @@ const routerExtension = (pi: ExtensionAPI) => {
 		await restoreStateFromSession(ctx);
 	});
 
+	pi.on("turn_start", (_event, ctx) => {
+		lastExtensionContext = ctx;
+		if (routerEnabled) {
+			isStreaming = true;
+			if (!shimmerInterval) {
+				shimmerInterval = setInterval(() => {
+					if (lastExtensionContext) {
+						actions.updateStatus(lastExtensionContext);
+					}
+				}, 80);
+			}
+			actions.updateStatus(ctx);
+		}
+	});
+
 	pi.on("turn_end", async (_event, ctx) => {
+		isStreaming = false;
+		if (shimmerInterval) {
+			clearInterval(shimmerInterval);
+			shimmerInterval = undefined;
+		}
 		lastExtensionContext = ctx;
 		if (routerEnabled && ctx.model?.provider !== "router") {
 			const routerModel = ctx.modelRegistry.find(
