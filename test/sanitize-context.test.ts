@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { sanitizeToolName, sanitizeContext, VALID_TOOL_NAME_RE } from "./provider";
+import { sanitizeToolName, sanitizeContext, VALID_TOOL_NAME_RE } from "../src/provider";
 import type { Context } from "@oh-my-pi/pi-ai";
 
 // ─── Sample Fixtures ─────────────────────────────────────────────────────────

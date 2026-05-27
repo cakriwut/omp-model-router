@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { normalizeConfig } from "./config";
-import type { AutoUpgradeConfig, RouterConfig, RouterTier } from "./types";
+import { normalizeConfig } from "../src/config";
+import type { AutoUpgradeConfig, RouterConfig, RouterTier } from "../src/types";
 
 // ─── Config normalization ────────────────────────────────────────────────────
 

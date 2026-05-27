@@ -7,9 +7,9 @@
  */
 
 import { describe, it, expect, mock } from "bun:test";
-import { resolveRouting } from "./routing";
-import type { RoutingInput, RoutingConfig } from "./routing";
-import type { RouterProfile, RoutingDecision } from "./types";
+import { resolveRouting } from "../src/routing";
+import type { RoutingInput, RoutingConfig } from "../src/routing";
+import type { RouterProfile, RoutingDecision } from "../src/types";
 import type { Context } from "@oh-my-pi/pi-ai";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────

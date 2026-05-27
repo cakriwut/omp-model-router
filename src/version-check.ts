@@ -124,7 +124,7 @@ async function fetchLatestVersion(): Promise<string | undefined> {
  * Uses import.meta.dir to locate the file relative to this module.
  */
 export function getCurrentVersion(): string {
-	const pkgPath = join(import.meta.dir, "package.json");
+	const pkgPath = join(import.meta.dir, "..", "package.json");
 	try {
 		const raw = readFileSync(pkgPath, "utf-8");
 		const pkg = JSON.parse(raw) as { version?: string };

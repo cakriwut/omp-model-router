@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { decideRouting, containsAny } from "./routing";
-import type { RouterProfile, RoutingDecision } from "./types";
+import { decideRouting, containsAny } from "../src/routing";
+import type { RouterProfile, RoutingDecision } from "../src/types";
 
 const TEST_PROFILE: RouterProfile = {
 	high: { model: "anthropic/claude-sonnet-4-5", thinking: "high" },

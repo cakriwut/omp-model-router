@@ -4,7 +4,7 @@ import {
 	compressHistory,
 	sanitizeTurnAlternation,
 	isModelExcludedFromCompression,
-} from "./context-compression";
+} from "../src/context-compression";
 import type { Context, Message } from "@oh-my-pi/pi-ai";
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────

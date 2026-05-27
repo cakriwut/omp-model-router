@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import type { RoutingDecision, RoutingDecisionUsage, RouterTier } from "./types";
+import type { RoutingDecision, RoutingDecisionUsage, RouterTier } from "../src/types";
 
 // Simulate theme.fg — wraps text in identifiable ANSI markers
 function createMockTheme() {

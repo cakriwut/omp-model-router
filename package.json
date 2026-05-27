@@ -1,26 +1,19 @@
 {
   "name": "@cakriwut/omp-model-router",
   "version": "0.3.1",
-  "description": "Cost-optimized model routing for Oh-My-Pi \u2014 routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs.",
+  "description": "Cost-optimized model routing for Oh-My-Pi — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Uses TOON compression for conversation history optimization.",
   "type": "module",
-  "main": "index.ts",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "files": [
-    "commands.ts",
-    "config.ts",
-    "context-compression.ts",
-    "constants.ts",
-    "context.ts",
-    "index.ts",
-    "provider.ts",
-    "routing.ts",
-    "state.ts",
-    "types.ts",
-    "ui.ts",
-    "version-check.ts",
+    "src/**/*.ts",
     "model-router.example.json",
     "README.md",
     "LICENSE"
   ],
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "test": "bun test"
   },
@@ -34,7 +27,8 @@
     "routing",
     "claude",
     "bedrock",
-    "extension"
+    "extension",
+    "toon-compression"
   ],
   "author": "Riwut Libinuko <cakriwut@gmail.com>",
   "license": "MIT",
@@ -72,7 +66,7 @@
     "repository": "https://github.com/can1357/oh-my-pi",
     "type": "extension",
     "extensions": [
-      "index.ts"
+      "src/index.ts"
     ]
   },
   "devDependencies": {

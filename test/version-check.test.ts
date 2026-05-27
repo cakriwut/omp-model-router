@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
-import { isNewer, isDevInstall, getCurrentVersion, checkForUpdate } from "./version-check";
+import { isNewer, isDevInstall, getCurrentVersion, checkForUpdate } from "../src/version-check";
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";

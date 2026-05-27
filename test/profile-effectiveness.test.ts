@@ -4,8 +4,8 @@
  */
 
 import { describe, it, expect, beforeEach } from "bun:test";
-import { decideRouting, buildRoutingDecision } from "./routing";
-import type { RouterProfile, RouterConfig } from "./types";
+import { decideRouting, buildRoutingDecision } from "../src/routing";
+import type { RouterProfile, RouterConfig } from "../src/types";
 
 // Test configuration matching the current model-router.json
 const TEST_CONFIG: RouterConfig = {
