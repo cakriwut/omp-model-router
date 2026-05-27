@@ -84,5 +84,10 @@
     "enabled": false,
     "keepLastN": 4,
     "excludeModels": ["kimi", "deepseek", "nova"]
+  },
+  "autoUpgrade": {
+    "enabled": true,
+    "threshold": 2,
+    "tools": ["find", "search", "edit", "ast_grep"]
   }
 }

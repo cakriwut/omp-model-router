@@ -35,6 +35,21 @@ export interface HistoryCompressionConfig {
 	 */
 	excludeModels?: string[];
 }
+export interface AutoUpgradeConfig {
+	/** Enable automatic tier upgrade on repeated tool failures. Default: false. */
+	enabled: boolean;
+	/**
+	 * Number of consecutive failures of the same tool required to trigger an upgrade.
+	 * Default: 2.
+	 */
+	threshold?: number;
+	/**
+	 * Only upgrade when these tools fail. If omitted, any tool failure counts.
+	 * Supports exact tool names (e.g. "find", "search", "edit").
+	 */
+	tools?: string[];
+}
+
 
 export interface CompressionStats {
 	/** Number of messages that were compressed into the TOON block. */
@@ -64,6 +79,8 @@ export interface RouterConfig {
 	/** Global history compression config. Can be overridden per-profile. */
 	historyCompression?: HistoryCompressionConfig;
 	profiles: Record<string, RouterProfile>;
+	/** Auto-upgrade tier when the same tool fails consecutively. */
+	autoUpgrade?: AutoUpgradeConfig;
 }
 
 export interface RoutingDecisionUsage {

@@ -5,12 +5,14 @@ import type {
 import {
 	loadRouterConfig,
 	profileNames,
+	ROUTER_TIERS,
 	resolveProfileName,
 } from "./config";
 import { RouterState } from "./state";
 import { updateStatus } from "./ui";
 import { registerCommands } from "./commands";
 import { registerRouterProvider } from "./provider";
+import { checkForUpdate } from "./version-check";
 
 const routerExtension = (pi: ExtensionAPI) => {
 	pi.setLabel("Model Router");
@@ -194,6 +196,18 @@ const routerExtension = (pi: ExtensionAPI) => {
 				"info",
 			);
 		}
+
+		// Fire-and-forget update detection (non-blocking)
+		checkForUpdate().then((info) => {
+			if (info) {
+				state.updateAvailable = { current: info.current, latest: info.latest };
+				state.updateBannerShown = true;
+				ctx.ui.notify(
+					`🆙 Model Router v${info.current} → v${info.latest} available — run /router update`,
+					"info",
+				);
+			}
+		});
 	});
 
 	pi.on("session_branch", async (_event, ctx) => {
@@ -237,6 +251,9 @@ const routerExtension = (pi: ExtensionAPI) => {
 
 	pi.on("turn_start", (_event, ctx) => {
 		state.lastExtensionContext = ctx;
+		if (state.updateBannerShown) {
+			state.updateBannerShown = false;
+		}
 		if (state.routerEnabled) {
 			state.isStreaming = true;
 			actions.updateStatus(ctx);
@@ -257,6 +274,45 @@ const routerExtension = (pi: ExtensionAPI) => {
 		}
 		state.persist();
 		actions.updateStatus(ctx);
+	});
+
+	// ─── Auto-upgrade: track consecutive tool failures ─────────────────────────
+	pi.on("tool_execution_end", (event, ctx) => {
+		if (!state.routerEnabled) return;
+		const cfg = state.currentConfig.autoUpgrade;
+		if (!cfg?.enabled) return;
+
+		const threshold = cfg.threshold ?? 2;
+
+		if (!event.isError) {
+			// Success resets the streak for this tool
+			state.toolFailureStreak.delete(event.toolName);
+			return;
+		}
+
+		// If tools filter is set, only track those tools
+		if (cfg.tools && !cfg.tools.includes(event.toolName)) return;
+
+		const prev = state.toolFailureStreak.get(event.toolName) ?? 0;
+		const streak = prev + 1;
+		state.toolFailureStreak.set(event.toolName, streak);
+
+		if (streak >= threshold) {
+			// Determine upgrade: current tier → next higher tier
+			const currentTier = state.lastDecision?.tier ?? "low";
+			const currentIdx = ROUTER_TIERS.indexOf(currentTier);
+			if (currentIdx > 0) {
+				const upgradedTier = ROUTER_TIERS[currentIdx - 1]; // higher = lower index
+				state.autoUpgradeTier = upgradedTier;
+				state.toolFailureStreak.delete(event.toolName);
+				if (state.debugEnabled) {
+					ctx.ui.notify(
+						`Auto-upgrade: ${event.toolName} failed ${streak}× → upgrading to ${upgradedTier} tier`,
+						"info",
+					);
+				}
+			}
+		}
 	});
 };
 

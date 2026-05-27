@@ -62,6 +62,16 @@ export class RouterState {
 	compressionTotalOriginalChars = 0;
 	compressionTotalCompressedChars = 0;
 
+	// ─── Auto-upgrade failure tracking (transient, not persisted) ───────
+	/** Tracks consecutive failures: toolName → count */
+	toolFailureStreak: Map<string, number> = new Map();
+	/** When set, forces the next routing decision to use this tier (one-shot). */
+	autoUpgradeTier: import("./types").RouterTier | undefined;
+
+
+	// ─── Update detection (transient, not persisted) ────────────────────
+	updateAvailable: { current: string; latest: string } | undefined;
+	updateBannerShown = false;
 	// ─── Internal ────────────────────────────────────────────────────────
 	private lastPersistedSnapshot: string | undefined;
 	private readonly pi: ExtensionAPI;

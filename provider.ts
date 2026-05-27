@@ -261,6 +261,21 @@ export const registerRouterProvider = (
 							classifierModel: state.currentConfig.classifierModel,
 						},
 					);
+					// ── Auto-upgrade override (one-shot) ──────────────────────────────
+					if (state.autoUpgradeTier) {
+						const upgradeTier = state.autoUpgradeTier;
+						state.autoUpgradeTier = undefined;
+						const tierConfig = profile[upgradeTier];
+						const { provider: upProvider, modelId: upModelId } =
+							parseCanonicalModelRef(tierConfig.model);
+						decision.tier = upgradeTier;
+						decision.targetProvider = upProvider;
+						decision.targetModelId = upModelId;
+						decision.targetLabel = tierConfig.model;
+						decision.thinking = tierConfig.thinking ?? decision.thinking;
+						decision.reasoning = `auto-upgrade: consecutive tool failures → ${upgradeTier}`;
+					}
+
 
 					state.lastDecision = decision;
 					actions.recordDebugDecision(decision);

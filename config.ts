@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type {
+	AutoUpgradeConfig,
 	RouterConfig,
 	RouterProfile,
 	RoutedTierConfig,
@@ -105,6 +106,7 @@ export const mergeConfig = (
 		maxSessionBudget: override.maxSessionBudget ?? base.maxSessionBudget,
 		rules: override.rules ?? base.rules,
 		historyCompression: override.historyCompression ?? base.historyCompression,
+		autoUpgrade: override.autoUpgrade ?? base.autoUpgrade,
 		profiles: mergedProfiles,
 	};
 };
@@ -297,6 +299,19 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 			classifierModel = undefined;
 		}
 	}
+	// ── Auto-upgrade normalization ───────────────────────────────────────────
+	let autoUpgrade: AutoUpgradeConfig | undefined;
+	if (isObjectRecord(raw.autoUpgrade) && raw.autoUpgrade.enabled === true) {
+		const threshold =
+			typeof raw.autoUpgrade.threshold === "number" && raw.autoUpgrade.threshold >= 1
+				? Math.floor(raw.autoUpgrade.threshold)
+				: 2;
+		const tools = Array.isArray(raw.autoUpgrade.tools)
+			? (raw.autoUpgrade.tools as unknown[]).filter((t): t is string => typeof t === "string")
+			: undefined;
+		autoUpgrade = { enabled: true, threshold, tools: tools?.length ? tools : undefined };
+	}
+
 
 	return {
 		config: {
@@ -309,6 +324,7 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 			rules: rules.length > 0 ? rules : undefined,
 			historyCompression: raw.historyCompression,
 			profiles: normalizedProfiles,
+			autoUpgrade,
 		},
 		warnings,
 	};

@@ -22,6 +22,7 @@ import {
 	formatDecision,
 	renderUsageReport,
 } from "./ui";
+import { getCurrentVersion, checkForUpdate } from "./version-check";
 
 // ─── Config set helpers ───────────────────────────────────────────────────────
 
@@ -569,6 +570,91 @@ export const registerCommands = (
 		);
 	};
 
+	const handleUpdate = async (_args: string[], ctx: ExtensionContext) => {
+		const currentVersion = getCurrentVersion();
+
+		// If we already know about an update from the session check, use that
+		if (state.updateAvailable) {
+			const { current, latest } = state.updateAvailable;
+			const confirmed = await ctx.ui.dialog.confirm(
+				`Update Model Router v${current} → v${latest}?`,
+			);
+			if (!confirmed) {
+				ctx.ui.notify("Update cancelled.", "info");
+				return;
+			}
+			ctx.ui.notify("Updating…", "info");
+			try {
+				const proc = Bun.spawn(
+					["pi", "update", `npm:@cakriwut/omp-model-router`],
+					{ stdout: "pipe", stderr: "pipe" },
+				);
+				const exitCode = await proc.exited;
+				if (exitCode === 0) {
+					ctx.ui.notify(
+						`Updated to v${latest}. Restart session to use new version.`,
+						"info",
+					);
+					state.updateAvailable = undefined;
+				} else {
+					const stderr = await new Response(proc.stderr).text();
+					ctx.ui.notify(
+						`Update failed (exit ${exitCode}): ${stderr.slice(0, 200)}`,
+						"error",
+					);
+				}
+			} catch (err) {
+				ctx.ui.notify(
+					`Update failed: ${err instanceof Error ? err.message : String(err)}`,
+					"error",
+				);
+			}
+			return;
+		}
+
+		// No cached update info — run a fresh check
+		ctx.ui.notify("Checking for updates…", "info");
+		const info = await checkForUpdate();
+		if (info) {
+			state.updateAvailable = { current: info.current, latest: info.latest };
+			const confirmed = await ctx.ui.dialog.confirm(
+				`Update Model Router v${info.current} → v${info.latest}?`,
+			);
+			if (!confirmed) {
+				ctx.ui.notify("Update cancelled.", "info");
+				return;
+			}
+			ctx.ui.notify("Updating…", "info");
+			try {
+				const proc = Bun.spawn(
+					["pi", "update", `npm:@cakriwut/omp-model-router`],
+					{ stdout: "pipe", stderr: "pipe" },
+				);
+				const exitCode = await proc.exited;
+				if (exitCode === 0) {
+					ctx.ui.notify(
+						`Updated to v${info.latest}. Restart session to use new version.`,
+						"info",
+					);
+					state.updateAvailable = undefined;
+				} else {
+					const stderr = await new Response(proc.stderr).text();
+					ctx.ui.notify(
+						`Update failed (exit ${exitCode}): ${stderr.slice(0, 200)}`,
+						"error",
+					);
+				}
+			} catch (err) {
+				ctx.ui.notify(
+					`Update failed: ${err instanceof Error ? err.message : String(err)}`,
+					"error",
+				);
+			}
+		} else {
+			ctx.ui.notify(`Model Router v${currentVersion} is up to date.`, "info");
+		}
+	};
+
 	pi.registerCommand("router", {
 		description: "Model router control center",
 		getArgumentCompletions: (prefix) => {
@@ -590,6 +676,7 @@ export const registerCommands = (
 			"set",
 			"reload",
 			"help",
+			"update",
 		];
 
 			if (parts.length === 0 || (parts.length === 1 && !hasTrailingSpace)) {
@@ -704,6 +791,9 @@ export const registerCommands = (
 				case "reload":
 					await handleReload(subArgs, ctx);
 					break;
+				case "update":
+					await handleUpdate(subArgs, ctx);
+					break;
 				case "set":
 					await handleSet(subArgs, ctx);
 					break;
@@ -730,6 +820,7 @@ export const registerCommands = (
 							"  reload                      Hot-reload the configuration JSON from .omp/model-router.json.",
 							"  set <key> [value]            Get or set config value (writes to model-router.json). Omit value to read.",
 							"  help, ?                     Show this help message.",
+							"  update                      Check for and apply extension updates from npm.",
 						].join("\n"),
 						"info",
 					);
