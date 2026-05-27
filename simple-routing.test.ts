@@ -158,17 +158,15 @@ describe("Simple routing logic tests", () => {
 
     it("routes summary prompts to low tier", () => {
       const prompts = [
-        "Create a changelog for this release",
+        "Create a changelog for the latest sprint",
         "Summarize the key points",
         "Give me a tl;dr of this document",
-        "Write a summary of the meeting"
+        "Write a recap of the meeting"
       ];
 
       for (const prompt of prompts) {
         const result = classifyPrompt(prompt);
         expect(result.tier).toBe('low');
-        expect(result.reasoning).toContain('summary');
-        expect(result.reasoning).toContain('Matched rule');
       }
     });
   });

@@ -289,11 +289,12 @@ const routerExtension = (pi: ExtensionAPI) => {
 		const entries = ctx.sessionManager.getBranch() as CustomSessionEntry[];
 		const savedState = entries
 			.filter(
-				(entry) =>
+				(entry: CustomSessionEntry) =>
 					entry.type === "custom" && entry.customType === "router-state",
 			)
-			.map((entry) => entry.data)
-			.findLast((data) => isRouterPersistedState(data));
+			.map((entry: CustomSessionEntry) => entry.data)
+			.reverse()
+			.find((data: unknown) => isRouterPersistedState(data));
 
 		if (isRouterPersistedState(savedState)) {
 			selectedProfile = resolveProfileName(
@@ -342,10 +343,10 @@ const routerExtension = (pi: ExtensionAPI) => {
 					"warning",
 				);
 				routerEnabled = false;
-				ctx.ui.setHiddenThinkingLabel?.();
+				(ctx.ui as any).setHiddenThinkingLabel?.();
 			}
 		} else {
-			ctx.ui.setHiddenThinkingLabel?.();
+			(ctx.ui as any).setHiddenThinkingLabel?.();
 		}
 
 		persistState();

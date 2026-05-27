@@ -7,7 +7,7 @@ import {
 	type SimpleStreamOptions,
 	type Message,
 } from "@oh-my-pi/pi-ai";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -65,7 +65,7 @@ const truncateContext = (context: Context, limit: number): Context => {
 	if (messages.length <= 1) return context;
 
 	const getSystemTokens = () =>
-		context.systemPrompt ? estimateTokens(context.systemPrompt) : 0;
+		context.systemPrompt ? estimateTokens(context.systemPrompt.join("\n")) : 0;
 
 	const totalTokens =
 		getSystemTokens() +
@@ -429,11 +429,11 @@ export const registerRouterProvider = (
 
 							if (state.lastExtensionContext) {
 								if (delegatedReasoning) {
-									state.lastExtensionContext.ui.setHiddenThinkingLabel?.(
+									(state.lastExtensionContext.ui as any).setHiddenThinkingLabel?.(
 										`Thinking (${targetProvider}/${targetModelId})...`,
 									);
 								} else {
-									state.lastExtensionContext.ui.setHiddenThinkingLabel?.();
+									(state.lastExtensionContext.ui as any).setHiddenThinkingLabel?.();
 								}
 							}
 

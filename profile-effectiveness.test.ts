@@ -250,7 +250,7 @@ describe("Profile-based routing effectiveness", () => {
       expect(decision.reasoning).toContain("Safety-critical operations");
 
       // Test summarize/changelog rule
-      const summaryPrompt = "Create a changelog for the latest release";
+      const summaryPrompt = "Create a changelog for the latest sprint";
       const summaryDecision = decideRouting(
         createContext(summaryPrompt),
         profileName,

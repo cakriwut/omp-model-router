@@ -1,4 +1,5 @@
 import { streamSimple, type Context, type Message } from "@oh-my-pi/pi-ai";
+import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type {
 	RouterTier,
@@ -88,10 +89,10 @@ export const buildRoutingDecision = (
 ): RoutingDecision => {
 	const routed = profile[tier];
 	const { provider, modelId } = parseCanonicalModelRef(routed.model);
-	const baseThinking =
+	const baseThinking: ThinkingLevel =
 		routed.thinking ??
-		(tier === "high" ? "high" : tier === "low" ? "low" : "medium");
-	const effectiveThinking = thinkingOverrides?.[tier] ?? baseThinking;
+		(tier === "high" ? "high" : tier === "low" ? "low" : "medium") as ThinkingLevel;
+	const effectiveThinking: ThinkingLevel = thinkingOverrides?.[tier] ?? baseThinking;
 
 	return {
 		profile: profileName,
@@ -188,6 +189,7 @@ export const decideRouting = (
 		"write",
 		"refactor",
 		"add tests",
+		"tests",
 		"patch",
 		"change",
 		"apply",
@@ -291,7 +293,7 @@ export const decideRouting = (
 			} else if (
 				previousDecision?.phase === "planning" &&
 				toolResultCount === 0 &&
-				wordCount > lowThreshold
+				!containsAny(prompt, lookupKeywords)
 			) {
 				phase = "planning";
 				tier = "high";

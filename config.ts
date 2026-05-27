@@ -19,21 +19,21 @@ export const FALLBACK_CONFIG: RouterConfig = {
 	debug: false,
 	profiles: {
 		auto: {
-			high: { model: "anthropic/claude-sonnet-4-5", thinking: "high" },
-			medium: { model: "anthropic/claude-sonnet-4-5", thinking: "medium" },
-			low: { model: "anthropic/claude-haiku-4-5", thinking: "low" },
+			high: { model: "anthropic/claude-sonnet-4-5", thinking: "high" as ThinkingLevel },
+			medium: { model: "anthropic/claude-sonnet-4-5", thinking: "medium" as ThinkingLevel },
+			low: { model: "anthropic/claude-haiku-4-5", thinking: "low" as ThinkingLevel },
 		},
 	},
 };
 
-export const THINKING_LEVELS: readonly ThinkingLevel[] = [
+export const THINKING_LEVELS = [
 	"off",
 	"minimal",
 	"low",
 	"medium",
 	"high",
 	"xhigh",
-];
+] as readonly ThinkingLevel[];
 export const ROUTER_PIN_VALUES = ["auto", "high", "medium", "low"] as const;
 
 export const isObjectRecord = (
