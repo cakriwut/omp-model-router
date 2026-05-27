@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { TUI } from "@oh-my-pi/pi-tui";
 import type { ShimmerPalette } from "@oh-my-pi/pi-coding-agent/modes/theme/shimmer";
 import { shimmerSegments } from "@oh-my-pi/pi-coding-agent/modes/theme/shimmer";
 import type {
@@ -81,6 +82,51 @@ const makeTierPalette = (color: ThemeColor): ShimmerPalette => ({
 	bold: true,
 });
 
+// ─── Shimmer widget ───────────────────────────────────────────────────────────
+
+interface ShimmerSegmentDef {
+	text: string;
+	palette: ShimmerPalette;
+}
+
+/**
+ * Custom TUI component driving shimmer via setInterval + tui.requestRender().
+ * Used as a widget so ANSI is preserved (setStatus strips ANSI via sanitizeStatusText).
+ */
+class ShimmerWidget {
+	#tui: TUI;
+	#theme: Theme;
+	#segments: ShimmerSegmentDef[] = [];
+	#suffix = "";
+	#interval: ReturnType<typeof setInterval> | undefined;
+
+	constructor(tui: TUI, theme: Theme) {
+		this.#tui = tui;
+		this.#theme = theme;
+		this.#interval = setInterval(() => {
+			this.#tui.requestRender();
+		}, 80);
+	}
+
+	setContent(segments: ShimmerSegmentDef[], suffix: string): void {
+		this.#segments = segments;
+		this.#suffix = suffix;
+	}
+
+	render(_width: number): string[] {
+		if (this.#segments.length === 0) return [];
+		return [" " + shimmerSegments(this.#segments, this.#theme) + this.#suffix];
+	}
+
+	dispose(): void {
+		if (this.#interval) {
+			clearInterval(this.#interval);
+			this.#interval = undefined;
+		}
+	}
+}
+
+let activeShimmerWidget: ShimmerWidget | undefined;
 // ─── Format helpers ───────────────────────────────────────────────────────────
 
 const getEffectiveThinking = (
@@ -174,10 +220,15 @@ export const buildStatusText = (
 	const pinSuffix = activePin ? theme.fg("accent", ` ⬣${activePin}`) : "";
 
 	if (!routerEnabled) {
-		const offProfile = theme.fg("dim", `○ ${selectedProfile}${activePin ? ` ⬣${activePin}` : ""} (off)`);
-		const model = lastNonRouterModel
-			? theme.fg("dim", `  ${lastNonRouterModel}`)
-			: "";
+		const offProfile = theme.fg("dim", ` ○ ${selectedProfile}${activePin ? ` ⬣${activePin}` : ""} (off)`);
+		let model = "";
+		if (lastNonRouterModel) {
+			const slashIdx = lastNonRouterModel.indexOf("/");
+			const shortModel = slashIdx >= 0
+				? shortenModelId(lastNonRouterModel.slice(0, slashIdx), lastNonRouterModel.slice(slashIdx + 1))
+				: lastNonRouterModel;
+			model = theme.fg("dim", `  ${shortModel}`);
+		}
 		return offProfile + model;
 	}
 
@@ -187,7 +238,7 @@ export const buildStatusText = (
 
 	if (!lastDecision || !matchesProfile || !matchesPin) {
 		// No decision yet — profile label only
-		const profileText = `⬡ ${selectedProfile}`;
+		const profileText = ` ⬡ ${selectedProfile}`;
 		if (isStreaming) {
 			return shimmerSegments(
 				[{ text: profileText, palette: PROFILE_PALETTE }],
@@ -214,7 +265,7 @@ export const buildStatusText = (
 			? " " + flags.map((f) => theme.fg("warning", `[${f}]`)).join(" ")
 			: "";
 
-	const profileText = `⬡ ${selectedProfile}`;
+	const profileText = ` ⬡ ${selectedProfile}`;
 	const modelText = `${thinkingIcon} ${shortModel}`;
 	const costText = formatCost(theme, lastDecision);
 
@@ -260,15 +311,70 @@ export const updateStatus = (
 	currentConfig: RouterConfig,
 	isStreaming = false,
 ) => {
+	const theme = ctx.ui.theme;
+
+	if (isStreaming && routerEnabled) {
+		ctx.ui.setStatus("router", undefined);
+
+		const activePin = pinnedTierByProfile[selectedProfile];
+		const pinSuffix = activePin ? theme.fg("accent", ` ⬣${activePin}`) : "";
+		const matchesProfile = lastDecision?.profile === selectedProfile;
+		const matchesPin = activePin ? lastDecision?.tier === activePin : true;
+
+		let segments: ShimmerSegmentDef[];
+		let suffix: string;
+
+		if (!lastDecision || !matchesProfile || !matchesPin) {
+			segments = [{ text: `⬡ ${selectedProfile}`, palette: PROFILE_PALETTE }];
+			suffix = pinSuffix + theme.fg("dim", "  routing…");
+		} else {
+			const thinking = getEffectiveThinking(thinkingByProfile, selectedProfile, lastDecision);
+			const thinkingColor = THINKING_COLOR[thinking] ?? "muted";
+			const thinkingIcon = THINKING_ICON[thinking] ?? "○";
+			const shortModel = shortenModelId(lastDecision.targetProvider, lastDecision.targetModelId);
+			const tierPalette = makeTierPalette(thinkingColor);
+			const costText = formatCost(theme, lastDecision);
+			const flags = getDecisionFlags(lastDecision);
+			const flagText = flags.length > 0
+				? " " + flags.map((f) => theme.fg("warning", `[${f}]`)).join(" ")
+				: "";
+
+			segments = [
+				{ text: `⬡ ${selectedProfile}`, palette: PROFILE_PALETTE },
+				{ text: "  ", palette: PROFILE_PALETTE },
+				{ text: `${thinkingIcon} ${shortModel}`, palette: tierPalette },
+			];
+			suffix = pinSuffix + costText + flagText;
+		}
+
+		if (activeShimmerWidget) {
+			activeShimmerWidget.setContent(segments, suffix);
+		} else {
+			ctx.ui.setWidget("router", (tui: TUI, widgetTheme: Theme) => {
+				activeShimmerWidget = new ShimmerWidget(tui, widgetTheme);
+				activeShimmerWidget.setContent(segments, suffix);
+				return activeShimmerWidget;
+			});
+		}
+		return;
+	}
+
+	// Idle: dispose shimmer widget, show static status
+	if (activeShimmerWidget) {
+		activeShimmerWidget.dispose();
+		activeShimmerWidget = undefined;
+		ctx.ui.setWidget("router", undefined);
+	}
+
 	const text = buildStatusText(
-		ctx.ui.theme,
+		theme,
 		routerEnabled,
 		selectedProfile,
 		pinnedTierByProfile,
 		thinkingByProfile,
 		lastDecision,
 		lastNonRouterModel,
-		isStreaming,
+		false,
 	);
 	ctx.ui.setStatus("router", text);
 
@@ -277,7 +383,6 @@ export const updateStatus = (
 		return;
 	}
 
-	const theme = ctx.ui.theme;
 	const statusProfile = selectedProfile;
 	const activePin = pinnedTierByProfile[statusProfile];
 
@@ -292,11 +397,7 @@ export const updateStatus = (
 	];
 
 	if (lastDecision && lastDecision.profile === statusProfile) {
-		const thinking = getEffectiveThinking(
-			thinkingByProfile,
-			statusProfile,
-			lastDecision,
-		);
+		const thinking = getEffectiveThinking(thinkingByProfile, statusProfile, lastDecision);
 		const flags = getDecisionFlags(lastDecision);
 		const flagsStr = flags.length > 0 ? ` [${flags.join(",")}]` : "";
 		const u = lastDecision.usage;

@@ -360,6 +360,9 @@ export const registerRouterProvider = (
 					});
 					stream.end();
 				} finally {
+					if (state.lastExtensionContext) {
+						actions.updateStatus(state.lastExtensionContext);
+					}
 					actions.persistState();
 				}
 			})();

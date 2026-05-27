@@ -16,7 +16,6 @@ const routerExtension = (pi: ExtensionAPI) => {
 	pi.setLabel("Model Router");
 
 	const state = new RouterState(pi);
-	let shimmerInterval: ReturnType<typeof setInterval> | undefined;
 
 	const setModelInternally = async (
 		model: NonNullable<ExtensionContext["model"]>,
@@ -236,26 +235,17 @@ const routerExtension = (pi: ExtensionAPI) => {
 		actions.updateStatus(ctx);
 	});
 
-	pi.on("turn_start", (_event, _ctx) => {
+	pi.on("turn_start", (_event, ctx) => {
+		state.lastExtensionContext = ctx;
 		if (state.routerEnabled) {
 			state.isStreaming = true;
-			if (!shimmerInterval) {
-				shimmerInterval = setInterval(() => {
-					if (state.lastExtensionContext) {
-						actions.updateStatus(state.lastExtensionContext);
-					}
-				}, 100);
-			}
+			actions.updateStatus(ctx);
 		}
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
 		state.lastExtensionContext = ctx;
 		state.isStreaming = false;
-		if (shimmerInterval) {
-			clearInterval(shimmerInterval);
-			shimmerInterval = undefined;
-		}
 		if (state.routerEnabled && ctx.model?.provider !== "router") {
 			const routerModel = ctx.modelRegistry.find(
 				"router",
