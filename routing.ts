@@ -139,7 +139,6 @@ const SUMMARY_KEYWORDS: readonly string[] = [
 	"summarize",
 	"summary",
 	"changelog",
-	"rewrite",
 	"reformat",
 	"format",
 	"rename",
@@ -150,17 +149,18 @@ const SUMMARY_KEYWORDS: readonly string[] = [
 
 const IMPLEMENTATION_KEYWORDS: readonly string[] = [
 	"implement",
-	"code",
+	"write code",
+	"code this",
 	"fix",
 	"update",
 	"edit",
 	"editing",
 	"write",
 	"refactor",
+	"rewrite",
 	"add tests",
 	"unit tests",
 	"write tests",
-	"tests",
 	"patch",
 	"change",
 	"apply",
@@ -298,13 +298,14 @@ export const decideRouting = (
 		tier = pinnedTier;
 		reasoning = `Pinned to ${pinnedTier} tier via /router pin.`;
 	} else {
-		// Check custom rules first
+		// Check custom rules first (use matchesKeywords for word-boundary accuracy)
 		if (rules) {
 			for (const rule of rules) {
 				const matches = Array.isArray(rule.matches)
 					? rule.matches
 					: [rule.matches];
-				if (containsAny(prompt, matches)) {
+				const ruleMatcher = buildKeywordMatcher(matches);
+				if (matchesKeywords(prompt, ruleMatcher)) {
 					tier = rule.tier;
 					phase = phaseForTier(tier);
 					reasoning =
@@ -627,15 +628,17 @@ export const resolveRouting = async (
 		};
 
 		if (!checkTierSupportsImage(decision.tier)) {
+			// Determine tiers to try; skip high if budget is exceeded
 			const tiersToTry: RouterTier[] =
 				decision.tier === "low"
-					? ["medium", "high"]
+					? (input.isBudgetExceeded ? ["medium"] : ["medium", "high"])
 					: decision.tier === "medium"
-						? ["high"]
+						? (input.isBudgetExceeded ? [] : ["high"])
 						: [];
 
 			for (const t of tiersToTry) {
 				if (checkTierSupportsImage(t)) {
+					const prevBudgetForced = decision.isBudgetForced;
 					decision = buildRoutingDecision(
 						config.profileName,
 						config.profile,
@@ -645,9 +648,14 @@ export const resolveRouting = async (
 						config.thinkingOverrides,
 						false,
 					);
+					// Preserve budget enforcement flag from prior decision
+					if (prevBudgetForced) decision.isBudgetForced = true;
 					break;
 				}
 			}
+
+			// If no tier with image support found and budget exceeded, stay at current tier
+			// (routing proceeds without image capability rather than exceeding budget)
 		}
 	}
 

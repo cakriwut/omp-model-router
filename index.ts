@@ -151,9 +151,6 @@ const routerExtension = (pi: ExtensionAPI) => {
 	registerCommands(pi, state, actions);
 
 	pi.on("session_start", async (_event, ctx) => {
-		state.lastExtensionContext = ctx;
-		state.currentModelRegistry = ctx.modelRegistry;
-		state.currentCwd = ctx.cwd;
 		actions.reloadConfig();
 
 		// Wait for registerProvider to propagate (see switchToRouterProfile comment).
@@ -201,9 +198,6 @@ const routerExtension = (pi: ExtensionAPI) => {
 	});
 
 	pi.on("session_branch", async (_event, ctx) => {
-		state.lastExtensionContext = ctx;
-		state.currentModelRegistry = ctx.modelRegistry;
-		state.currentCwd = ctx.cwd;
 		actions.reloadConfig();
 
 		await new Promise((resolve) => setTimeout(resolve, 50));

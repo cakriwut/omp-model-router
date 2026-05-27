@@ -369,6 +369,7 @@ export const registerCommands = (
 			profile,
 			debugHistory: state.debugHistory,
 			lastDecision: state.lastDecision,
+			accumulatedCost: state.accumulatedCost,
 			maxSessionBudget: state.currentConfig.maxSessionBudget,
 			modelRegistry: ctx.modelRegistry,
 		});

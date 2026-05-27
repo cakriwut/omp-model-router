@@ -110,7 +110,7 @@ const TEST_PROMPTS = {
     "Plan a major database migration from MongoDB to PostgreSQL with zero downtime using a dual-write strategy.",
     "Research and compare the best authentication approaches for our microservices. We need to support 1M users with SSO and MFA.",
     // Complex debugging
-    `Debug why our Kubernetes deployment is crashing with "OOMKilled" errors. The pod has 4GB memory limit, our app uses Java Spring Boot with heap set to 3GB, but we still see out of memory errors during peak load at 2AM.`,
+    "Investigate and analyze the root cause of memory leaks in our distributed system. The service crashes with OOMKilled after 2 hours under load, despite a 4GB heap limit. We need to understand the root cause and design a fix.",
     // Rule-triggered
     "We need to deploy the new authentication service to production. What are the steps and potential risks?",
     "Prepare the release plan for v2.0 including migration strategies.",

@@ -347,6 +347,7 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 		profile,
 		debugHistory,
 		lastDecision,
+		accumulatedCost,
 		maxSessionBudget,
 		modelRegistry,
 	} = opts;
@@ -372,10 +373,13 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 	const totalDecisions = tierCounts.high + tierCounts.medium + tierCounts.low;
 
 	// Header line: profile + cost
+	// Use authoritative accumulatedCost if provided (avoids undercount from
+	// debug-history cap). Debug-history per-model breakdown is still shown.
 	const sessionCost = Object.values(modelUsage).reduce((s, m) => s + m.cost, 0);
+	const headerCost = accumulatedCost ?? sessionCost;
 	const costStr = maxSessionBudget
-		? `$${sessionCost.toFixed(4)} / $${maxSessionBudget.toFixed(2)}`
-		: `$${sessionCost.toFixed(4)}`;
+		? `$${headerCost.toFixed(4)} / $${maxSessionBudget.toFixed(2)}`
+		: `$${headerCost.toFixed(4)}`;
 	const headerLeft = `Router: ${selectedProfile}`;
 	const headerPad = Math.max(1, BAR_WIDTH + 2 - headerLeft.length - costStr.length);
 	const headerLine = `${headerLeft}${" ".repeat(headerPad)}${costStr}`;
