@@ -2,13 +2,8 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent";
-import type {
-	RouterConfig,
-	RouterPinByProfile,
-	RouterThinkingByProfile,
-	RoutingDecision,
-	RouterTier,
-} from "./types";
+import type { RouterTier } from "./types";
+import type { RouterState } from "./state";
 import {
 	profileNames,
 	resolveProfileName,
@@ -22,23 +17,12 @@ import {
 	formatThinkingSummary,
 	formatModelRef,
 	formatDecision,
+	renderUsageReport,
 } from "./ui";
 
 export const registerCommands = (
 	pi: ExtensionAPI,
-	state: {
-		readonly currentConfig: RouterConfig;
-		routerEnabled: boolean;
-		selectedProfile: string;
-		readonly pinnedTierByProfile: RouterPinByProfile;
-		readonly thinkingByProfile: RouterThinkingByProfile;
-		readonly lastDecision: RoutingDecision | undefined;
-		lastNonRouterModel: string | undefined;
-		readonly accumulatedCost: number;
-		debugEnabled: boolean;
-		widgetEnabled: boolean;
-		readonly debugHistory: RoutingDecision[];
-	},
+	state: RouterState,
 	actions: {
 		persistState: () => void;
 		updateStatus: (ctx: ExtensionContext) => void;
@@ -379,165 +363,16 @@ export const registerCommands = (
 			ctx.ui.notify("No active router profile.", "error");
 			return;
 		}
-
-		const theme = ctx.ui.theme;
-		const BAR_WIDTH = 48;
-
-		// Color mapping for tiers
-		const tierColor = (tier: string, text: string) => {
-			switch (tier) {
-				case "high":
-					return theme.fg("success", text);
-				case "medium":
-					return theme.fg("warning", text);
-				default:
-					return theme.fg("dim", text);
-			}
-		};
-
-		// Gather per-model usage from debug history
-		const modelUsage: Record<string, { count: number; tier: string; cost: number }> = {};
-		for (const decision of state.debugHistory) {
-			if (decision.profile !== state.selectedProfile) continue;
-			const key = decision.targetLabel;
-			if (!modelUsage[key]) {
-				modelUsage[key] = { count: 0, tier: decision.tier, cost: 0 };
-			}
-			modelUsage[key].count++;
-			modelUsage[key].cost += decision.usage?.cost ?? 0;
-		}
-
-		// Tier distribution
-		const tierCounts = { high: 0, medium: 0, low: 0 };
-		for (const decision of state.debugHistory) {
-			if (decision.profile !== state.selectedProfile) continue;
-			if (decision.tier in tierCounts) {
-				tierCounts[decision.tier as keyof typeof tierCounts]++;
-			}
-		}
-		const totalDecisions =
-			tierCounts.high + tierCounts.medium + tierCounts.low;
-
-		// Header line: profile + cost (derived from per-decision tracking, not cross-profile accumulator)
-		const sessionCost = Object.values(modelUsage).reduce((s, m) => s + m.cost, 0);
-		const budget = state.currentConfig.maxSessionBudget;
-		const costStr = budget
-			? `$${sessionCost.toFixed(4)} / $${budget.toFixed(2)}`
-			: `$${sessionCost.toFixed(4)}`;
-		const headerLeft = `Router: ${state.selectedProfile}`;
-		const headerPad = Math.max(
-			1,
-			BAR_WIDTH + 2 - headerLeft.length - costStr.length,
-		);
-		const headerLine = `${headerLeft}${" ".repeat(headerPad)}${costStr}`;
-
-		// Stacked distribution bar
-		let barLine: string;
-		let labelLine: string;
-		if (totalDecisions > 0) {
-			const highWidth = Math.round(
-				(tierCounts.high / totalDecisions) * BAR_WIDTH,
-			);
-			const mediumWidth = Math.round(
-				(tierCounts.medium / totalDecisions) * BAR_WIDTH,
-			);
-			const lowWidth = Math.max(0, BAR_WIDTH - highWidth - mediumWidth);
-
-			const highSeg = tierColor("high", "█".repeat(highWidth));
-			const medSeg = tierColor("medium", "█".repeat(mediumWidth));
-			const lowSeg = tierColor("low", "█".repeat(lowWidth));
-			barLine = `${highSeg}${medSeg}${lowSeg} ${totalDecisions} decisions`;
-
-			// Label line aligned under segments
-			const highPct = Math.round(
-				(tierCounts.high / totalDecisions) * 100,
-			);
-			const medPct = Math.round(
-				(tierCounts.medium / totalDecisions) * 100,
-			);
-			const lowPct = Math.round(
-				(tierCounts.low / totalDecisions) * 100,
-			);
-
-			const highLabel = `high ${highPct}%`;
-			const medLabel = `medium ${medPct}%`;
-			const lowLabel = `low ${lowPct}%`;
-
-			// Center each label under its segment
-			const highLabelPad = Math.max(
-				0,
-				Math.floor((highWidth - highLabel.length) / 2),
-			);
-			const highLabelEnd = Math.max(0, highWidth - highLabelPad - highLabel.length);
-			const medLabelPad = Math.max(
-				0,
-				Math.floor((mediumWidth - medLabel.length) / 2),
-			);
-			const medLabelEnd = Math.max(0, mediumWidth - medLabelPad - medLabel.length);
-			const lowLabelPad = Math.max(
-				0,
-				Math.floor((lowWidth - lowLabel.length) / 2),
-			);
-
-			labelLine = [
-				" ".repeat(highLabelPad),
-				tierColor("high", highLabel),
-				" ".repeat(highLabelEnd),
-				" ".repeat(medLabelPad),
-				tierColor("medium", medLabel),
-				" ".repeat(medLabelEnd),
-				" ".repeat(lowLabelPad),
-				tierColor("low", lowLabel),
-			].join("");
-		} else {
-			barLine = theme.fg("dim", "░".repeat(BAR_WIDTH)) + " 0 decisions";
-			labelLine = theme.fg("dim", "no routing history");
-		}
-
-		// Model lines
-		const modelLines: string[] = [];
-		for (const tier of ROUTER_TIERS) {
-			const tierConfig = profile[tier];
-			const { provider, modelId } = parseCanonicalModelRef(tierConfig.model);
-			const usageCount = modelUsage[tierConfig.model]?.count ?? 0;
-			const trackedCost = modelUsage[tierConfig.model]?.cost ?? 0;
-			const registeredModel = ctx.modelRegistry.find(provider, modelId);
-
-			const tierCost = registeredModel?.cost
-				? `$${trackedCost.toFixed(4)}`
-				: "";
-
-			const tierLabel = tierColor(tier, tier.toUpperCase().padEnd(8));
-			const modelName = modelId.padEnd(38);
-			const countStr = `${usageCount}x`.padStart(4);
-
-			modelLines.push(
-				`  ${tierLabel}${modelName}${countStr}   ${tierCost}`,
-			);
-
-			if (tierConfig.fallbacks?.length) {
-				for (const fb of tierConfig.fallbacks) {
-					const { modelId: fbId } = parseCanonicalModelRef(fb);
-					const fbUsage = modelUsage[fb]?.count ?? 0;
-					modelLines.push(
-						`  ${" ".repeat(8)}└ ${fbId.padEnd(36)}${`${fbUsage}x`.padStart(4)}`,
-					);
-				}
-			}
-		}
-
-		// Assemble
-		const lines = [headerLine, barLine, labelLine, "", ...modelLines];
-
-		if (state.lastDecision) {
-			const ld = state.lastDecision;
-			lines.push(
-				"",
-				`Last: ${tierColor(ld.tier, ld.tier)} → ${ld.targetProvider}/${ld.targetModelId} (${ld.thinking})`,
-			);
-		}
-
-		ctx.ui.notify(lines.join("\n"), "info");
+		const report = renderUsageReport({
+			theme: ctx.ui.theme,
+			selectedProfile: state.selectedProfile,
+			profile,
+			debugHistory: state.debugHistory,
+			lastDecision: state.lastDecision,
+			maxSessionBudget: state.currentConfig.maxSessionBudget,
+			modelRegistry: ctx.modelRegistry,
+		});
+		ctx.ui.notify(report, "info");
 	};
 
 	const handleReload = async (_args: string[], ctx: ExtensionContext) => {

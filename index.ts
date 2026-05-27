@@ -3,22 +3,11 @@ import type {
 	ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent";
 import {
-	type RouterConfig,
-	type RouterPersistedState,
-	type RoutingDecision,
-	type RouterPinByProfile,
-	type RouterThinkingByProfile,
-	type RouterTier,
-	type CustomSessionEntry,
-} from "./types";
-import {
-	FALLBACK_CONFIG,
 	loadRouterConfig,
 	profileNames,
 	resolveProfileName,
 } from "./config";
-import { MAX_DEBUG_HISTORY } from "./constants";
-import { isRouterPersistedState, buildPersistedState } from "./state";
+import { RouterState } from "./state";
 import { updateStatus } from "./ui";
 import { registerCommands } from "./commands";
 import { registerRouterProvider } from "./provider";
@@ -26,113 +15,49 @@ import { registerRouterProvider } from "./provider";
 const routerExtension = (pi: ExtensionAPI) => {
 	pi.setLabel("Model Router");
 
-	let currentConfig: RouterConfig = FALLBACK_CONFIG;
-	let currentModelRegistry: ExtensionContext["modelRegistry"] | undefined;
-	let currentCwd = process.cwd();
-	let lastDecision: RoutingDecision | undefined;
-	let debugEnabled = false;
-	let routerEnabled = false;
-	let selectedProfile = resolveProfileName(
-		FALLBACK_CONFIG,
-		FALLBACK_CONFIG.defaultProfile,
-	);
-	let widgetEnabled = false;
-	let lastRegisteredModels = "";
-	let pinnedTierByProfile: RouterPinByProfile = {};
-	let thinkingByProfile: RouterThinkingByProfile = {};
-	let debugHistory: RoutingDecision[] = [];
-	let lastNonRouterModel: string | undefined;
-	let accumulatedCost = 0;
-	let lastExtensionContext: ExtensionContext | undefined;
-	let lastPersistedSnapshot: string | undefined;
-	let isInitialized = false;
-	let isInternalModelSwitch = false;
-	let isStreaming = false;
+	const state = new RouterState(pi);
 	let shimmerInterval: ReturnType<typeof setInterval> | undefined;
 
 	const setModelInternally = async (
 		model: NonNullable<ExtensionContext["model"]>,
 	) => {
-		isInternalModelSwitch = true;
+		state.isInternalModelSwitch = true;
 		try {
 			return await pi.setModel(model);
 		} finally {
-			isInternalModelSwitch = false;
+			state.isInternalModelSwitch = false;
 		}
-	};
-
-	const recordDebugDecision = (decision: RoutingDecision) => {
-		debugHistory = [...debugHistory, decision].slice(-MAX_DEBUG_HISTORY);
-	};
-
-	const getThinkingOverride = (profileName: string, tier: RouterTier) => {
-		return thinkingByProfile[profileName]?.[tier];
-	};
-
-	const persistState = () => {
-		const state = buildPersistedState(
-			routerEnabled,
-			selectedProfile,
-			pinnedTierByProfile,
-			thinkingByProfile,
-			debugEnabled,
-			widgetEnabled,
-			debugHistory,
-			lastDecision,
-			lastNonRouterModel,
-			accumulatedCost,
-		);
-		const snapshot = JSON.stringify({
-			...state,
-			timestamp: 0,
-			lastDecision: state.lastDecision
-				? { ...state.lastDecision, timestamp: 0 }
-				: undefined,
-			debugHistory: state.debugHistory?.map((decision) => ({
-				...decision,
-				timestamp: 0,
-			})),
-		});
-		if (snapshot === lastPersistedSnapshot) {
-			return;
-		}
-		try {
-			pi.appendEntry("router-state", state);
-		} catch {
-			// Runtime not yet initialized (e.g. memory startup fires before
-			// extensionRunner.initialize wires the real appendEntry). Skip
-			// silently — state will persist on the next successful call.
-			return;
-		}
-		lastPersistedSnapshot = snapshot;
 	};
 
 	const actions = {
-		persistState,
+		setModelInternally,
 		updateStatus: (ctx: ExtensionContext) =>
 			updateStatus(
 				ctx,
-				routerEnabled,
-				selectedProfile,
-				pinnedTierByProfile,
-				thinkingByProfile,
-				lastDecision,
-				lastNonRouterModel,
-				accumulatedCost,
-				widgetEnabled,
-				currentConfig,
-				isStreaming,
+				state.routerEnabled,
+				state.selectedProfile,
+				state.pinnedTierByProfile,
+				state.thinkingByProfile,
+				state.lastDecision,
+				state.lastNonRouterModel,
+				state.accumulatedCost,
+				state.widgetEnabled,
+				state.currentConfig,
+				state.isStreaming,
 			),
 		reloadConfig: (
 			ctx?: ExtensionContext,
 			options?: { preserveDebug?: boolean },
 		) => {
-			const loaded = loadRouterConfig(currentCwd);
-			currentConfig = loaded.config;
+			const loaded = loadRouterConfig(state.currentCwd);
+			state.currentConfig = loaded.config;
 			if (!options?.preserveDebug) {
-				debugEnabled = currentConfig.debug ?? false;
+				state.debugEnabled = state.currentConfig.debug ?? false;
 			}
-			selectedProfile = resolveProfileName(currentConfig, selectedProfile);
+			state.selectedProfile = resolveProfileName(
+				state.currentConfig,
+				state.selectedProfile,
+			);
 			actions.registerRouterProvider();
 			if (ctx) {
 				actions.updateStatus(ctx);
@@ -142,18 +67,18 @@ const routerExtension = (pi: ExtensionAPI) => {
 			if (ctx.model?.provider !== "router") {
 				return;
 			}
-			if (currentConfig.profiles[ctx.model.id]) {
-				selectedProfile = ctx.model.id;
-				routerEnabled = true;
+			if (state.currentConfig.profiles[ctx.model.id]) {
+				state.selectedProfile = ctx.model.id;
+				state.routerEnabled = true;
 				return;
 			}
 
 			const fallbackProfile = resolveProfileName(
-				currentConfig,
-				selectedProfile,
+				state.currentConfig,
+				state.selectedProfile,
 			);
 			const routerModel = ctx.modelRegistry.find("router", fallbackProfile);
-			selectedProfile = fallbackProfile;
+			state.selectedProfile = fallbackProfile;
 			if (!routerModel) {
 				ctx.ui.notify(
 					`Router profile "${ctx.model.id}" is no longer configured.`,
@@ -173,13 +98,19 @@ const routerExtension = (pi: ExtensionAPI) => {
 			ctx: ExtensionContext,
 			strict = true,
 		) => {
-			if (strict && !currentConfig.profiles[profileName]) {
+			if (strict && !state.currentConfig.profiles[profileName]) {
 				ctx.ui.notify(`Unknown router profile: ${profileName}`, "error");
 				return false;
 			}
-			const resolvedProfile = resolveProfileName(currentConfig, profileName);
+			const resolvedProfile = resolveProfileName(
+				state.currentConfig,
+				profileName,
+			);
 
 			actions.registerRouterProvider();
+			// Wait for registerProvider to propagate to the model registry.
+			// The framework has no "provider registration complete" event; 50 ms
+			// is empirical slack so ctx.modelRegistry.find("router", …) resolves.
 			await new Promise((resolve) => setTimeout(resolve, 50));
 
 			const routerModel = ctx.modelRegistry.find("router", resolvedProfile);
@@ -188,7 +119,7 @@ const routerExtension = (pi: ExtensionAPI) => {
 				return false;
 			}
 			if (ctx.model && ctx.model.provider !== "router") {
-				lastNonRouterModel = `${ctx.model.provider}/${ctx.model.id}`;
+				state.lastNonRouterModel = `${ctx.model.provider}/${ctx.model.id}`;
 			}
 			const success = await setModelInternally(routerModel);
 			if (!success) {
@@ -198,259 +129,149 @@ const routerExtension = (pi: ExtensionAPI) => {
 				);
 				return false;
 			}
-			selectedProfile = resolvedProfile;
-			routerEnabled = true;
-			persistState();
+			state.selectedProfile = resolvedProfile;
+			state.routerEnabled = true;
+			state.persist();
 			actions.updateStatus(ctx);
 			return true;
 		},
 		registerRouterProvider: () => {
-			registerRouterProvider(
-				pi,
-				{
-					get lastRegisteredModels() {
-						return lastRegisteredModels;
-					},
-					set lastRegisteredModels(v) {
-						lastRegisteredModels = v;
-					},
-					get currentConfig() {
-						return currentConfig;
-					},
-					get currentModelRegistry() {
-						return currentModelRegistry;
-					},
-					get lastExtensionContext() {
-						return lastExtensionContext;
-					},
-					get selectedProfile() {
-						return selectedProfile;
-					},
-					set selectedProfile(v) {
-						selectedProfile = v;
-					},
-					get routerEnabled() {
-						return routerEnabled;
-					},
-					set routerEnabled(v) {
-						routerEnabled = v;
-					},
-					get lastDecision() {
-						return lastDecision;
-					},
-					set lastDecision(v) {
-						lastDecision = v;
-					},
-					thinkingByProfile,
-					pinnedTierByProfile,
-					get accumulatedCost() {
-						return accumulatedCost;
-					},
-					set accumulatedCost(v) {
-						accumulatedCost = v;
-					},
-				},
-				{
-					persistState,
-					recordDebugDecision,
-					getThinkingOverride,
-					updateStatus: actions.updateStatus,
-				},
-			);
+			registerRouterProvider(pi, state, {
+				persistState: () => state.persist(),
+				recordDebugDecision: (d) => state.recordDecision(d),
+				getThinkingOverride: (profileName, tier) =>
+					state.getThinkingOverride(profileName, tier),
+				updateStatus: actions.updateStatus,
+			});
 		},
 	};
 
 	actions.reloadConfig();
 
-	const restoreStateFromSession = async (ctx: ExtensionContext) => {
-		lastExtensionContext = ctx;
-		currentModelRegistry = ctx.modelRegistry;
-		currentCwd = ctx.cwd;
+	registerCommands(pi, state, actions);
+
+	pi.on("session_start", async (_event, ctx) => {
+		state.lastExtensionContext = ctx;
+		state.currentModelRegistry = ctx.modelRegistry;
+		state.currentCwd = ctx.cwd;
 		actions.reloadConfig();
 
+		// Wait for registerProvider to propagate (see switchToRouterProfile comment).
 		await new Promise((resolve) => setTimeout(resolve, 50));
 
-		routerEnabled = ctx.model?.provider === "router";
-		selectedProfile = resolveProfileName(
-			currentConfig,
-			ctx.model?.provider === "router" ? ctx.model.id : selectedProfile,
-		);
-		pinnedTierByProfile = {};
-		thinkingByProfile = {};
-		widgetEnabled = false;
-		debugHistory = [];
-		accumulatedCost = 0;
-		lastNonRouterModel =
-			ctx.model && ctx.model.provider !== "router"
-				? `${ctx.model.provider}/${ctx.model.id}`
-				: lastNonRouterModel;
-		lastDecision = undefined;
-
-		const entries = ctx.sessionManager.getBranch() as CustomSessionEntry[];
-		const savedState = entries
-			.filter(
-				(entry: CustomSessionEntry) =>
-					entry.type === "custom" && entry.customType === "router-state",
-			)
-			.map((entry: CustomSessionEntry) => entry.data)
-			.reverse()
-			.find((data: unknown) => isRouterPersistedState(data));
-
-		if (isRouterPersistedState(savedState)) {
-			selectedProfile = resolveProfileName(
-				currentConfig,
-				savedState.selectedProfile,
-			);
-			routerEnabled = savedState.enabled;
-			pinnedTierByProfile = savedState.pinByProfile
-				? { ...savedState.pinByProfile }
-				: {};
-			thinkingByProfile = savedState.thinkingByProfile
-				? { ...savedState.thinkingByProfile }
-				: {};
-			if (savedState.pinTier) {
-				pinnedTierByProfile[selectedProfile] = savedState.pinTier;
-			}
-			debugEnabled = savedState.debugEnabled ?? debugEnabled;
-			widgetEnabled = savedState.widgetEnabled ?? widgetEnabled;
-			debugHistory = savedState.debugHistory
-				? [...savedState.debugHistory].slice(-MAX_DEBUG_HISTORY)
-				: [];
-			lastNonRouterModel =
-				savedState.lastNonRouterModel ?? lastNonRouterModel;
-			accumulatedCost = savedState.accumulatedCost ?? 0;
-		}
+		state.restoreFromSession(ctx);
 
 		await actions.ensureValidActiveRouterProfile(ctx);
 
-		if (routerEnabled) {
+		if (state.routerEnabled) {
 			const routerModel = ctx.modelRegistry.find(
 				"router",
-				selectedProfile,
+				state.selectedProfile,
 			);
 			if (routerModel) {
 				const success = await setModelInternally(routerModel);
 				if (!success) {
 					ctx.ui.notify(
-						`Failed to restore router/${selectedProfile} after relaunch.`,
+						`Failed to restore router/${state.selectedProfile} after relaunch.`,
 						"warning",
 					);
-					routerEnabled = false;
+					state.routerEnabled = false;
 				}
 			} else {
 				ctx.ui.notify(
-					`Unable to restore router/${selectedProfile}; model is unavailable.`,
+					`Unable to restore router/${state.selectedProfile}; model is unavailable.`,
 					"warning",
 				);
-				routerEnabled = false;
-				(ctx.ui as any).setHiddenThinkingLabel?.();
+				state.routerEnabled = false;
+				ctx.ui.setHiddenThinkingLabel?.();
 			}
 		} else {
-			(ctx.ui as any).setHiddenThinkingLabel?.();
+			ctx.ui.setHiddenThinkingLabel?.();
 		}
 
-		persistState();
+		state.persist();
 		actions.updateStatus(ctx);
-	};
 
-	registerCommands(
-		pi,
-		{
-			get currentConfig() {
-				return currentConfig;
-			},
-			get routerEnabled() {
-				return routerEnabled;
-			},
-			set routerEnabled(v) {
-				routerEnabled = v;
-			},
-			get selectedProfile() {
-				return selectedProfile;
-			},
-			set selectedProfile(v) {
-				selectedProfile = v;
-			},
-			pinnedTierByProfile,
-			thinkingByProfile,
-			get lastDecision() {
-				return lastDecision;
-			},
-			get lastNonRouterModel() {
-				return lastNonRouterModel;
-			},
-			set lastNonRouterModel(v) {
-				lastNonRouterModel = v;
-			},
-			get accumulatedCost() {
-				return accumulatedCost;
-			},
-			get debugEnabled() {
-				return debugEnabled;
-			},
-			set debugEnabled(v) {
-				debugEnabled = v;
-			},
-			get widgetEnabled() {
-				return widgetEnabled;
-			},
-			set widgetEnabled(v) {
-				widgetEnabled = v;
-			},
-			get debugHistory() {
-				return debugHistory;
-			},
-		},
-		actions,
-	);
-
-	pi.on("session_start", async (_event, ctx) => {
-		isInitialized = true;
-		await restoreStateFromSession(ctx);
-		if (debugEnabled) {
+		if (state.debugEnabled) {
 			ctx.ui.notify(
-				`Router initialized with profiles: ${profileNames(currentConfig).join(", ")}`,
+				`Router initialized with profiles: ${profileNames(state.currentConfig).join(", ")}`,
 				"info",
 			);
 		}
 	});
 
 	pi.on("session_branch", async (_event, ctx) => {
-		await restoreStateFromSession(ctx);
+		state.lastExtensionContext = ctx;
+		state.currentModelRegistry = ctx.modelRegistry;
+		state.currentCwd = ctx.cwd;
+		actions.reloadConfig();
+
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		state.restoreFromSession(ctx);
+
+		await actions.ensureValidActiveRouterProfile(ctx);
+
+		if (state.routerEnabled) {
+			const routerModel = ctx.modelRegistry.find(
+				"router",
+				state.selectedProfile,
+			);
+			if (routerModel) {
+				const success = await setModelInternally(routerModel);
+				if (!success) {
+					ctx.ui.notify(
+						`Failed to restore router/${state.selectedProfile} after relaunch.`,
+						"warning",
+					);
+					state.routerEnabled = false;
+				}
+			} else {
+				ctx.ui.notify(
+					`Unable to restore router/${state.selectedProfile}; model is unavailable.`,
+					"warning",
+				);
+				state.routerEnabled = false;
+				ctx.ui.setHiddenThinkingLabel?.();
+			}
+		} else {
+			ctx.ui.setHiddenThinkingLabel?.();
+		}
+
+		state.persist();
+		actions.updateStatus(ctx);
 	});
 
-	pi.on("turn_start", (_event, ctx) => {
-		lastExtensionContext = ctx;
-		if (routerEnabled) {
-			isStreaming = true;
+	pi.on("turn_start", (_event, _ctx) => {
+		if (state.routerEnabled) {
+			state.isStreaming = true;
 			if (!shimmerInterval) {
 				shimmerInterval = setInterval(() => {
-					if (lastExtensionContext) {
-						actions.updateStatus(lastExtensionContext);
+					if (state.lastExtensionContext) {
+						actions.updateStatus(state.lastExtensionContext);
 					}
-				}, 80);
+				}, 100);
 			}
-			actions.updateStatus(ctx);
 		}
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
-		isStreaming = false;
+		state.lastExtensionContext = ctx;
+		state.isStreaming = false;
 		if (shimmerInterval) {
 			clearInterval(shimmerInterval);
 			shimmerInterval = undefined;
 		}
-		lastExtensionContext = ctx;
-		if (routerEnabled && ctx.model?.provider !== "router") {
+		if (state.routerEnabled && ctx.model?.provider !== "router") {
 			const routerModel = ctx.modelRegistry.find(
 				"router",
-				selectedProfile,
+				state.selectedProfile,
 			);
 			if (routerModel) {
 				await setModelInternally(routerModel);
 			}
 		}
-		persistState();
+		state.persist();
 		actions.updateStatus(ctx);
 	});
 };

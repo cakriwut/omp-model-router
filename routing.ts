@@ -1,5 +1,4 @@
 import { streamSimple, type Context, type Message } from "@oh-my-pi/pi-ai";
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type {
 	RouterTier,
@@ -10,6 +9,8 @@ import type {
 	RouterThinkingByTier,
 } from "./types";
 import { parseCanonicalModelRef, isRouterTier } from "./config";
+
+// ─── Text extraction utilities ────────────────────────────────────────────────
 
 export const extractTextFromContent = (
 	content: string | Message["content"],
@@ -68,9 +69,171 @@ export const hasImageAttachment = (context: Context): boolean => {
 	);
 };
 
+// ─── Keyword matching ─────────────────────────────────────────────────────────
+
+/**
+ * Keyword lists at module scope — zero per-call allocation.
+ *
+ * CORRECTNESS NOTE: Single-word keywords use word-boundary (\b) regex matching
+ * to avoid false positives. Examples of previously false-matched words:
+ *   "information" matched keyword "format"
+ *   "unchanged"   matched keyword "change"
+ *   "encode"      matched keyword "code"
+ *   "blacklist"   matched keyword "list"
+ *
+ * Multi-word keywords (containing spaces) use substring matching — they already
+ * carry natural boundaries.
+ *
+ * Morphological variants that SHOULD trigger the same tier are added explicitly:
+ *   "editing" (from "edit"), "fastest" (from "fast"), "continued" (from "continue").
+ */
+
+const EXPLICIT_HIGH_HINTS: readonly string[] = [
+	"best",
+	"deep",
+	"deeply",
+	"carefully",
+	"thoroughly",
+	"robust",
+	"comprehensive",
+	"step by step",
+	"think hard",
+	"highest quality",
+];
+
+const EXPLICIT_LOW_HINTS: readonly string[] = [
+	"fast",
+	"fastest",
+	"cheap",
+	"quick",
+	"quickly",
+	"brief",
+	"briefly",
+	"one sentence",
+	"one line",
+	"tiny",
+	"small",
+];
+
+const PLANNING_KEYWORDS: readonly string[] = [
+	"plan",
+	"planning",
+	"architecture",
+	"architect",
+	"design",
+	"tradeoff",
+	"trade-off",
+	"research",
+	"investigate",
+	"root cause",
+	"analyze",
+	"analysis",
+	"migration",
+	"strategy",
+	"compare",
+	"options",
+	"approach",
+];
+
+const SUMMARY_KEYWORDS: readonly string[] = [
+	"summarize",
+	"summary",
+	"changelog",
+	"rewrite",
+	"reformat",
+	"format",
+	"rename",
+	"explain briefly",
+	"recap",
+	"tl;dr",
+];
+
+const IMPLEMENTATION_KEYWORDS: readonly string[] = [
+	"implement",
+	"code",
+	"fix",
+	"update",
+	"edit",
+	"editing",
+	"write",
+	"refactor",
+	"add tests",
+	"unit tests",
+	"write tests",
+	"tests",
+	"patch",
+	"change",
+	"apply",
+	"continue",
+	"continued",
+	"resume",
+	"make the changes",
+	"go ahead",
+];
+
+const LOOKUP_KEYWORDS: readonly string[] = [
+	"where is",
+	"which file",
+	"show me",
+	"list",
+	"find",
+	"grep",
+];
+
+interface KeywordMatcher {
+	singleWord: RegExp[];
+	multiWord: readonly string[];
+}
+
+const buildKeywordMatcher = (keywords: readonly string[]): KeywordMatcher => {
+	const singleWord: RegExp[] = [];
+	const multiWord: string[] = [];
+	for (const kw of keywords) {
+		if (kw.includes(" ")) {
+			multiWord.push(kw);
+		} else {
+			// Pre-compile with word boundaries; flags: i for case-insensitivity
+			singleWord.push(new RegExp(`\\b${kw}\\b`, "i"));
+		}
+	}
+	return { singleWord, multiWord: multiWord as readonly string[] };
+};
+
+// Pre-compile all matchers at module load — zero per-call allocation.
+const HIGH_HINT_MATCHER = buildKeywordMatcher(EXPLICIT_HIGH_HINTS);
+const LOW_HINT_MATCHER = buildKeywordMatcher(EXPLICIT_LOW_HINTS);
+const PLANNING_MATCHER = buildKeywordMatcher(PLANNING_KEYWORDS);
+const SUMMARY_MATCHER = buildKeywordMatcher(SUMMARY_KEYWORDS);
+const IMPLEMENTATION_MATCHER = buildKeywordMatcher(IMPLEMENTATION_KEYWORDS);
+const LOOKUP_MATCHER = buildKeywordMatcher(LOOKUP_KEYWORDS);
+
+/**
+ * Returns true if any keyword in the matcher appears in text, using
+ * word-boundary matching for single-word keywords and substring matching
+ * for multi-word phrases.
+ */
+export const matchesKeywords = (
+	text: string,
+	matcher: KeywordMatcher,
+): boolean => {
+	for (const re of matcher.singleWord) {
+		if (re.test(text)) return true;
+	}
+	for (const phrase of matcher.multiWord) {
+		if (text.includes(phrase)) return true;
+	}
+	return false;
+};
+
+/**
+ * @deprecated Use matchesKeywords with a pre-built matcher instead.
+ * Kept for external callers that may depend on it.
+ */
 export const containsAny = (text: string, keywords: string[]): boolean => {
 	return keywords.some((keyword) => text.includes(keyword));
 };
+
+// ─── Routing primitives ───────────────────────────────────────────────────────
 
 export const phaseForTier = (tier: RouterTier): RouterPhase => {
 	if (tier === "high") return "planning";
@@ -89,10 +252,10 @@ export const buildRoutingDecision = (
 ): RoutingDecision => {
 	const routed = profile[tier];
 	const { provider, modelId } = parseCanonicalModelRef(routed.model);
-	const baseThinking: ThinkingLevel =
+	const baseThinking =
 		routed.thinking ??
-		(tier === "high" ? "high" : tier === "low" ? "low" : "medium") as ThinkingLevel;
-	const effectiveThinking: ThinkingLevel = thinkingOverrides?.[tier] ?? baseThinking;
+		(tier === "high" ? "high" : tier === "low" ? "low" : "medium");
+	const effectiveThinking = thinkingOverrides?.[tier] ?? baseThinking;
 
 	return {
 		profile: profileName,
@@ -124,89 +287,6 @@ export const decideRouting = (
 	const toolResultCount = countToolResults(context);
 	const wordCount = countWords(prompt);
 	const multiLinePrompt = prompt.split("\n").length >= 4;
-
-	const explicitHighHints = [
-		"best",
-		"deep",
-		"deeply",
-		"carefully",
-		"thoroughly",
-		"robust",
-		"comprehensive",
-		"step by step",
-		"think hard",
-		"highest quality",
-	];
-	const explicitLowHints = [
-		"fast",
-		"cheap",
-		"quick",
-		"quickly",
-		"brief",
-		"briefly",
-		"one sentence",
-		"one line",
-		"tiny",
-		"small",
-	];
-	const planningKeywords = [
-		"plan",
-		"planning",
-		"architecture",
-		"architect",
-		"design",
-		"tradeoff",
-		"trade-off",
-		"research",
-		"investigate",
-		"root cause",
-		"analyze",
-		"analysis",
-		"migration",
-		"strategy",
-		"compare",
-		"options",
-		"approach",
-	];
-	const summaryKeywords = [
-		"summarize",
-		"summary",
-		"changelog",
-		"rewrite",
-		"reformat",
-		"format",
-		"rename",
-		"explain briefly",
-		"recap",
-		"tl;dr",
-	];
-	const implementationKeywords = [
-		"implement",
-		"code",
-		"fix",
-		"update",
-		"edit",
-		"write",
-		"refactor",
-		"add tests",
-		"tests",
-		"patch",
-		"change",
-		"apply",
-		"continue",
-		"resume",
-		"make the changes",
-		"go ahead",
-	];
-	const lookupKeywords = [
-		"where is",
-		"which file",
-		"show me",
-		"list",
-		"what files",
-		"find",
-		"grep",
-	];
 
 	let phase: RouterPhase = previousDecision?.phase ?? "implementation";
 	let tier: RouterTier = "medium";
@@ -251,22 +331,22 @@ export const decideRouting = (
 						: 0),
 			);
 
-			if (containsAny(prompt, explicitHighHints)) {
+			if (matchesKeywords(prompt, HIGH_HINT_MATCHER)) {
 				phase = "planning";
 				tier = "high";
 				reasoning =
 					"Detected an explicit request for deeper or higher-quality reasoning.";
-			} else if (containsAny(prompt, explicitLowHints)) {
+			} else if (matchesKeywords(prompt, LOW_HINT_MATCHER)) {
 				phase = "lightweight";
 				tier = "low";
 				reasoning =
 					"Detected an explicit request for a faster or lighter response.";
-			} else if (containsAny(prompt, summaryKeywords)) {
+			} else if (matchesKeywords(prompt, SUMMARY_MATCHER)) {
 				phase = "lightweight";
 				tier = "low";
 				reasoning = "Detected summary or lightweight transformation keywords.";
 			} else if (
-				containsAny(prompt, planningKeywords) ||
+				matchesKeywords(prompt, PLANNING_MATCHER) ||
 				prompt.startsWith("why ") ||
 				wordCount >= highThreshold ||
 				multiLinePrompt
@@ -277,13 +357,13 @@ export const decideRouting = (
 					previousDecision?.phase === "planning"
 						? "Continued planning phase based on complexity or keywords."
 						: "Detected planning, broad analysis, or a high-complexity request.";
-			} else if (containsAny(prompt, implementationKeywords)) {
+			} else if (matchesKeywords(prompt, IMPLEMENTATION_MATCHER)) {
 				phase = "implementation";
 				tier = "medium";
 				reasoning =
 					"Detected implementation-oriented work with bounded execution scope.";
 			} else if (
-				containsAny(prompt, lookupKeywords) &&
+				matchesKeywords(prompt, LOOKUP_MATCHER) &&
 				wordCount <= 24 &&
 				toolResultCount === 0
 			) {
@@ -293,7 +373,7 @@ export const decideRouting = (
 			} else if (
 				previousDecision?.phase === "planning" &&
 				toolResultCount === 0 &&
-				!containsAny(prompt, lookupKeywords)
+				!matchesKeywords(prompt, LOOKUP_MATCHER)
 			) {
 				phase = "planning";
 				tier = "high";
@@ -337,6 +417,8 @@ export const decideRouting = (
 	decision.isBudgetForced = isBudgetForced;
 	return decision;
 };
+
+// ─── LLM classifier ───────────────────────────────────────────────────────────
 
 export const runClassifier = async (
 	classifierModelRef: string,
@@ -392,9 +474,9 @@ ${currentPhase === "implementation" ? "Consider that the conversation is current
 		for await (const event of stream) {
 			if (
 				event.type === "text_delta" &&
-				typeof (event as any).delta === "string"
+				typeof (event as { delta?: unknown }).delta === "string"
 			) {
-				fullText += (event as any).delta;
+				fullText += (event as { delta: string }).delta;
 			}
 		}
 
@@ -419,4 +501,155 @@ ${currentPhase === "implementation" ? "Consider that the conversation is current
 		// Ignore classifier errors and fall back to heuristics
 	}
 	return undefined;
+};
+
+// ─── resolveRouting — composites heuristic + all overrides ───────────────────
+
+export interface RoutingInput {
+	context: Context;
+	previousDecision: RoutingDecision | undefined;
+	pinnedTier?: RouterTier;
+	isBudgetExceeded: boolean;
+	modelRegistry: ExtensionContext["modelRegistry"];
+	lastExtensionContext?: ExtensionContext;
+}
+
+export interface RoutingConfig {
+	profileName: string;
+	profile: RouterProfile;
+	thinkingOverrides?: RouterThinkingByTier;
+	phaseBias: number;
+	rules?: RoutingRule[];
+	largeContextThreshold?: number;
+	classifierModel?: string;
+}
+
+/**
+ * Resolve the full routing decision for a request, composing:
+ *   1. Heuristic decision (decideRouting)
+ *   2. Context trigger upgrade (large context window forces high tier)
+ *   3. Classifier override (LLM classifier overrides heuristic)
+ *   4. Image attachment upgrade (forces tier that supports images)
+ */
+export const resolveRouting = async (
+	input: RoutingInput,
+	config: RoutingConfig,
+): Promise<RoutingDecision> => {
+	// 1. Heuristic decision
+	let decision = decideRouting(
+		input.context,
+		config.profileName,
+		config.profile,
+		input.previousDecision,
+		input.pinnedTier,
+		config.thinkingOverrides,
+		config.phaseBias,
+		config.rules,
+		input.isBudgetExceeded,
+	);
+
+	// 2. Context trigger upgrade — forces high tier when context window is large
+	if (
+		config.largeContextThreshold &&
+		decision.tier !== "high" &&
+		input.lastExtensionContext
+	) {
+		try {
+			const usage = await input.lastExtensionContext.getContextUsage();
+			if (usage?.tokens && usage.tokens > config.largeContextThreshold) {
+				decision = buildRoutingDecision(
+					config.profileName,
+					config.profile,
+					"high",
+					"planning",
+					`Context usage (${usage.tokens}) exceeds threshold (${config.largeContextThreshold}). Forced high tier.`,
+					config.thinkingOverrides,
+					false,
+				);
+				decision.isContextTriggered = true;
+			}
+		} catch (_e) {
+			// ignore — fall through with existing decision
+		}
+	}
+
+	// 3. Classifier override — only when not pinned, context-triggered, or rule-matched
+	if (
+		config.classifierModel &&
+		!input.pinnedTier &&
+		!decision.isContextTriggered &&
+		!decision.isRuleMatched
+	) {
+		const classifierResult = await runClassifier(
+			config.classifierModel,
+			input.modelRegistry,
+			input.context,
+			input.previousDecision?.phase,
+		);
+		if (classifierResult) {
+			decision = buildRoutingDecision(
+				config.profileName,
+				config.profile,
+				classifierResult.tier,
+				phaseForTier(classifierResult.tier),
+				`Classifier: ${classifierResult.reasoning}`,
+				config.thinkingOverrides,
+				true,
+			);
+			if (input.isBudgetExceeded && decision.tier === "high") {
+				decision.tier = "medium";
+				decision.phase = "implementation";
+				decision.reasoning = `Budget exceeded. Downgraded classifier decision to medium. (Original: ${decision.reasoning})`;
+				decision.isBudgetForced = true;
+			}
+		}
+	}
+
+	// 4. Image attachment upgrade — find lowest tier that supports images
+	if (hasImageAttachment(input.context)) {
+		const checkTierSupportsImage = (tier: RouterTier): boolean => {
+			const models = [
+				config.profile[tier].model,
+				...(config.profile[tier].fallbacks ?? []),
+			];
+			return models.some((ref) => {
+				try {
+					const { provider, modelId } = parseCanonicalModelRef(ref);
+					return (
+						input.modelRegistry.find(provider, modelId)?.input?.includes(
+							"image",
+						) ?? false
+					);
+				} catch {
+					return false;
+				}
+			});
+		};
+
+		if (!checkTierSupportsImage(decision.tier)) {
+			const tiersToTry: RouterTier[] =
+				decision.tier === "low"
+					? ["medium", "high"]
+					: decision.tier === "medium"
+						? ["high"]
+						: [];
+
+			for (const t of tiersToTry) {
+				if (checkTierSupportsImage(t)) {
+					decision = buildRoutingDecision(
+						config.profileName,
+						config.profile,
+						t,
+						phaseForTier(t),
+						`Forced ${t} tier because the originally routed ${decision.tier} tier does not support image attachments.`,
+						config.thinkingOverrides,
+						false,
+					);
+					break;
+				}
+			}
+		}
+	}
+
+	return decision;
 };

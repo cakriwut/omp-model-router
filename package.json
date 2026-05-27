@@ -72,5 +72,8 @@
     "extensions": [
       "index.ts"
     ]
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.14"
   }
 }

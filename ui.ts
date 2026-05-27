@@ -8,6 +8,7 @@ import type {
 	RouterThinkingByProfile,
 } from "./types";
 import type { Theme, ThemeColor } from "@oh-my-pi/pi-coding-agent";
+import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 
 // ─── Model name shortening ────────────────────────────────────────────────────
 
@@ -44,9 +45,8 @@ export const shortenModelId = (provider: string, modelId: string): string => {
 
 // ─── Thinking level → theme ───────────────────────────────────────────────────
 
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-
-const THINKING_COLOR: Record<ThinkingLevel, ThemeColor> = {
+const THINKING_COLOR: Partial<Record<ThinkingLevel, ThemeColor>> = {
+	inherit: "dim",
 	off: "thinkingOff",
 	minimal: "thinkingMinimal",
 	low: "thinkingLow",
@@ -55,7 +55,8 @@ const THINKING_COLOR: Record<ThinkingLevel, ThemeColor> = {
 	xhigh: "thinkingXhigh",
 };
 
-const THINKING_ICON: Record<ThinkingLevel, string> = {
+const THINKING_ICON: Partial<Record<ThinkingLevel, string>> = {
+	inherit: "○",
 	off: "○",
 	minimal: "◔",
 	low: "◑",
@@ -320,4 +321,133 @@ export const updateStatus = (
 		"router",
 		widgetLines.map((line) => theme.fg("dim", line)),
 	);
+};
+
+// ─── Usage report rendering ───────────────────────────────────────────────────
+
+export interface UsageReportInput {
+	theme: Theme;
+	selectedProfile: string;
+	profile: RouterConfig["profiles"][string];
+	debugHistory: RoutingDecision[];
+	lastDecision: RoutingDecision | undefined;
+	maxSessionBudget?: number;
+	modelRegistry: { find(provider: string, modelId: string): { cost?: unknown } | undefined };
+}
+
+/**
+ * Render the /router usage report — stacked tier distribution bar,
+ * per-model usage counts and tracked costs. Co-located with other
+ * format helpers so widget and usage display stay in sync.
+ */
+export const renderUsageReport = (opts: UsageReportInput): string => {
+	const {
+		theme,
+		selectedProfile,
+		profile,
+		debugHistory,
+		lastDecision,
+		maxSessionBudget,
+		modelRegistry,
+	} = opts;
+	const BAR_WIDTH = 48;
+
+	const tierColor = (tier: string, text: string): string => {
+		if (tier === "high") return theme.fg("success", text);
+		if (tier === "medium") return theme.fg("warning", text);
+		return theme.fg("dim", text);
+	};
+
+	// Gather per-model usage from debug history for this profile
+	const modelUsage: Record<string, { count: number; tier: string; cost: number }> = {};
+	const tierCounts = { high: 0, medium: 0, low: 0 };
+	for (const d of debugHistory) {
+		if (d.profile !== selectedProfile) continue;
+		const key = d.targetLabel;
+		if (!modelUsage[key]) modelUsage[key] = { count: 0, tier: d.tier, cost: 0 };
+		modelUsage[key].count++;
+		modelUsage[key].cost += d.usage?.cost ?? 0;
+		if (d.tier in tierCounts) tierCounts[d.tier as keyof typeof tierCounts]++;
+	}
+	const totalDecisions = tierCounts.high + tierCounts.medium + tierCounts.low;
+
+	// Header line: profile + cost
+	const sessionCost = Object.values(modelUsage).reduce((s, m) => s + m.cost, 0);
+	const costStr = maxSessionBudget
+		? `$${sessionCost.toFixed(4)} / $${maxSessionBudget.toFixed(2)}`
+		: `$${sessionCost.toFixed(4)}`;
+	const headerLeft = `Router: ${selectedProfile}`;
+	const headerPad = Math.max(1, BAR_WIDTH + 2 - headerLeft.length - costStr.length);
+	const headerLine = `${headerLeft}${" ".repeat(headerPad)}${costStr}`;
+
+	// Stacked distribution bar + label line
+	let barLine: string;
+	let labelLine: string;
+	if (totalDecisions > 0) {
+		const highWidth = Math.round((tierCounts.high / totalDecisions) * BAR_WIDTH);
+		const mediumWidth = Math.round((tierCounts.medium / totalDecisions) * BAR_WIDTH);
+		const lowWidth = Math.max(0, BAR_WIDTH - highWidth - mediumWidth);
+		barLine =
+			tierColor("high", "█".repeat(highWidth)) +
+			tierColor("medium", "█".repeat(mediumWidth)) +
+			tierColor("low", "█".repeat(lowWidth)) +
+			` ${totalDecisions} decisions`;
+
+		const highPct = Math.round((tierCounts.high / totalDecisions) * 100);
+		const medPct = Math.round((tierCounts.medium / totalDecisions) * 100);
+		const lowPct = Math.round((tierCounts.low / totalDecisions) * 100);
+		const highLabel = `high ${highPct}%`;
+		const medLabel = `medium ${medPct}%`;
+		const lowLabel = `low ${lowPct}%`;
+		const hlPad = Math.max(0, Math.floor((highWidth - highLabel.length) / 2));
+		const hlEnd = Math.max(0, highWidth - hlPad - highLabel.length);
+		const mlPad = Math.max(0, Math.floor((mediumWidth - medLabel.length) / 2));
+		const mlEnd = Math.max(0, mediumWidth - mlPad - medLabel.length);
+		const llPad = Math.max(0, Math.floor((lowWidth - lowLabel.length) / 2));
+		labelLine =
+			" ".repeat(hlPad) + tierColor("high", highLabel) +
+			" ".repeat(hlEnd) +
+			" ".repeat(mlPad) + tierColor("medium", medLabel) +
+			" ".repeat(mlEnd) +
+			" ".repeat(llPad) + tierColor("low", lowLabel);
+	} else {
+		barLine = theme.fg("dim", "░".repeat(BAR_WIDTH)) + " 0 decisions";
+		labelLine = theme.fg("dim", "no routing history");
+	}
+
+	// Per-tier model lines
+	const TIERS = ["high", "medium", "low"] as const;
+	const modelLines: string[] = [];
+	for (const tier of TIERS) {
+		const tierConfig = profile[tier];
+		try {
+			const slashIdx = tierConfig.model.indexOf("/");
+			const modelId = slashIdx >= 0 ? tierConfig.model.slice(slashIdx + 1) : tierConfig.model;
+			const provider = slashIdx >= 0 ? tierConfig.model.slice(0, slashIdx) : "";
+			const usageCount = modelUsage[tierConfig.model]?.count ?? 0;
+			const trackedCost = modelUsage[tierConfig.model]?.cost ?? 0;
+			const registeredModel = provider ? modelRegistry.find(provider, modelId) : undefined;
+			const tierCostStr = registeredModel?.cost ? `$${trackedCost.toFixed(4)}` : "";
+			modelLines.push(
+				`  ${tierColor(tier, tier.toUpperCase().padEnd(8))}${modelId.padEnd(38)}${`${usageCount}x`.padStart(4)}   ${tierCostStr}`,
+			);
+			if (tierConfig.fallbacks?.length) {
+				for (const fb of tierConfig.fallbacks) {
+					const fbSlash = fb.indexOf("/");
+					const fbId = fbSlash >= 0 ? fb.slice(fbSlash + 1) : fb;
+					const fbUsage = modelUsage[fb]?.count ?? 0;
+					modelLines.push(`  ${" ".repeat(8)}└ ${fbId.padEnd(36)}${`${fbUsage}x`.padStart(4)}`);
+				}
+			}
+		} catch { /* ignore bad model ref */ }
+	}
+
+	const lines = [headerLine, barLine, labelLine, "", ...modelLines];
+	if (lastDecision) {
+		lines.push(
+			"",
+			`Last: ${tierColor(lastDecision.tier, lastDecision.tier)} → ${lastDecision.targetProvider}/${lastDecision.targetModelId} (${lastDecision.thinking})`,
+		);
+	}
+	return lines.join("\n");
 };
