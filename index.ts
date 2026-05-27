@@ -4,6 +4,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent";
 import {
 	loadRouterConfig,
+	patchConfigFile,
 	profileNames,
 	ROUTER_TIERS,
 	resolveProfileName,
@@ -32,6 +33,7 @@ const routerExtension = (pi: ExtensionAPI) => {
 
 	const actions = {
 		setModelInternally,
+		persistState: () => state.persist(),
 		updateStatus: (ctx: ExtensionContext) =>
 			updateStatus(
 				ctx,
@@ -65,15 +67,15 @@ const routerExtension = (pi: ExtensionAPI) => {
 			}
 		},
 		ensureValidActiveRouterProfile: async (ctx: ExtensionContext) => {
+			// Only act if the framework already has a router model active
 			if (ctx.model?.provider !== "router") {
 				return;
 			}
-			if (state.currentConfig.profiles[ctx.model.id]) {
-				state.selectedProfile = ctx.model.id;
-				state.routerEnabled = true;
+			// If the config-selected profile still exists, nothing to do
+			if (state.currentConfig.profiles[state.selectedProfile]) {
 				return;
 			}
-
+			// The selected profile was removed from config — fall back
 			const fallbackProfile = resolveProfileName(
 				state.currentConfig,
 				state.selectedProfile,
@@ -82,7 +84,7 @@ const routerExtension = (pi: ExtensionAPI) => {
 			state.selectedProfile = fallbackProfile;
 			if (!routerModel) {
 				ctx.ui.notify(
-					`Router profile "${ctx.model.id}" is no longer configured.`,
+					`Router profile "${state.selectedProfile}" is no longer configured.`,
 					"warning",
 				);
 				return;
@@ -90,7 +92,7 @@ const routerExtension = (pi: ExtensionAPI) => {
 
 			await setModelInternally(routerModel);
 			ctx.ui.notify(
-				`Router profile "${ctx.model.id}" is no longer configured. Switched to router/${fallbackProfile}.`,
+				`Router profile was removed from config. Switched to router/${fallbackProfile}.`,
 				"warning",
 			);
 		},
@@ -132,6 +134,7 @@ const routerExtension = (pi: ExtensionAPI) => {
 			}
 			state.selectedProfile = resolvedProfile;
 			state.routerEnabled = true;
+			patchConfigFile({ routerEnabled: true, defaultProfile: resolvedProfile });
 			state.persist();
 			actions.updateStatus(ctx);
 			return true;

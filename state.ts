@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type {
 	RouterConfig,
@@ -10,6 +13,19 @@ import type {
 } from "./types";
 import { FALLBACK_CONFIG, resolveProfileName } from "./config";
 import { MAX_DEBUG_HISTORY } from "./constants";
+
+// ─── Persistent state file path ────────────────────────────────────────────
+
+const STATE_FILE = () => {
+	const dir = join(getAgentDir(), "model-router");
+	return join(dir, "router-state.json");
+};
+
+const ensureStateDir = () => {
+	const dir = join(getAgentDir(), "model-router");
+	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+	return dir;
+};
 
 // ─── Type guard for deserialization ──────────────────────────────────────────
 
@@ -25,6 +41,30 @@ export const isRouterPersistedState = (
 		typeof v.selectedProfile === "string" &&
 		typeof v.timestamp === "number"
 	);
+};
+
+// ─── Persistent state file helpers ─────────────────────────────────────────
+
+const loadPersistentState = (): RouterPersistedState | null => {
+	try {
+		const file = STATE_FILE();
+		if (!existsSync(file)) return null;
+		const raw = readFileSync(file, "utf-8");
+		const data = JSON.parse(raw);
+		return isRouterPersistedState(data) ? data : null;
+	} catch {
+		return null;
+	}
+};
+
+const savePersistentState = (state: RouterPersistedState): void => {
+	try {
+		ensureStateDir();
+		const file = STATE_FILE();
+		writeFileSync(file, JSON.stringify(state, null, 2), "utf-8");
+	} catch {
+		// Silently fail - state will retry on next persist
+	}
 };
 
 // ─── RouterState class ────────────────────────────────────────────────────────
@@ -109,6 +149,11 @@ export class RouterState {
 			})),
 		});
 		if (snapshot === this.lastPersistedSnapshot) return;
+
+		// Save to persistent file (survives session restart)
+		savePersistentState(state);
+
+		// Also save to session for intra-session restoration
 		try {
 			this.pi.appendEntry("router-state", state);
 		} catch {
@@ -125,11 +170,14 @@ export class RouterState {
 		this.currentModelRegistry = ctx.modelRegistry;
 		this.currentCwd = ctx.cwd;
 
-		this.routerEnabled = ctx.model?.provider === "router";
+		// ─── Source of truth for enabled/profile is the config file ─────
+		this.routerEnabled = this.currentConfig.routerEnabled ?? false;
 		this.selectedProfile = resolveProfileName(
 			this.currentConfig,
-			ctx.model?.provider === "router" ? ctx.model.id : this.selectedProfile,
+			this.currentConfig.defaultProfile,
 		);
+
+		// ─── Reset session-scoped state ─────────────────────────────────
 		this.pinnedTierByProfile = {};
 		this.thinkingByProfile = {};
 		this.widgetEnabled = false;
@@ -141,21 +189,26 @@ export class RouterState {
 				: this.lastNonRouterModel;
 		this.lastDecision = undefined;
 
+		// ─── Restore session-level preferences from saved state ─────────
+		// (pins, thinking overrides, widget, debug history, cost, etc.)
+		const persistedState = loadPersistentState();
+
 		const entries = ctx.sessionManager.getBranch() as CustomSessionEntry[];
-		const savedState = entries
+		const sessionState = entries
 			.filter(
 				(entry) =>
 					entry.type === "custom" && entry.customType === "router-state",
 			)
 			.map((entry) => entry.data)
-			.findLast((data) => isRouterPersistedState(data));
+			.reduce<RouterPersistedState | null>(
+				(acc, data) => (isRouterPersistedState(data) ? data : acc),
+				null,
+			);
+
+		const savedState = sessionState ?? persistedState;
 
 		if (isRouterPersistedState(savedState)) {
-			this.selectedProfile = resolveProfileName(
-				this.currentConfig,
-				savedState.selectedProfile,
-			);
-			this.routerEnabled = savedState.enabled;
+			// Do NOT restore enabled/selectedProfile from state — config is authoritative
 			this.pinnedTierByProfile = savedState.pinByProfile
 				? { ...savedState.pinByProfile }
 				: {};

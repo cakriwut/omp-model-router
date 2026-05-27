@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type {
@@ -97,6 +97,7 @@ export const mergeConfig = (
 		};
 	}
 	return {
+		routerEnabled: override.routerEnabled ?? base.routerEnabled,
 		defaultProfile: override.defaultProfile ?? base.defaultProfile,
 		debug: override.debug ?? base.debug,
 		classifierModel: override.classifierModel ?? base.classifierModel,
@@ -315,6 +316,7 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 
 	return {
 		config: {
+			routerEnabled: typeof raw.routerEnabled === "boolean" ? raw.routerEnabled : undefined,
 			defaultProfile,
 			debug: typeof raw.debug === "boolean" ? raw.debug : false,
 			classifierModel,
@@ -365,4 +367,31 @@ export const resolveProfileName = (
 		return config.defaultProfile;
 	}
 	return profileNames(config)[0] ?? "auto";
+};
+
+/**
+ * Read-modify-write the global config file (~/.omp/agent/model-router.json).
+ * Merges `updates` into the existing JSON object and writes back.
+ * Returns true on success; logs nothing on failure (caller decides).
+ */
+export const patchConfigFile = (
+	updates: Record<string, unknown>,
+): boolean => {
+	const globalPath = join(getAgentDir(), "model-router.json");
+	let raw: Record<string, unknown>;
+	try {
+		raw = JSON.parse(readFileSync(globalPath, "utf-8"));
+	} catch {
+		// File doesn't exist or isn't valid JSON — start fresh
+		raw = {};
+	}
+	Object.assign(raw, updates);
+	try {
+		const dir = dirname(globalPath);
+		if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+		writeFileSync(globalPath, JSON.stringify(raw, null, 2) + "\n", "utf-8");
+		return true;
+	} catch {
+		return false;
+	}
 };

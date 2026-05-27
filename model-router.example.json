@@ -1,4 +1,5 @@
 {
+  "routerEnabled": true,
   "defaultProfile": "auto",
   "debug": false,
   "phaseBias": 0.5,

@@ -69,6 +69,8 @@ export interface RouterProfile {
 }
 
 export interface RouterConfig {
+	/** Whether the router is active. Written by /router <profile> and /router disable. */
+	routerEnabled?: boolean;
 	defaultProfile?: string;
 	debug?: boolean;
 	classifierModel?: string;

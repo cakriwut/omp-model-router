@@ -8,6 +8,7 @@ import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { RouterTier } from "./types";
 import type { RouterState } from "./state";
 import {
+	patchConfigFile,
 	profileNames,
 	resolveProfileName,
 	THINKING_LEVELS,
@@ -35,6 +36,7 @@ const resolveConfigValue = (raw: Record<string, unknown>, key: string): unknown 
 		return profiles?.[profile]?.[tier]?.[field];
 	}
 	switch (key) {
+		case "routerEnabled":       return raw.routerEnabled;
 		case "phaseBias":           return raw.phaseBias;
 		case "budget":              return raw.maxSessionBudget;
 		case "contextThreshold":    return raw.largeContextThreshold;
@@ -67,6 +69,11 @@ const applyConfigUpdate = (
 	}
 
 	switch (key) {
+		case "routerEnabled": {
+			if (value !== "on" && value !== "off") return 'routerEnabled must be "on" or "off"';
+			raw.routerEnabled = value === "on";
+			return null;
+		}
 		case "phaseBias": {
 			const n = parseFloat(value);
 			if (isNaN(n) || n < 0 || n > 1) return "phaseBias must be a float between 0 and 1";
@@ -379,6 +386,7 @@ export const registerCommands = (
 			return;
 		}
 		state.routerEnabled = false;
+		patchConfigFile({ routerEnabled: false });
 		actions.persistState();
 		actions.updateStatus(ctx);
 		ctx.ui.notify(
@@ -479,6 +487,7 @@ export const registerCommands = (
 
 
 	const SET_KEYS = [
+		"routerEnabled",
 		"phaseBias",
 		"budget",
 		"contextThreshold",
@@ -494,6 +503,7 @@ export const registerCommands = (
 				"Usage: /router set <key> [value]",
 				"",
 				"Global keys:",
+				"  routerEnabled <on|off>         Enable/disable the router across sessions",
 				"  phaseBias <float>              Phase bias weight (0-1)",
 				"  budget <float>                 Max session budget ($)",
 				"  contextThreshold <int>         Large context threshold (tokens)",
@@ -734,7 +744,7 @@ export const registerCommands = (
 					const setPrefix = subArgs[0] ?? "";
 					if (!hasTrailingSpace || subArgs.length <= 1) {
 						const SET_KEY_LIST = [
-							"phaseBias", "budget", "contextThreshold", "debug",
+							"routerEnabled", "phaseBias", "budget", "contextThreshold", "debug",
 							"defaultProfile", "compression", "compression.keepLastN",
 						];
 						const items = SET_KEY_LIST
@@ -744,7 +754,7 @@ export const registerCommands = (
 					}
 					const setKey = subArgs[0];
 					const valPrefix = subArgs[1] ?? "";
-					if (setKey === "debug" || setKey === "compression") {
+					if (setKey === "routerEnabled" || setKey === "debug" || setKey === "compression") {
 						const items = ["on", "off"].filter((v) => v.startsWith(valPrefix))
 							.map((v) => ({ value: `set ${setKey} ${v}`, label: v }));
 						return items.length > 0 ? items : null;
