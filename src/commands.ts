@@ -586,7 +586,8 @@ export const registerCommands = (
 		// If we already know about an update from the session check, use that
 		if (state.updateAvailable) {
 			const { current, latest } = state.updateAvailable;
-			const confirmed = await ctx.ui.dialog.confirm(
+			const confirmed = await ctx.ui.confirm(
+				"Model Router Update",
 				`Update Model Router v${current} → v${latest}?`,
 			);
 			if (!confirmed) {
@@ -627,7 +628,8 @@ export const registerCommands = (
 		const info = await checkForUpdate();
 		if (info) {
 			state.updateAvailable = { current: info.current, latest: info.latest };
-			const confirmed = await ctx.ui.dialog.confirm(
+			const confirmed = await ctx.ui.confirm(
+				"Model Router Update",
 				`Update Model Router v${info.current} → v${info.latest}?`,
 			);
 			if (!confirmed) {
