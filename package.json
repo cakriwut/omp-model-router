@@ -15,7 +15,11 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "deploy:dev": "./scripts/deploy-dev.sh",
+    "release:patch": "./scripts/release.sh patch",
+    "release:minor": "./scripts/release.sh minor",
+    "release:major": "./scripts/release.sh major"
   },
   "keywords": [
     "oh-my-pi",

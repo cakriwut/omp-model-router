@@ -2,7 +2,8 @@
 
 Cost-optimized model routing for [Oh-My-Pi](https://github.com/can1357/oh-my-pi) — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Optionally compresses conversation history using [TOON format](https://github.com/toon-format/toon) to reduce input tokens.
 
-> **Note**: This is a TypeScript source package for Oh-My-Pi extensions. Users need the OMP environment with `@oh-my-pi/pi-coding-agent` installed.
+
+> **Note**: This is a TypeScript source package for Oh-My-Pi extensions. Users need the OMP environment with `@oh-my-pi/pi-coding-agent` installed. For extension development patterns, see [Extension Authoring](https://omp.sh/docs/extension-authoring).
 
 ## Features
 
@@ -23,7 +24,7 @@ To install this extension in your OMP environment, use this prompt:
 ```
 Install the omp-model-router extension from npm package @cakriwut/omp-model-router.
 Create the extension at ~/.omp/agent/extensions/model-router/ with:
-1. package.json with dependency "@cakriwut/omp-model-router": "latest"
+1. package.json with dependency "@cakriwut/omp-model-router": "^0.4.0"
 2. index.ts that re-exports: export { default } from "@cakriwut/omp-model-router";
 3. Run npm install in that directory
 ```
@@ -42,7 +43,7 @@ cat > package.json << 'EOF'
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "@cakriwut/omp-model-router": "latest"
+    "@cakriwut/omp-model-router": "^0.4.0"
   }
 }
 EOF
@@ -53,6 +54,121 @@ npm install
 # Create entry point
 echo 'export { default } from "@cakriwut/omp-model-router";' > index.ts
 ```
+
+## Local Development
+
+To run your development build of the router in OMP (dogfooding):
+
+### Automated Deployment
+
+```bash
+cd ~/workspace/omp-model-router
+bun run deploy:dev
+```
+
+This script creates the extension wrapper at `~/.omp/agent/extensions/model-router/` and symlinks it to your workspace so edits take effect immediately after `/reload`.
+
+### Manual Deployment
+
+```bash
+# Create extension wrapper directory
+mkdir -p ~/.omp/agent/extensions/model-router
+cd ~/.omp/agent/extensions/model-router
+
+# Create package.json pointing to workspace
+cat > package.json << 'EOF'
+{
+  "name": "model-router-extension",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@cakriwut/omp-model-router": "file:../../../../workspace/omp-model-router"
+  }
+}
+EOF
+
+# Create symlink to workspace source
+mkdir -p node_modules/@cakriwut
+rm -rf node_modules/@cakriwut/omp-model-router
+ln -s ~/workspace/omp-model-router node_modules/@cakriwut/omp-model-router
+
+# Create entry point
+echo 'export { default } from "@cakriwut/omp-model-router";' > index.ts
+```
+
+### Verify Deployment
+
+After deploying, reload the extension and verify the running version:
+
+```bash
+# In OMP:
+/reload
+/router
+# → Should show "Model Router (v0.4.0) [auto]"
+
+# From shell:
+cat ~/.omp/agent/extensions/model-router/node_modules/@cakriwut/omp-model-router/package.json | grep version
+# → Should match workspace version
+```
+
+### Development Workflow
+
+1. Edit source files in `~/workspace/omp-model-router/src/`
+2. Run tests: `bun test`
+3. Reload OMP: `/reload`
+4. Test changes: `/router usage`, `/router profile hybrid`, etc.
+
+**Note**: OMP loads TypeScript source directly, so no build step is required. Changes take effect on `/reload`.
+
+## Release Process
+
+### Automated Release
+
+```bash
+# Run tests, bump version, tag, publish, and create GitHub release
+bun run release:patch   # 0.4.0 → 0.4.1
+bun run release:minor   # 0.4.0 → 0.5.0
+bun run release:major   # 0.4.0 → 1.0.0
+```
+
+The release script (`scripts/release.sh`):
+1. Runs test suite (gates on failures)
+2. Bumps version in `package.json`
+3. Commits and tags (`git tag v<version>`)
+4. Publishes to npm
+5. Pushes to git with tags
+6. Creates GitHub release (requires `gh` CLI)
+
+### Manual Release
+
+```bash
+# 1. Run tests
+bun test
+
+# 2. Bump version
+npm version patch  # or minor/major
+
+# 3. Push tags
+git push && git push --tags
+
+# 4. Publish to npm
+npm publish
+
+# 5. Create GitHub release
+gh release create v0.4.1 --generate-notes
+```
+
+### Post-Release
+
+After releasing, production users can upgrade:
+
+```bash
+cd ~/.omp/agent/extensions/model-router
+# Update package.json dependency to: "@cakriwut/omp-model-router": "^0.4.1"
+npm install
+# Then /reload in OMP
+```
+
 
 After installation, run `/reload` in your OMP session to activate the extension.
 

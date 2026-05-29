@@ -67,15 +67,19 @@ Config file: `~/.omp/agent/model-router.json`
 ```bash
 bun install
 bun test
+bun run deploy:dev  # Deploy to ~/.omp/agent/extensions/model-router for local testing
 ```
+
+After deploying, run `/reload` in OMP to pick up changes.
+
 
 ## Publish
 
 ```bash
-# Version bump → git tag → npm publish
-npm version patch  # or minor/major
-git push --tags
-npm publish
+# Automated release (test → bump → tag → publish → GitHub release)
+bun run release:patch  # 0.4.0 → 0.4.1
+bun run release:minor  # 0.4.0 → 0.5.0
+bun run release:major  # 0.4.0 → 1.0.0
 ```
 
 ## License
