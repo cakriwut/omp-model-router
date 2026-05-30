@@ -1,12 +1,18 @@
 {
+  "type": "module",
   "name": "@cakriwut/omp-model-router",
   "version": "0.4.1",
   "description": "Cost-optimized model routing for Oh-My-Pi — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Uses TOON compression for conversation history optimization.",
-  "type": "module",
+  "author": "Riwut Libinuko <cakriwut@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cakriwut/omp-model-router.git"
+  },
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "files": [
-    "src/**/*.ts",
+    "src",
     "model-router.example.json",
     "README.md",
     "LICENSE"
@@ -29,45 +35,25 @@
     "llm",
     "cost-optimization",
     "routing",
-    "claude",
-    "bedrock",
     "extension",
     "toon-compression"
   ],
-  "author": "Riwut Libinuko <cakriwut@gmail.com>",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/cakriwut/omp-model-router.git"
-  },
   "bugs": {
     "url": "https://github.com/cakriwut/omp-model-router/issues"
   },
   "homepage": "https://github.com/cakriwut/omp-model-router#readme",
   "peerDependencies": {
-    "@oh-my-pi/pi-coding-agent": ">=0.1.0",
-    "@oh-my-pi/pi-agent-core": ">=0.1.0",
-    "@oh-my-pi/pi-ai": ">=0.1.0"
-  },
-  "peerDependenciesMeta": {
-    "@oh-my-pi/pi-coding-agent": {
-      "optional": false
-    },
-    "@oh-my-pi/pi-agent-core": {
-      "optional": false
-    },
-    "@oh-my-pi/pi-ai": {
-      "optional": false
-    }
+    "@oh-my-pi/pi-coding-agent": "^13",
+    "@oh-my-pi/pi-agent-core": "^13",
+    "@oh-my-pi/pi-ai": "^13"
   },
   "engines": {
-    "bun": ">=1.0.0"
+    "bun": ">=1.3.14"
   },
   "publishConfig": {
     "access": "public"
   },
   "omp": {
-    "repository": "https://github.com/can1357/oh-my-pi",
     "type": "extension",
     "extensions": [
       "src/index.ts"
