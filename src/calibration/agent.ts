@@ -4,8 +4,7 @@ import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { ClassifierPollResult } from "./types";
 import type { RouterPhase, RouterTier } from "../types";
 import { parseCanonicalModelRef, isRouterTier } from "../config";
-import { getLastUserText, getRecentConversationText } from "../routing";
-
+import { getLastUserText, getRecentUserText } from "../routing";
 // Try to import pi-subagents, but don't crash if unavailable
 let piSubagentsAvailable = false;
 let Agent: any = undefined;
@@ -169,6 +168,7 @@ async function spawnViaSubagent(
 	currentPhase: RouterPhase | undefined,
 ): Promise<string | undefined> {
 	try {
+		console.log(`[model-router] Spawning classifier with model: ${classifierModelRef}`);
 		const prompt = buildClassifierPrompt(context, currentPhase);
 
 		const result = await Agent({
@@ -213,8 +213,8 @@ async function spawnViaStreamSimple(
 		};
 
 		const agentId = `classifier-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+		console.log(`[model-router] Spawning classifier (streamSimple) with model: ${classifierModelRef}`);
 
-		// Detached promise: don't await, store for polling
 		const promise = runClassifierStream(model, classifierContext, apiKey, model.headers);
 
 		pendingClassifiers.set(agentId, {
@@ -237,8 +237,12 @@ async function runClassifierStream(
 	apiKey: string,
 	headers?: Record<string, string>,
 ): Promise<{ tier: RouterTier; reasoning: string } | undefined> {
+	const INNER_TIMEOUT_MS = 30_000;
+	const ac = new AbortController();
+	const timeout = setTimeout(() => ac.abort(), INNER_TIMEOUT_MS);
+
 	try {
-		const stream = streamSimple(model, context, { apiKey, headers });
+		const stream = streamSimple(model, context, { apiKey, headers, signal: ac.signal });
 		let fullText = "";
 
 		for await (const event of stream) {
@@ -253,6 +257,8 @@ async function runClassifierStream(
 		return parseClassifierOutput(fullText);
 	} catch {
 		return undefined;
+	} finally {
+		clearTimeout(timeout);
 	}
 }
 
@@ -261,8 +267,7 @@ function buildClassifierPrompt(
 	currentPhase?: RouterPhase,
 ): string {
 	const promptText = getLastUserText(context);
-	const historyText = getRecentConversationText(context, 4);
-
+	const historyText = getRecentUserText(context, 4);
 	return `You are a model router classifier. Your job is to categorize the user's latest request into one of three tiers: "high", "medium", or "low".
 
 Tiers:

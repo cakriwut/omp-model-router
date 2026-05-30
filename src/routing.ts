@@ -52,6 +52,23 @@ export const getRecentConversationText = (
 		.toLowerCase();
 };
 
+/**
+ * Get recent user prompts only (for classifier context)
+ * Excludes assistant responses and tool results to reduce noise
+ */
+export const getRecentUserText = (
+	context: Context,
+	limit = 4,
+): string => {
+	return context.messages
+		.filter((message) => message.role === "user")
+		.slice(-limit)
+		.map((message) => extractTextFromContent(message.content).trim())
+		.filter(Boolean)
+		.join("\n")
+		.toLowerCase();
+};
+
 export const countToolResults = (context: Context): number => {
 	return context.messages.filter((message) => message.role === "toolResult")
 		.length;
