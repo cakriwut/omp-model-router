@@ -261,6 +261,7 @@ export function resolveCompressionConfig(
 		enabled: override.enabled ?? base.enabled,
 		keepLastN: override.keepLastN ?? base.keepLastN ?? 4,
 		excludeModels: override.excludeModels ?? base.excludeModels,
+		progressive: override.progressive ?? base.progressive,
 	};
 }
 

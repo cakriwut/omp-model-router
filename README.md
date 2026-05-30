@@ -3,352 +3,203 @@
 Cost-optimized model routing for [Oh-My-Pi](https://github.com/can1357/oh-my-pi) — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Optionally compresses conversation history using [TOON format](https://github.com/toon-format/toon) to reduce input tokens.
 
 
-> **Note**: This is a TypeScript source package for Oh-My-Pi extensions. Users need the OMP environment with `@oh-my-pi/pi-coding-agent` installed. For extension development patterns, see [Extension Authoring](https://omp.sh/docs/extension-authoring).
+> **Note**: This is a TypeScript source package for Oh-My-Pi extensions. Users need the OMP environment with `@oh-my-pi/pi-coding-agent` installed.
+
+---
 
 ## Features
 
-- **Intelligent Routing**: Classifies prompts into High/Medium/Low tiers based on complexity
-- **Cost Optimization**: Automatically selects cheaper models for simple tasks  
-- **History Compression (TOON)**: Compresses old conversation history into compact TOON format before sending to the LLM, saving 30–50% of input tokens on long conversations
-- **Budget Tracking**: Enforces session budgets and downgrades tiers when exceeded
-- **Configurable Profiles**: Auto, Deep, Cheap, Hybrid, OSS profiles with different cost/quality tradeoffs
-- **Fallback Chains**: Graceful degradation when primary models are unavailable
-- **Rule-Based Routing**: Custom rules for specific keywords (e.g., "deploy" → High tier)
+### 🎯 Intelligent Routing
+- **Tier-based selection**: Automatically classifies prompts as High/Medium/Low complexity
+- **Configurable profiles**: Auto, Deep, Cheap, Hybrid, OSS (bring your own!)
+- **Manual overrides**: Pin a tier when you need control
+- **Heuristic refinement**: Detects clarifications, code edits, planning, and explicit speed requests
+- **Rule-based routing**: Match keywords to force specific tiers (e.g., "production" → high tier)
+
+### 💰 Cost Optimization
+- **Session budget tracking**: Enforce max spend per session
+- **Automatic downgrade**: Exceeds budget? Router demotes to cheaper tiers
+- **Real-time usage display**: See per-model usage, cost breakdowns, and compression savings via `/router usage`
+
+### 📦 History Compression (TOON)
+- **Progressive mode** (default): Compresses only when triggers fire:
+  - **Context size trigger**: Fires when context >= 80% of model's window
+  - **Cache expiry trigger**: Fires 5 minutes after last turn (prevents prompt cache expiry)
+- **Smart TOON history exclusion**: When sessions are reconstructed from JSONL with TOON-compressed history, the compression trigger excludes the already-compressed history from token estimation, preventing double-compression on the first message
+- **Frozen checkpoints**: Freeze compressed blocks at turn 5 to reuse across turns (reduces compression overhead)
+- **Model exclusions**: Skip compression for models that don't benefit (e.g., Kimi, Nova)
+- **Token savings**: 30–50% reduction in input tokens for long sessions
+- **Debug logging**: When `debug: true`, compression triggers are persisted to session JSONL for auditability
+### 🔍 Observability
+- **Status widget**: Live display of current profile, tier, model, and compression state
+- **Usage reports**: Detailed per-model usage, cost, TOON compression stats, and cache metrics
+- **Debug mode**: Session-persisted logs for compression triggers (reviewable via JSONL)
+- **Cost tracking**: Accumulated session cost vs budget with visual progress bar
+
+---
 
 ## Installation
 
-### For Coding Agents (Oh-My-Pi)
-
-To install this extension in your OMP environment, use this prompt:
-
-```
-Install the omp-model-router extension from npm package @cakriwut/omp-model-router.
-Create the extension at ~/.omp/agent/extensions/model-router/ with:
-1. package.json with dependency "@cakriwut/omp-model-router": "^0.4.0"
-2. index.ts that re-exports: export { default } from "@cakriwut/omp-model-router";
-3. Run npm install in that directory
-```
-
-### Manual Installation
-
 ```bash
-# Create extension directory
-mkdir -p ~/.omp/agent/extensions/model-router
-cd ~/.omp/agent/extensions/model-router
-
-# Create package.json
-cat > package.json << 'EOF'
-{
-  "name": "model-router-extension",
-  "version": "1.0.0",
-  "type": "module",
-  "dependencies": {
-    "@cakriwut/omp-model-router": "^0.4.0"
-  }
-}
-EOF
-
-# Install dependencies
-npm install
-
-# Create entry point
-echo 'export { default } from "@cakriwut/omp-model-router";' > index.ts
-```
-
-## Local Development
-
-To run your development build of the router in OMP (dogfooding):
-
-### Automated Deployment
-
-```bash
-cd ~/workspace/omp-model-router
+# From source (requires bun and OMP environment)
+git clone https://github.com/cakriwut/omp-model-router.git
+cd omp-model-router
+bun install
 bun run deploy:dev
 ```
 
-This script creates the extension wrapper at `~/.omp/agent/extensions/model-router/` and symlinks it to your workspace so edits take effect immediately after `/reload`.
-
-### Manual Deployment
-
-```bash
-# Create extension wrapper directory
-mkdir -p ~/.omp/agent/extensions/model-router
-cd ~/.omp/agent/extensions/model-router
-
-# Create package.json pointing to workspace
-cat > package.json << 'EOF'
-{
-  "name": "model-router-extension",
-  "version": "1.0.0",
-  "type": "module",
-  "dependencies": {
-    "@cakriwut/omp-model-router": "file:../../../../workspace/omp-model-router"
-  }
-}
-EOF
-
-# Create symlink to workspace source
-mkdir -p node_modules/@cakriwut
-rm -rf node_modules/@cakriwut/omp-model-router
-ln -s ~/workspace/omp-model-router node_modules/@cakriwut/omp-model-router
-
-# Create entry point
-echo 'export { default } from "@cakriwut/omp-model-router";' > index.ts
+Then in OMP:
 ```
-
-### Verify Deployment
-
-After deploying, reload the extension and verify the running version:
-
-```bash
-# In OMP:
 /reload
-/router
-# → Should show "Model Router (v0.4.0) [auto]"
-
-# From shell:
-cat ~/.omp/agent/extensions/model-router/node_modules/@cakriwut/omp-model-router/package.json | grep version
-# → Should match workspace version
+/router help
 ```
 
-### Development Workflow
-
-1. Edit source files in `~/workspace/omp-model-router/src/`
-2. Run tests: `bun test`
-3. Reload OMP: `/reload`
-4. Test changes: `/router usage`, `/router profile hybrid`, etc.
-
-**Note**: OMP loads TypeScript source directly, so no build step is required. Changes take effect on `/reload`.
-
-## Release Process
-
-### Automated Release
-
-```bash
-# Run tests, bump version, tag, publish, and create GitHub release
-bun run release:patch   # 0.4.0 → 0.4.1
-bun run release:minor   # 0.4.0 → 0.5.0
-bun run release:major   # 0.4.0 → 1.0.0
-```
-
-The release script (`scripts/release.sh`):
-1. Runs test suite (gates on failures)
-2. Bumps version in `package.json`
-3. Commits and tags (`git tag v<version>`)
-4. Publishes to npm
-5. Pushes to git with tags
-6. Creates GitHub release (requires `gh` CLI)
-
-### Manual Release
-
-```bash
-# 1. Run tests
-bun test
-
-# 2. Bump version
-npm version patch  # or minor/major
-
-# 3. Push tags
-git push && git push --tags
-
-# 4. Publish to npm
-npm publish
-
-# 5. Create GitHub release
-gh release create v0.4.1 --generate-notes
-```
-
-### Post-Release
-
-After releasing, production users can upgrade:
-
-```bash
-cd ~/.omp/agent/extensions/model-router
-# Update package.json dependency to: "@cakriwut/omp-model-router": "^0.4.1"
-npm install
-# Then /reload in OMP
-```
-
-
-After installation, run `/reload` in your OMP session to activate the extension.
+---
 
 ## Configuration
 
-Create `~/.omp/agent/model-router.json`:
+### Config File
+
+Create or edit `~/.omp/agent/model-router.json`:
 
 ```json
 {
+  "routerEnabled": true,
   "defaultProfile": "auto",
   "debug": false,
-  "maxSessionBudget": 5.0,
-  "historyCompression": {
-    "enabled": true,
-    "keepLastN": 4,
-    "excludeModels": ["kimi", "nova"]
-  "rules": [
-    {
-      "matches": ["deploy", "production", "release", "migration"],
-      "tier": "high",
-      "reason": "Safety-critical operations require deep reasoning"
-    },
-    {
-      "matches": ["changelog", "summarize", "tl;dr", "recap"],
-      "tier": "low"
-    }
-  ],
-  "profiles": {
-    "auto": {
-      "high": {
-        "model": "amazon-bedrock/global.anthropic.claude-opus-4-7",
-        "thinking": "high",
-        "fallbacks": ["amazon-bedrock/global.anthropic.claude-opus-4-6-v1"]
-      },
-      "medium": {
-        "model": "amazon-bedrock/moonshotai.kimi-k2.5",
-        "thinking": "medium",
-        "fallbacks": ["amazon-bedrock/global.anthropic.claude-sonnet-4-6"]
-      },
-      "low": {
-        "model": "amazon-bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "thinking": "low",
-        "fallbacks": ["amazon-bedrock/amazon.nova-micro-v1:0"]
-      }
-    }
-  }
-}
-```
-
-
-## History Compression (TOON)
-
-When enabled, the router compresses older conversation messages into [TOON format](https://toonformat.dev) before sending the request to the LLM. This eliminates repeated JSON keys (`"role"`, `"content"`, etc.) across hundreds of messages, saving 30-60% of input tokens while maintaining full conversation context.
-
-### Three Compression Strategies
-
-| Strategy | When It Compresses | Cache Behavior | Best For | Savings |
-|----------|-------------------|----------------|----------|---------|
-| **Progressive** ⭐ (default) | Only at triggers: context >= 80% OR >5min gap | HIT between checkpoints | Long sessions (15+ turns) | **94%** |
-| **Static** | Once at turn N, never update | HIT forever | Predictable compression point | **92%** |
-| **Dynamic** | Every turn | MISS every turn | Context-constrained models | **57%** |
-
-### Progressive TOON (Recommended)
-
-**Intelligent checkpointing** — compresses only when beneficial:
-
-```json
-{
+  "maxSessionBudget": 2.0,
   "historyCompression": {
     "enabled": true,
     "keepLastN": 4,
     "progressive": {
       "enabled": true,
-      "contextThreshold": 0.8,    // Compress at 80% of context window
-      "timeThreshold": 300         // Compress after 5min gap (cache TTL)
+      "contextThreshold": 0.8,
+      "timeThreshold": 300
     },
     "excludeModels": ["kimi", "nova"]
+  },
+  "rules": [
+    {
+      "matches": ["deploy", "production", "release"],
+      "tier": "high",
+      "reason": "Safety check for production tasks"
+    },
+    {
+      "matches": "changelog",
+      "tier": "low"
+    }
+  ],
+  "profiles": {
+    "auto": {
+      "high": { "model": "anthropic/claude-sonnet-4-5", "thinking": "high" },
+      "medium": { "model": "anthropic/claude-sonnet-4-5", "thinking": "medium" },
+      "low": { "model": "anthropic/claude-haiku-4-5", "thinking": "low" }
+    }
   }
 }
 ```
 
-**How it works:**
+### Key Options
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `routerEnabled` | Enable/disable router | `true` |
+| `defaultProfile` | Active profile on start | `"auto"` |
+| `debug` | Enable debug logging to session JSONL | `false` |
+| `maxSessionBudget` | Max $ spend per session (triggers downgrade when exceeded) | `5.0` |
+| `historyCompression.enabled` | Enable TOON compression | `true` |
+| `historyCompression.progressive.enabled` | Use progressive mode (trigger-based) | `true` |
+| `historyCompression.progressive.contextThreshold` | Context size trigger (0.0-1.0) | `0.8` (80%) |
+| `historyCompression.progressive.timeThreshold` | Cache expiry trigger (seconds) | `300` (5 min) |
+| `rules` | Array of keyword → tier mappings | `[]` |
+
+---
+
+## Usage Commands
+
+```bash
+/router                     # Show current router status
+/router usage               # Show model usage, cost, and compression stats
+/router profile hybrid      # Switch to hybrid profile  
+/router pin high            # Force high tier (all prompts use high until unpinned)
+/router pin off             # Remove tier pin
+/router set thinking high min   # Override thinking level for high tier
+/router set compression on  # Enable TOON compression
+/router set compression off # Disable TOON compression
+/router set budget 3.0      # Set session budget to $3.00
+/router reset               # Reset to config defaults (clears pins, thinking overrides)
+/router widget on           # Show status widget
+/router help                # Show all subcommands
+```
+
+### Example: `/router usage` Output
 
 ```
-Turn 1-35: No compression (history < 160K tokens)
-  ├─ Cache works perfectly
-  └─ Cost: $0.028/turn
+Router: auto                       $0.1234 / $2.00
+████████████████████████████████████████████████ 42 decisions
+  high 15%           medium 60%          low 25%
 
-Turn 36: TRIGGER (context >= 160K)
-  ├─ Compress turn[1-35] → TOON[1-35] (~60K)
-  ├─ Create checkpoint
-  └─ Cache MISS → $0.065 (one-time)
+  HIGH    claude-sonnet-4-5                       6x   $0.0800
+  MEDIUM  claude-sonnet-4-5                      25x   $0.0350
+  LOW     claude-haiku-4-5                       11x   $0.0084
 
-Turn 37-70: Reuse checkpoint
-  ├─ Frozen TOON[1-35] cached (90% discount)
-  ├─ Only recent turns pay full price
-  └─ Cost: $0.023/turn
+Savings ~15432 tokens from TOON compression
+Cache 📦8241 tokens read from cache
 
-Turn 71: TRIGGER (context >= 160K again)
-  ├─ Compress turn[1-70] → new checkpoint
-  └─ Cache MISS → $0.145 (one-time)
+TOON: 8 compressions, frozen at turn 5
+  Turn 12 → 145K to 98K (-47K)
+  Turn 15 → 165K to 112K (-53K)
+  ...
 
-Result: 94% savings vs no optimization
+Last: medium → anthropic/claude-sonnet-4-5 (thinking: medium)
 ```
 
-**Config options:**
+---
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `progressive.enabled` | boolean | `false` | Enable progressive checkpointing |
-| `progressive.contextThreshold` | number | `0.8` | Compress when context reaches this fraction of window (0.0-1.0) |
-| `progressive.timeThreshold` | number | `300` | Compress after this many seconds gap (cache TTL) |
+## How Progressive TOON Compression Works
 
-### Static TOON
+Progressive mode compresses **only when triggers fire**, avoiding unnecessary overhead.
 
-**Freeze compression at a specific turn:**
+### Trigger 1: Context Size
+Fires when `contextTokens >= 0.8 * modelContextWindow`
+
+**Example**: For a model with 200k context window, triggers at ~160k tokens.
+
+### Trigger 2: Cache Expiry
+Fires when time since last turn >= 300 seconds (5 minutes).
+
+**Purpose**: Anthropic's prompt cache expires after 5 minutes. Compressing before expiry keeps the compressed block cached, avoiding full recomputation.
+
+### Debug Logging
+
+When `debug: true`, compression triggers are persisted to session JSONL:
 
 ```json
 {
-  "historyCompression": {
-    "enabled": true,
-    "keepLastN": 4,
-    "freezeAfter": 10,  // Freeze TOON at turn 10, never update
-    "excludeModels": ["kimi", "nova"]
+  "type": "custom",
+  "customType": "router:compression-trigger",
+  "data": {
+    "reason": "cache-expiry",
+    "contextTokens": 165432,
+    "threshold": 160000,
+    "timeSinceLastTurn": 310,
+    "timeThreshold": 300,
+    "turnNumber": 15,
+    "messageCount": 30
   }
 }
 ```
 
-**Best for:** Sessions where you want predictable compression at a known turn count (e.g., always compress after 10 turns).
+**To review logs**:
 
-### Dynamic TOON (Original Behavior)
-
-**Compress every turn** (default if neither `progressive` nor `freezeAfter` is set):
-
-```json
-{
-  "historyCompression": {
-    "enabled": true,
-    "keepLastN": 4
-  }
-}
+```bash
+jq 'select(.customType == "router:compression-trigger")' \
+  ~/.omp/agent/sessions/<workspace>/<session-id>/0-*.jsonl
 ```
 
-**Note:** Dynamic mode breaks prompt caching because the TOON block changes every turn. Use **progressive** or **static** for better cache reuse.
+### Frozen Checkpoints
 
-### Model Exclusion
-
-Some models handle raw conversation history better than TOON format. Use `excludeModels` to skip compression:
-
-```json
-{
-  "historyCompression": {
-    "enabled": true,
-    "keepLastN": 4,
-    "excludeModels": ["kimi", "nova"]
-  }
-}
-```
-
-Patterns are matched as substrings against `provider/modelId`:
-- `"kimi"` matches `amazon-bedrock/moonshotai.kimi-k2.5`
-- `"nova"` matches `amazon-bedrock/amazon.nova-micro-v1:0`
-
-**Why exclude?**
-- Kimi K2.5: Tool-call validation failures on Bedrock (violates `^[a-zA-Z0-9_-]+$` regex)
-- Nova models: More sensitive to synthetic message formats
-
-### Monitoring
-
-The `/router usage` command shows compression and cache statistics:
-
-```
-claude-sonnet-4-6 (medium) ↑5,230 ↓2,140 📦125,000 $0.0234
-                           ↑ fresh  ↑ output  ↑ cached
-
-Token Savings: ~45.2k tokens saved by TOON compression
-Cache Savings: ~125k tokens cached (90% discount)
-
-→ Checkpoint created: context_size (165K >= 160K)
-```
+At turn 5 (configurable), the router creates a **frozen checkpoint** — a TOON-compressed block that is reused across subsequent turns without re-compressing. This reduces CPU overhead while maintaining cache benefits.
 
 **Widget displays:**
 - `[toon]` flag when compression is applied
@@ -361,83 +212,143 @@ Cache Savings: ~125k tokens cached (90% discount)
 /router                     # Show current router status
 /router usage               # Show model usage, cost, and compression stats
 /router profile hybrid      # Switch to hybrid profile  
-/router pin high            # Force high tier for current profile
-/router pin auto            # Restore heuristic routing
-/router thinking medium     # Override thinking level
-/router fix low             # Correct last routing decision
-/router widget on           # Toggle persistent status widget
-/router debug on            # Toggle debug mode
-/router set compression on        # Enable TOON history compression
-/router set budget 3.0            # Set session budget to $3.00
-/router set auto.medium.model amazon-bedrock/moonshotai.kimi-k2.5
-/router set                       # List all settable keys
-/router reload              # Hot-reload config from disk
+/router pin high            # Force high tier
+/router set compression on  # Enable TOON history compression
+/router set budget 3.0      # Set session budget to $3.00
 /router help                # Show all subcommands
 ```
 
-## Available Profiles
-
-| Profile | Description | Use Case |
-|---------|-------------|----------|
-| **auto** | Kimi K2.5 (medium) + Opus (high) + Haiku (low) | General development — cost-effective |
-| **deep** | Maximum quality with Claude Opus xhigh thinking | Critical architecture decisions |
-| **cheap** | Kimi K2.5 (high) + GPT-4.1-mini/nano | Batch processing, simple tasks |
-| **hybrid** | Opus (high) + DeepSeek (medium) + Gemini Flash (low) | Balanced across providers |
-| **oss** | Kimi K2.5, Devstral, DeepSeek, Gemini Flash | Open-source/open-weight preference |
-
-## How It Works
-
-### Classification Logic
-
-1. **Custom Rules**: Keyword matches in user prompt (e.g., "deploy" → High)
-2. **Explicit Hints**: "deep", "carefully" → High; "quick", "fast" → Low
-3. **Git Operations**: "commit", "push", "merge", etc. → Low (no reasoning needed)
-4. **Planning Keywords**: "architecture", "investigate" → High; "plan", "design" → High with corroboration
-5. **Implementation Keywords**: "implement", "fix", "refactor" → Medium
-6. **Lookup Keywords**: "where is", "show me" → Low
-7. **Word Count / Phase Bias**: Long prompts → High; short → Low; sticky phase from prior decisions
-
-### Tier Definitions
-
-- **High Tier**: Complex planning, architecture design, safety-critical operations
-- **Medium Tier**: Implementation work, debugging, refactoring  
-- **Low Tier**: Git ops, summaries, formatting, simple lookups, changelogs
-
-### Budget Enforcement
-
-- Default session budget: configurable via `maxSessionBudget`
-- When budget exceeded: High tier → Medium tier downgrade
-- Context triggers (`largeContextThreshold` tokens) force High tier for safety
+---
 
 ## Development
 
 ```bash
-git clone https://github.com/cakriwut/omp-model-router.git
-cd omp-model-router
 bun install
-bun test
+bun test                    # Run test suite (252 tests)
+bun run deploy:dev          # Deploy to ~/.omp/agent/extensions/model-router
 ```
 
-## Testing
+After deploying, run `/reload` in OMP to pick up changes.
+
+---
+
+## Publishing
+
+Automated release workflow (bump → tag → test → publish → GitHub release):
 
 ```bash
-bun test
+bun run release:patch  # 0.2.1 → 0.2.2
+bun run release:minor  # 0.2.1 → 0.3.0
+bun run release:major  # 0.2.1 → 1.0.0
 ```
 
-Test files:
-- `simple-routing.test.ts` — End-to-end routing classification
-- `routing-optimization.test.ts` — Keyword matching, git ops, word-boundary tests
-- `resolve-routing.test.ts` — Full routing pipeline (heuristic + overrides)
-- `profile-effectiveness.test.ts` — Profile-specific routing
-- `context-compression.test.ts` — TOON compression and stats
-- `usage-format.test.ts` — Usage report rendering
+The release script:
+1. Runs full test suite
+2. Bumps version in `package.json`
+3. Commits and tags
+4. Pushes to GitHub
+5. Publishes to npm (so `npx @cakriwut/omp-model-router@X.Y.Z` resolves)
+6. Creates GitHub release with changelog
 
-## Related Projects
+---
 
-- [Oh-My-Pi](https://github.com/can1357/oh-my-pi) — Required runtime environment
-- [@toon-format/toon](https://github.com/toon-format/toon) — Token-Oriented Object Notation
-- [@oh-my-pi/pi-coding-agent](https://npmjs.com/package/@oh-my-pi/pi-coding-agent) — Required dependency
+## Recent Fixes
+
+### Early Compression Fix (2026-05-30)
+**Bug**: TOON compression triggered after just 2 turns (4 messages) instead of waiting for progressive thresholds (80% context OR 5min idle).
+
+**Root Cause**: `FALLBACK_CONFIG` was missing the `historyCompression` field, causing eager compression mode to activate by default.
+
+**Fix**: Added `historyCompression` defaults with `progressive.enabled: true` to `FALLBACK_CONFIG`.
+
+**Files Changed**:
+- `src/config.ts`: Added default `historyCompression` with progressive mode
+- `test/early-compression-bug.test.ts`: Regression test
+- `docs/EARLY_COMPRESSION_FIX.md`: Full analysis
+
+
+### Session-Scoped Metrics (2026-05-30)
+**Bug**: `/router usage` showed accumulated savings from **previous sessions** even when the current session had no compressions yet.
+
+**Fix**: Accumulated metrics (`accumulatedTokensSaved`, `accumulatedCost`, etc.) are now **truly session-scoped** — they reset to 0 on each new session and are NOT restored from persisted state.
+
+**Files Changed**:
+- `src/state.ts`: Removed restore + persist for accumulated metrics
+- `src/types.ts`: Removed accumulated fields from `RouterPersistedState`
+- `test/session-scoped-metrics.test.ts`: Added regression test
+
+### Debug Session Logging (2026-05-30)
+**Enhancement**: Compression trigger debug logs are now **persisted to session JSONL** (as `router:compression-trigger` custom entries) instead of only appearing in ephemeral console output.
+
+**Benefits**:
+- ✅ **Auditability**: Full history of when compression triggered
+- ✅ **Persistent**: Logs survive process restart
+- ✅ **Reviewable**: Use `jq` to extract and analyze compression behavior post-session
+
+**Files Changed**:
+- `src/provider.ts`: Added `ctx.sessionManager.appendCustomEntry` for compression triggers
+- `test/compression-trigger.test.ts`: Added test for session logging
+- `docs/DEBUG_SESSION_LOGGING.md`: Full documentation
+
+---
+
+## Project Structure
+
+```
+src/
+├── index.ts              # Extension entry point + lifecycle hooks
+├── commands.ts           # /router commands (usage, profile, pin, etc.)
+├── config.ts             # Config loading + validation
+├── routing.ts            # Classification heuristic (High/Medium/Low)
+├── provider.ts           # Model provider integration + compression triggers
+├── state.ts              # Session state + budget tracking
+├── ui.ts                 # Status widget rendering + usage reports
+├── context-compression.ts # TOON history compression
+├── version-check.ts      # Auto-upgrade detection
+├── constants.ts          # Shared constants
+└── types.ts              # Type definitions
+
+test/                     # Test suite (252 tests, bun test)
+docs/                     # Implementation docs and fix explanations
+```
+
+---
+
+## Troubleshooting
+
+### "Compression never triggers"
+1. Check `debug: true` is enabled in config
+2. Verify `historyCompression.progressive.enabled: true`
+3. Check session JSONL for `router:compression-trigger` entries:
+   ```bash
+   jq 'select(.customType == "router:compression-trigger")' ~/.omp/agent/sessions/<workspace>/<session-id>/0-*.jsonl
+   ```
+4. If no entries, compression hasn't triggered (context not large enough, or < 5 minutes since last turn)
+
+### "Usage shows incorrect savings"
+This was fixed in v0.2.2. Upgrade to the latest version:
+```bash
+cd omp-model-router && git pull && bun install && bun run deploy:dev
+/reload  # in OMP
+```
+
+### "Router not active"
+1. Check `routerEnabled: true` in config
+2. Verify config file exists: `~/.omp/agent/model-router.json`
+3. Run `/router` to see current status
+4. Try `/reload` to re-initialize the extension
+
+---
 
 ## License
 
 MIT © Riwut Libinuko
+
+---
+
+## Related Documentation
+
+- `docs/SESSION_SCOPED_METRICS_FIX.md` - Accumulated metrics bug fix
+- `docs/DEBUG_SESSION_LOGGING.md` - Session logging implementation
+- `docs/COMPRESSION_TRIGGER_FIX.md` - Compression trigger behavior explanation
+- `AUTO_UPGRADE_FEATURE.md` - Auto-upgrade mechanism details

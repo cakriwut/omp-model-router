@@ -25,10 +25,97 @@ import { resolveCompressionConfig, compressHistory, isModelExcludedFromCompressi
  * Estimate tokens consumed by a context (rough heuristic: ~1 token per 4 characters).
  * This is a conservative approximation used for tracking compression savings.
  */
+/**
+ * Estimate total tokens in context using actual usage stats when available,
+ * falling back to a content-based heuristic for messages without usage data.
+ * 
+ * This approach is far more accurate than JSON.stringify(), which inflates
+ * token counts by 3-10× due to structure overhead.
+ */
+/**
+ * Detect if the first user message in context is a TOON-compressed history block.
+ * Returns the index of the first message *after* the TOON history, or 0 if no TOON history.
+ */
+function detectTOONHistoryEnd(context: Context): number {
+	if (context.messages.length === 0) return 0;
+	
+	// Check if first message is user role with TOON marker
+	const firstMsg = context.messages[0];
+	if (firstMsg.role !== "user") return 0;
+	
+	const content = typeof firstMsg.content === "string" 
+		? firstMsg.content 
+		: Array.isArray(firstMsg.content) 
+		? firstMsg.content.find(b => b.type === "text")?.text ?? ""
+		: "";
+	
+	if (!content.startsWith("[HISTORY:")) return 0;
+	
+	// TOON history block is always followed by an assistant acknowledgment
+	// So skip the first 2 messages: [user: TOON block, assistant: ack]
+	return Math.min(2, context.messages.length);
+}
+
 function estimateContextTokens(context: Context): number {
-	const jsonStr = JSON.stringify(context.messages);
-	// Rough heuristic: ~1 token per 4 characters (varies by model/encoding)
-	return Math.ceil(jsonStr.length / 4);
+	let totalTokens = 0;
+	
+	// Exclude TOON-compressed history from estimation (already compressed)
+	const startIdx = detectTOONHistoryEnd(context);
+	
+	// 1. Count tokens from messages with usage stats
+	for (let i = startIdx; i < context.messages.length; i++) {
+		const msg = context.messages[i];
+		if (msg.usage) {
+			totalTokens += (msg.usage.input ?? 0) + (msg.usage.output ?? 0);
+		} else {
+			// 2. For messages without usage, estimate from content
+			totalTokens += estimateMessageTokens(msg);
+		}
+	}
+	
+	// 3. Add system prompt tokens (rough estimate: 1 token ≈ 4 chars)
+	if (context.system) {
+		const systemStr = Array.isArray(context.system)
+			? context.system.map((s) => (typeof s === "string" ? s : s.text ?? "")).join("")
+			: context.system;
+		totalTokens += Math.ceil(systemStr.length / 4);
+	}
+	
+	return totalTokens;
+}
+
+/**
+ * Estimate tokens for a single message without usage stats.
+ * Extracts actual text content and applies a char→token ratio.
+ */
+function estimateMessageTokens(msg: Message): number {
+	let textContent = "";
+	
+	if (typeof msg.content === "string") {
+		textContent = msg.content;
+	} else if (Array.isArray(msg.content)) {
+		for (const block of msg.content) {
+			if (block.type === "text") {
+				textContent += block.text ?? "";
+			} else if (block.type === "tool_result") {
+				// Tool results often contain large payloads
+				const resultContent = typeof block.content === "string"
+					? block.content
+					: Array.isArray(block.content)
+					? block.content.map((c) => (typeof c === "string" ? c : c.text ?? "")).join("")
+					: "";
+				textContent += resultContent;
+			} else if (block.type === "tool_use") {
+				// Tool calls are small (function name + args)
+				textContent += JSON.stringify(block.input ?? {});
+			}
+			// Image blocks contribute ~1-2K tokens regardless of size (vision models)
+			// Not counted here since we can't accurately estimate without model-specific data
+		}
+	}
+	
+	// Heuristic: ~4 chars per token (conservative for Claude models)
+	return Math.ceil(textContent.length / 4);
 }
 
 export const createErrorMessage = (
@@ -396,6 +483,7 @@ export const registerRouterProvider = (
 								const contextThreshold = compressionCfg.progressive.contextThreshold ?? 0.8;
 								const timeThresholdSeconds = compressionCfg.progressive.timeThreshold ?? 300;
 								
+								const contextTokens = estimateContextTokens(effectiveContext);
 								const triggerReason = shouldTriggerCompression(
 									effectiveContext,
 									targetLimit,
@@ -403,6 +491,24 @@ export const registerRouterProvider = (
 									state.lastTurnTimestamp,
 									timeThresholdSeconds,
 								);
+								
+								if (state.currentConfig.debug && triggerReason) {
+									const compressionDebugData = {
+										reason: triggerReason,
+										contextTokens,
+										threshold: Math.floor(contextThreshold * targetLimit),
+										timeSinceLastTurn: state.lastTurnTimestamp
+											? Math.floor((now - state.lastTurnTimestamp) / 1000)
+											: 'N/A',
+										timeThreshold: timeThresholdSeconds,
+										turnNumber,
+										messageCount: effectiveContext.messages.length,
+									};
+									// Log to session for auditability
+									ctx.sessionManager.appendCustomEntry('router:compression-trigger', compressionDebugData);
+									// Also log to console for real-time visibility
+									console.log('[ROUTER] Compression triggered:', compressionDebugData);
+								}
 								
 								if (triggerReason) {
 									// Trigger fired: create new checkpoint

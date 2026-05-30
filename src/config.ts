@@ -25,6 +25,15 @@ export const FALLBACK_CONFIG: RouterConfig = {
 			low: { model: "anthropic/claude-haiku-4-5", thinking: "low" as ThinkingLevel },
 		},
 	},
+	historyCompression: {
+		enabled: true,
+		keepLastN: 4,
+		progressive: {
+			enabled: true,
+			contextThreshold: 0.8,
+			timeThreshold: 300,
+		},
+	},
 };
 
 export const THINKING_LEVELS = [
