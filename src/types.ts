@@ -1,4 +1,5 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { CalibrationConfig } from "./calibration/types";
 
 export type RouterTier = "high" | "medium" | "low";
 export type RouterPin = RouterTier | "auto";
@@ -138,6 +139,8 @@ export interface RouterConfig {
 	profiles: Record<string, RouterProfile>;
 	/** Auto-upgrade tier when the same tool fails consecutively. */
 	autoUpgrade?: AutoUpgradeConfig;
+	/** Calibration system for async LLM classifier with learning. */
+	calibration?: CalibrationConfig;
 }
 
 export interface RoutingDecisionUsage {

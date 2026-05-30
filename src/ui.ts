@@ -497,6 +497,13 @@ export interface UsageReportInput {
 	maxSessionBudget?: number;
 	modelRegistry: { find(provider: string, modelId: string): { cost?: unknown } | undefined };
 	compression?: CompressionUsageInput;
+	calibration?: {
+		mode: "telemetry" | "adaptive";
+		totalComparisons: number;
+		llmCallsAttempted: number;
+		llmCallsFailed: number;
+		matrix: number[][];
+	};
 }
 
 /**
@@ -681,6 +688,35 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 		if (cacheTokens > 0) {
 			const cacheK = (cacheTokens / 1000).toFixed(1);
 			lines.push(`  ${theme.fg("accent", "Cache")} 📦${cacheK}k tokens read from cache`);
+		}
+	}
+
+	// ── Calibration stats ──────────────────────────────────────────────
+	if (opts.calibration) {
+		const cal = opts.calibration;
+		if (cal.totalComparisons > 0) {
+			const mismatchRate = cal.llmCallsAttempted > 0 
+				? (cal.totalComparisons - (cal.matrix[0][0] + cal.matrix[1][1] + cal.matrix[2][2])) / cal.totalComparisons
+				: 0;
+			const agreementRate = 1 - mismatchRate;
+			const agreementPct = Math.round(agreementRate * 100);
+			const failureRate = cal.llmCallsAttempted > 0
+				? cal.llmCallsFailed / cal.llmCallsAttempted
+				: 0;
+			
+			lines.push("");
+			lines.push(
+				`  ${theme.fg("accent", "Calibration")} ${cal.totalComparisons} comparisons | ${theme.fg(agreementPct >= 75 ? "success" : "warning", `${agreementPct}% agreement`)} | ${cal.llmCallsAttempted} LLM calls (${cal.llmCallsFailed} failed)`,
+			);
+			
+			if (failureRate > 0.5) {
+				lines.push(
+					`               ${theme.fg("warning", `⚠ High failure rate (${Math.round(failureRate * 100)}%) — check classifierModel config`)}`,
+				);
+			}
+		} else {
+			lines.push("");
+			lines.push(`  ${theme.fg("accent", "Calibration")} enabled (mode: ${cal.mode}) — no comparisons yet`);
 		}
 	}
 

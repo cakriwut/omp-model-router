@@ -34,6 +34,15 @@ export const FALLBACK_CONFIG: RouterConfig = {
 			timeThreshold: 300,
 		},
 	},
+	calibration: {
+		enabled: false,
+		mode: "telemetry",
+		warmupTurns: 5,
+		overrideThreshold: 0.65,
+		traceEnabled: false,
+		useGlobalPrior: true,
+		globalPriorWeight: 0.1,
+	},
 };
 
 export const THINKING_LEVELS = [
@@ -105,18 +114,13 @@ export const mergeConfig = (
 			historyCompression: nextProfile.historyCompression ?? existing?.historyCompression,
 		};
 	}
+	// IMPORTANT: this uses spread so new optional top-level fields in RouterConfig
+	// flow through automatically. If you add a field that needs deep-merge (like
+	// profiles or historyCompression), add it explicitly AFTER the spread.
+	// See AGENTS.md "Pitfalls > Adding a new top-level field to RouterConfig".
 	return {
-		routerEnabled: override.routerEnabled ?? base.routerEnabled,
-		defaultProfile: override.defaultProfile ?? base.defaultProfile,
-		debug: override.debug ?? base.debug,
-		classifierModel: override.classifierModel ?? base.classifierModel,
-		phaseBias: override.phaseBias ?? base.phaseBias,
-		largeContextThreshold:
-			override.largeContextThreshold ?? base.largeContextThreshold,
-		maxSessionBudget: override.maxSessionBudget ?? base.maxSessionBudget,
-		rules: override.rules ?? base.rules,
-		historyCompression: override.historyCompression ?? base.historyCompression,
-		autoUpgrade: override.autoUpgrade ?? base.autoUpgrade,
+		...base,
+		...override,
 		profiles: mergedProfiles,
 	};
 };
@@ -322,6 +326,23 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 		autoUpgrade = { enabled: true, threshold, tools: tools?.length ? tools : undefined };
 	}
 
+	// ── Calibration normalization ────────────────────────────────────────────
+	let calibration: import("./calibration/types").CalibrationConfig | undefined;
+	if (isObjectRecord(raw.calibration)) {
+		const c = raw.calibration;
+		const mode = c.mode === "adaptive" ? "adaptive" : "telemetry";
+		calibration = {
+			enabled: c.enabled === true,
+			mode,
+			warmupTurns: typeof c.warmupTurns === "number" ? c.warmupTurns : 5,
+			classifierModel: typeof c.classifierModel === "string" ? c.classifierModel : undefined,
+			overrideThreshold: typeof c.overrideThreshold === "number" ? c.overrideThreshold : 0.65,
+			traceEnabled: c.traceEnabled === true,
+			useGlobalPrior: c.useGlobalPrior !== false,
+			globalPriorWeight: typeof c.globalPriorWeight === "number" ? c.globalPriorWeight : 0.1,
+		};
+	}
+
 
 	return {
 		config: {
@@ -336,6 +357,7 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 			historyCompression: raw.historyCompression,
 			profiles: normalizedProfiles,
 			autoUpgrade,
+			calibration,
 		},
 		warnings,
 	};

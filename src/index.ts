@@ -13,6 +13,12 @@ import { RouterState } from "./state";
 import { updateStatus } from "./ui";
 import { registerCommands } from "./commands";
 import { registerRouterProvider } from "./provider";
+import {
+	onSessionStart as calibrationSessionStart,
+	onSessionBranch as calibrationSessionBranch,
+	onTurnStart as calibrationTurnStart,
+	onTurnEnd as calibrationTurnEnd,
+} from "./calibration/hooks";
 import { checkForUpdate } from "./version-check";
 
 const routerExtension = (pi: ExtensionAPI) => {
@@ -62,6 +68,10 @@ const routerExtension = (pi: ExtensionAPI) => {
 				state.selectedProfile,
 			);
 			actions.registerRouterProvider();
+			// Initialize calibration if newly enabled (handles /reload after enabling in config)
+			if (ctx && state.currentConfig.calibration?.enabled && !state.calibration) {
+				calibrationSessionStart(undefined, ctx, state, state.currentConfig).catch(() => {});
+			}
 			if (ctx) {
 				actions.updateStatus(ctx);
 			}
@@ -211,6 +221,9 @@ const routerExtension = (pi: ExtensionAPI) => {
 				);
 			}
 		});
+
+		// Initialize calibration (telemetry mode)
+		await calibrationSessionStart(_event, ctx, state, state.currentConfig);
 	});
 
 	pi.on("session_branch", async (_event, ctx) => {
@@ -250,9 +263,12 @@ const routerExtension = (pi: ExtensionAPI) => {
 
 		state.persist();
 		actions.updateStatus(ctx);
+
+		// Clone calibration state for branch
+		await calibrationSessionBranch(_event, ctx, state, state.currentConfig);
 	});
 
-	pi.on("turn_start", (_event, ctx) => {
+	pi.on("turn_start", async (_event, ctx) => {
 		state.lastExtensionContext = ctx;
 		if (state.updateBannerShown) {
 			state.updateBannerShown = false;
@@ -261,6 +277,9 @@ const routerExtension = (pi: ExtensionAPI) => {
 			state.isStreaming = true;
 			actions.updateStatus(ctx);
 		}
+
+		// Poll pending classifier, timeout stale agents
+		await calibrationTurnStart(_event, ctx, state, state.currentConfig);
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
@@ -277,7 +296,14 @@ const routerExtension = (pi: ExtensionAPI) => {
 		}
 		state.persist();
 		actions.updateStatus(ctx);
+
+		// Poll classifier (first chance), write trace
+		await calibrationTurnEnd(_event, ctx, state, state.currentConfig);
 	});
+
+	// session_end is not a standard extension event; instead merge calibration
+	// on turn_end when the session is about to close. The global merge also
+	// happens via debounced writes during the session, so data is not lost.
 
 	// ─── Auto-upgrade: track consecutive tool failures ─────────────────────────
 	pi.on("tool_execution_end", (event, ctx) => {

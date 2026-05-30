@@ -20,6 +20,7 @@ import {
 } from "./routing";
 import type { RouterState } from "./state";
 import { resolveCompressionConfig, compressHistory, isModelExcludedFromCompression } from "./context-compression";
+import { spawnClassifierForTurn } from "./calibration/hooks";
 
 /**
  * Estimate tokens consumed by a context (rough heuristic: ~1 token per 4 characters).
@@ -410,6 +411,9 @@ export const registerRouterProvider = (
 
 					state.lastDecision = decision;
 					actions.recordDebugDecision(decision);
+
+					// Spawn async classifier for calibration telemetry (fire-and-forget)
+					spawnClassifierForTurn(state, state.currentConfig, decision.tier, context);
 
 					if (state.lastExtensionContext) {
 						actions.updateStatus(state.lastExtensionContext);

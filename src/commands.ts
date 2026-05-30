@@ -537,6 +537,13 @@ export const registerCommands = (
 				totalCompressedChars: state.compressionTotalCompressedChars,
 				diagnostic,
 			},
+			calibration: state.calibration ? {
+				mode: state.currentConfig.calibration?.mode ?? "telemetry",
+				totalComparisons: state.calibration.totalComparisons,
+				llmCallsAttempted: state.calibration.llmCallsAttempted,
+				llmCallsFailed: state.calibration.llmCallsFailed,
+				matrix: state.calibration.matrix,
+			} : undefined,
 		});
 		ctx.ui.notify(report, "info");
 	};

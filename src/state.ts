@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import type { SessionCalibration } from "./calibration/types";
 import { join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
@@ -118,6 +119,9 @@ export class RouterState {
 	currentCheckpoint?: CompressionCheckpoint;
 	/** Timestamp of the last turn processed (epoch ms). Used for cache expiry detection. */
 	lastTurnTimestamp?: number;
+
+	// ─── Calibration (session-level, ephemeral) ─────────────────────────
+	calibration: SessionCalibration | undefined;
 	// ─── Auto-upgrade failure tracking (transient, not persisted) ───────
 	/** Tracks consecutive failures: toolName → count */
 	toolFailureStreak: Map<string, number> = new Map();
