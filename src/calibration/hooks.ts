@@ -274,11 +274,12 @@ async function tryPollClassifier(
 		return; // Still running
 	}
 
-	// Clear pending state
+	// Clear pending state and cleanup cached result
 	cal.pendingAgentId = undefined;
 	const heuristicTier = cal.pendingHeuristicTier;
 	cal.pendingHeuristicTier = undefined;
 	cal.pendingAgentAge = undefined;
+	abandonClassifier(agentId); // Clean up cached result to prevent memory leak
 
 	if (result.error) {
 		cal.llmCallsFailed++;

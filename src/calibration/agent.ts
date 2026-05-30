@@ -22,10 +22,13 @@ try {
 
 /**
  * In-flight classifier state for streamSimple fallback
+ * Result is cached after completion so late polls can still read it
  */
 interface ClassifierPromise {
 	promise: Promise<{ tier: RouterTier; reasoning: string } | undefined>;
 	startTime: number;
+	result?: { tier: RouterTier; reasoning: string } | undefined;
+	error?: string;
 }
 
 const pendingClassifiers = new Map<string, ClassifierPromise>();
@@ -107,6 +110,18 @@ export async function pollClassifierResult(
 		return { ready: true, error: "Agent not found" };
 	}
 
+	// Return cached result if already completed
+	if (pending.result !== undefined) {
+		return {
+			ready: true,
+			verdict: pending.result,
+			latencyMs: Date.now() - pending.startTime,
+		};
+	}
+	if (pending.error !== undefined) {
+		return { ready: true, error: pending.error };
+	}
+
 	try {
 		// Non-blocking check: race against immediate timeout
 		const result = await Promise.race([
@@ -120,20 +135,21 @@ export async function pollClassifierResult(
 			return { ready: false };
 		}
 
+		// Cache result for future polls, don't delete
 		if (!result) {
-			pendingClassifiers.delete(agentId);
-			return { ready: true, error: "Classifier returned undefined" };
+			pending.error = "Classifier returned undefined";
+			return { ready: true, error: pending.error };
 		}
 
-		pendingClassifiers.delete(agentId);
+		pending.result = result;
 		return {
 			ready: true,
 			verdict: result,
 			latencyMs: Date.now() - pending.startTime,
 		};
 	} catch (error) {
-		pendingClassifiers.delete(agentId);
-		return { ready: true, error: String(error) };
+		pending.error = String(error);
+		return { ready: true, error: pending.error };
 	}
 }
 
