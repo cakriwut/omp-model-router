@@ -297,9 +297,15 @@ To hide these messages: set `"debug": false` and run `/reload`.
 
 ```bash
 bun install
-bun test                    # Run test suite (252 tests)
+bun run test                # Run test suite with summary output (recommended)
+bun run test:verbose        # Show all test output with dots reporter
 bun run deploy:dev          # Deploy to ~/.omp/agent/extensions/model-router
 ```
+
+**Test output modes:**
+- `bun run test` (recommended): Shows only summary when all tests pass; shows full output with failure details on any failure
+- `bun run test:verbose`: Shows dots for each test (.) plus all console output, full traceability
+- `bun test` (direct): Bun's default behavior, shows all output (bypasses package.json script)
 
 After deploying, run `/reload` in OMP to pick up changes.
 

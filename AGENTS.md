@@ -96,8 +96,9 @@ When `calibration.enabled` is `true` and `calibration.mode` is `"adaptive"`, the
 
 ```bash
 bun install
-bun test
-bun run deploy:dev  # Deploy to ~/.omp/agent/extensions/model-router for local testing
+bun run test                # Run test suite with summary output (323 tests)
+bun run test:verbose        # Show all output with dots reporter
+bun run deploy:dev          # Deploy to ~/.omp/agent/extensions/model-router for local testing
 ```
 
 After deploying, run `/reload` in OMP to pick up changes.

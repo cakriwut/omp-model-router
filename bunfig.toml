@@ -1,0 +1,4 @@
+# Bun test configuration
+# Docs: https://bun.sh/docs/cli/test
+[test]
+timeout = 5000

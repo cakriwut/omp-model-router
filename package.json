@@ -24,7 +24,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "bun test",
+    "test": "./scripts/test-summary.sh",
+    "test:verbose": "bun test --dots",
     "deploy:dev": "./scripts/deploy-dev.sh",
     "release:patch": "./scripts/release.sh patch",
     "release:minor": "./scripts/release.sh minor",
