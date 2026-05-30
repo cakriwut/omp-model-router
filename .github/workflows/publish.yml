@@ -9,9 +9,9 @@ permissions:
   contents: write
   id-token: write
 
-jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: Release
     steps:
       - name: Checkout
         uses: actions/checkout@v4
