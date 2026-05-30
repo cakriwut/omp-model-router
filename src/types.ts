@@ -34,6 +34,11 @@ export interface HistoryCompressionConfig {
 	 * Supports substring matching (e.g. "kimi" matches "moonshotai.kimi-k2.5").
 	 */
 	excludeModels?: string[];
+	/**
+	 * Turn number after which compression is frozen (static TOON mode).
+	 * When set, compression is applied only up to this turn, then reused for all subsequent turns.
+	 */
+	freezeAfter?: number;
 }
 export interface AutoUpgradeConfig {
 	/** Enable automatic tier upgrade on repeated tool failures. Default: false. */
@@ -58,6 +63,12 @@ export interface CompressionStats {
 	originalChars: number;
 	/** Character count of the TOON block (including the wrapper text). */
 	compressedChars: number;
+	/** Estimated tokens in original context before compression. */
+	estimatedOriginalTokens?: number;
+	/** Estimated tokens in compressed context after TOON encoding. */
+	estimatedCompressedTokens?: number;
+	/** Estimated tokens saved by compression. */
+	estimatedTokensSaved?: number;
 }
 
 export interface RouterProfile {
@@ -125,6 +136,10 @@ export interface RouterPersistedState {
 	lastDecision?: RoutingDecision;
 	lastNonRouterModel?: string;
 	accumulatedCost?: number;
+	accumulatedOriginalTokens?: number;
+	accumulatedCompressedTokens?: number;
+	accumulatedTokensSaved?: number;
+	accumulatedCacheReadTokens?: number;
 	timestamp: number;
 }
 

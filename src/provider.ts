@@ -21,6 +21,16 @@ import {
 import type { RouterState } from "./state";
 import { resolveCompressionConfig, compressHistory, isModelExcludedFromCompression } from "./context-compression";
 
+/**
+ * Estimate tokens consumed by a context (rough heuristic: ~1 token per 4 characters).
+ * This is a conservative approximation used for tracking compression savings.
+ */
+function estimateContextTokens(context: Context): number {
+	const jsonStr = JSON.stringify(context.messages);
+	// Rough heuristic: ~1 token per 4 characters (varies by model/encoding)
+	return Math.ceil(jsonStr.length / 4);
+}
+
 export const createErrorMessage = (
 	model: Model<Api>,
 	message: string,
@@ -337,22 +347,63 @@ export const registerRouterProvider = (
 									? truncateContext(context, targetLimit)
 									: context;
 
-							// ── History compression (TOON) ───────────────────────────────
-							const compressionCfg = resolveCompressionConfig(
-								state.currentConfig.historyCompression,
-								state.currentConfig.profiles[model.id]?.historyCompression,
-							);
-							let finalContext = effectiveContext;
-							if (compressionCfg?.enabled && !isModelExcludedFromCompression(compressionCfg, targetProvider, targetModelId)) {
-								const result = compressHistory(effectiveContext, compressionCfg);
+						// ── History compression (TOON) ───────────────────────────────
+						const compressionCfg = resolveCompressionConfig(
+							state.currentConfig.historyCompression,
+							state.currentConfig.profiles[model.id]?.historyCompression,
+						);
+						let finalContext = effectiveContext;
+						const turnNumber = effectiveContext.messages.length;
+						
+						if (compressionCfg?.enabled && !isModelExcludedFromCompression(compressionCfg, targetProvider, targetModelId)) {
+							// Check if we should use cached frozen compression
+							const shouldFreeze = compressionCfg.freezeAfter !== undefined && turnNumber === compressionCfg.freezeAfter;
+							const shouldReuseFrozen = compressionCfg.freezeAfter !== undefined && turnNumber > compressionCfg.freezeAfter && state.frozenCompressionBlock;
+							
+							if (shouldReuseFrozen && state.frozenCompressionBlock) {
+								// Prepend cached frozen TOON block
+								finalContext = {
+									...effectiveContext,
+									messages: [...state.frozenCompressionBlock.messages, ...effectiveContext.messages.slice(-(compressionCfg.keepLastN ?? 4) * 2)]
+								};
+							} else if (!shouldReuseFrozen) {
+								// Estimate tokens before compression
+								const originalTokens = estimateContextTokens(effectiveContext);
+								
+								// Apply compression with current turn number
+								const result = compressHistory(effectiveContext, compressionCfg, turnNumber);
 								finalContext = result.context;
+								
 								if (result.stats) {
+									// Estimate tokens after compression
+									const compressedTokens = estimateContextTokens(finalContext);
+									const tokensSaved = Math.max(0, originalTokens - compressedTokens);
+									
+									// Populate compression stats with token data
+									result.stats.estimatedOriginalTokens = originalTokens;
+									result.stats.estimatedCompressedTokens = compressedTokens;
+									result.stats.estimatedTokensSaved = tokensSaved;
+									
 									decision.compression = result.stats;
 									state.compressionTotalOriginalChars += result.stats.originalChars;
 									state.compressionTotalCompressedChars += result.stats.compressedChars;
 									state.compressionRequestCount++;
+									
+									// Accumulate token metrics
+									state.accumulatedOriginalTokens += originalTokens;
+									state.accumulatedCompressedTokens += compressedTokens;
+									state.accumulatedTokensSaved += tokensSaved;
+									
+									// If at freeze point, cache the compressed block for reuse
+									if (shouldFreeze) {
+										state.frozenCompressionBlock = {
+											messages: result.context.messages.slice(0, -( compressionCfg.keepLastN ?? 4)),
+											stats: result.stats
+										};
+									}
 								}
 							}
+						}
 
 							const thinkingOverride = actions.getThinkingOverride(
 								model.id,
@@ -386,6 +437,7 @@ export const registerRouterProvider = (
 									const u = event.message.usage;
 									const cost = u?.cost?.total ?? 0;
 									state.accumulatedCost += cost;
+									state.accumulatedCacheReadTokens += u?.cacheRead ?? 0;
 									decision.usage = {
 										inputTokens:
 											(decision.usage?.inputTokens ?? 0) + (u?.input ?? 0),

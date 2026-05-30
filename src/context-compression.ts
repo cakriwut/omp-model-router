@@ -299,17 +299,26 @@ export interface CompressResult {
 export function compressHistory(
 	context: Context,
 	config: HistoryCompressionConfig,
+	turnNumber?: number,
 ): CompressResult {
 	const keepLastN = Math.max(1, config.keepLastN ?? 4);
 	const { messages } = context;
 
+	// If freeze is configured and we're past the freeze point, reuse previous compression
+	// (compression is skipped at runtime; the frozen block is provided via context prepend)
+	if (config.freezeAfter !== undefined && turnNumber !== undefined && turnNumber > config.freezeAfter) {
+		// Return context unchanged when frozen — compression was already applied at freeze point
+		// and stored in state for reuse
+		return { context, stats: undefined };
+	}
+
 	// Not enough history to be worth compressing.
 	if (messages.length <= keepLastN) return { context, stats: undefined };
-
+	
 	// ── Step 1: Find safe split boundary ──────────────────────────────────────
 	const naiveSplit = messages.length - keepLastN;
 	const safeSplit = findSafeSplitIndex(messages, naiveSplit);
-
+	
 	// If safe split leaves nothing meaningful to compress, skip.
 	if (safeSplit <= 0 || messages.length - safeSplit <= 0) {
 		return { context, stats: undefined };

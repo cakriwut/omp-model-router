@@ -473,6 +473,10 @@ export const registerCommands = (
 			debugHistory: state.debugHistory,
 			lastDecision: state.lastDecision,
 			accumulatedCost: state.accumulatedCost,
+			accumulatedOriginalTokens: state.accumulatedOriginalTokens,
+			accumulatedCompressedTokens: state.accumulatedCompressedTokens,
+			accumulatedTokensSaved: state.accumulatedTokensSaved,
+			accumulatedCacheReadTokens: state.accumulatedCacheReadTokens,
 			maxSessionBudget: state.currentConfig.maxSessionBudget,
 			modelRegistry: ctx.modelRegistry,
 			compression: {

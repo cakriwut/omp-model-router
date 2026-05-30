@@ -10,7 +10,9 @@ import type {
 	RoutingDecision,
 	RouterPersistedState,
 	CustomSessionEntry,
+	CompressionStats,
 } from "./types";
+import type { Message } from "@oh-my-pi/pi-ai";
 import { FALLBACK_CONFIG, resolveProfileName } from "./config";
 import { MAX_DEBUG_HISTORY } from "./constants";
 
@@ -94,6 +96,10 @@ export class RouterState {
 
 	// ─── Cost & model tracking ───────────────────────────────────────────
 	accumulatedCost = 0;
+	accumulatedOriginalTokens = 0;
+	accumulatedCompressedTokens = 0;
+	accumulatedTokensSaved = 0;
+	accumulatedCacheReadTokens = 0;
 	lastNonRouterModel: string | undefined;
 	lastRegisteredModels = "";
 
@@ -101,6 +107,10 @@ export class RouterState {
 	compressionRequestCount = 0;
 	compressionTotalOriginalChars = 0;
 	compressionTotalCompressedChars = 0;
+	
+	// ─── Frozen TOON compression cache ────────────────────────────────────
+	// When freezeAfter is configured, stores the frozen TOON block to reuse
+	frozenCompressionBlock?: { messages: Message[]; stats: CompressionStats };
 
 	// ─── Auto-upgrade failure tracking (transient, not persisted) ───────
 	/** Tracks consecutive failures: toolName → count */
@@ -183,6 +193,10 @@ export class RouterState {
 		this.widgetEnabled = false;
 		this.debugHistory = [];
 		this.accumulatedCost = 0;
+		this.accumulatedOriginalTokens = 0;
+		this.accumulatedCompressedTokens = 0;
+		this.accumulatedTokensSaved = 0;
+		this.accumulatedCacheReadTokens = 0;
 		this.lastNonRouterModel =
 			ctx.model && ctx.model.provider !== "router"
 				? `${ctx.model.provider}/${ctx.model.id}`
@@ -225,7 +239,11 @@ export class RouterState {
 				: [];
 			this.lastNonRouterModel =
 				savedState.lastNonRouterModel ?? this.lastNonRouterModel;
-			this.accumulatedCost = savedState.accumulatedCost ?? 0;
+		this.accumulatedCost = savedState.accumulatedCost ?? 0;
+		this.accumulatedOriginalTokens = savedState.accumulatedOriginalTokens ?? 0;
+		this.accumulatedCompressedTokens = savedState.accumulatedCompressedTokens ?? 0;
+		this.accumulatedTokensSaved = savedState.accumulatedTokensSaved ?? 0;
+		this.accumulatedCacheReadTokens = savedState.accumulatedCacheReadTokens ?? 0;
 		}
 	}
 
@@ -243,6 +261,10 @@ export class RouterState {
 			lastDecision: this.lastDecision,
 			lastNonRouterModel: this.lastNonRouterModel,
 			accumulatedCost: this.accumulatedCost,
+			accumulatedOriginalTokens: this.accumulatedOriginalTokens,
+			accumulatedCompressedTokens: this.accumulatedCompressedTokens,
+			accumulatedTokensSaved: this.accumulatedTokensSaved,
+			accumulatedCacheReadTokens: this.accumulatedCacheReadTokens,
 			timestamp: Date.now(),
 		};
 	}

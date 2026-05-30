@@ -432,7 +432,9 @@ export const updateStatus = (
 		const flagsStr = flags.length > 0 ? ` [${flags.join(",")}]` : "";
 		const u = lastDecision.usage;
 		const usageStr = u
-			? ` ↑${u.inputTokens.toLocaleString()} ↓${u.outputTokens.toLocaleString()} $${(u.cost ?? 0).toFixed(4)}`
+			? ` ↑${u.inputTokens.toLocaleString()} ↓${u.outputTokens.toLocaleString()}` +
+			  (u.cacheReadTokens > 0 ? ` 📦${u.cacheReadTokens.toLocaleString()}` : "") +
+			  ` $${(u.cost ?? 0).toFixed(4)}`
 			: "";
 
 		widgetLines.push(
@@ -463,6 +465,10 @@ export interface UsageReportInput {
 	debugHistory: RoutingDecision[];
 	lastDecision: RoutingDecision | undefined;
 	accumulatedCost?: number;
+	accumulatedOriginalTokens?: number;
+	accumulatedCompressedTokens?: number;
+	accumulatedTokensSaved?: number;
+	accumulatedCacheReadTokens?: number;
 	maxSessionBudget?: number;
 	modelRegistry: { find(provider: string, modelId: string): { cost?: unknown } | undefined };
 	compression?: {
@@ -608,6 +614,21 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 			);
 		} else {
 			lines.push(`  ${theme.fg("accent", "TOON")}    enabled (no compressions yet — history too short)`);
+		}
+	}
+
+	// ── Accumulated token metrics ──────────────────────────────────────
+	if (opts.accumulatedOriginalTokens || opts.accumulatedTokensSaved || opts.accumulatedCacheReadTokens) {
+		lines.push("");
+		const tokenSavings = opts.accumulatedTokensSaved || 0;
+		const cacheTokens = opts.accumulatedCacheReadTokens || 0;
+		if (tokenSavings > 0) {
+			const savingsK = (tokenSavings / 1000).toFixed(1);
+			lines.push(`  ${theme.fg("accent", "Savings")} ~${savingsK}k tokens from TOON compression`);
+		}
+		if (cacheTokens > 0) {
+			const cacheK = (cacheTokens / 1000).toFixed(1);
+			lines.push(`  ${theme.fg("accent", "Cache")} 📦${cacheK}k tokens read from cache`);
 		}
 	}
 
