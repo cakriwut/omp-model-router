@@ -218,23 +218,90 @@ Create `~/.omp/agent/model-router.json`:
 }
 ```
 
+
 ## History Compression (TOON)
 
-When enabled, the router compresses older conversation messages into [TOON format](https://toonformat.dev) before sending the request to the LLM. This eliminates repeated JSON keys (`"role"`, `"content"`, etc.) across hundreds of messages.
+When enabled, the router compresses older conversation messages into [TOON format](https://toonformat.dev) before sending the request to the LLM. This eliminates repeated JSON keys (`"role"`, `"content"`, etc.) across hundreds of messages, saving 30-60% of input tokens while maintaining full conversation context.
 
-### How it works
+### Three Compression Strategies
 
-Given a 100-message conversation with `keepLastN: 4`:
+| Strategy | When It Compresses | Cache Behavior | Best For | Savings |
+|----------|-------------------|----------------|----------|---------|
+| **Progressive** ⭐ (default) | Only at triggers: context >= 80% OR >5min gap | HIT between checkpoints | Long sessions (15+ turns) | **94%** |
+| **Static** | Once at turn N, never update | HIT forever | Predictable compression point | **92%** |
+| **Dynamic** | Every turn | MISS every turn | Context-constrained models | **57%** |
+
+### Progressive TOON (Recommended)
+
+**Intelligent checkpointing** — compresses only when beneficial:
+
+```json
+{
+  "historyCompression": {
+    "enabled": true,
+    "keepLastN": 4,
+    "progressive": {
+      "enabled": true,
+      "contextThreshold": 0.8,    // Compress at 80% of context window
+      "timeThreshold": 300         // Compress after 5min gap (cache TTL)
+    },
+    "excludeModels": ["kimi", "nova"]
+  }
+}
+```
+
+**How it works:**
 
 ```
-messages[0]: user     ← TOON block containing messages 0–95 (role + content only)
-messages[1]: assistant ← "Understood. I have the conversation history."
-messages[2–5]:        ← original messages 96–99 as native JSON turns
+Turn 1-35: No compression (history < 160K tokens)
+  ├─ Cache works perfectly
+  └─ Cost: $0.028/turn
+
+Turn 36: TRIGGER (context >= 160K)
+  ├─ Compress turn[1-35] → TOON[1-35] (~60K)
+  ├─ Create checkpoint
+  └─ Cache MISS → $0.065 (one-time)
+
+Turn 37-70: Reuse checkpoint
+  ├─ Frozen TOON[1-35] cached (90% discount)
+  ├─ Only recent turns pay full price
+  └─ Cost: $0.023/turn
+
+Turn 71: TRIGGER (context >= 160K again)
+  ├─ Compress turn[1-70] → new checkpoint
+  └─ Cache MISS → $0.145 (one-time)
+
+Result: 94% savings vs no optimization
 ```
 
-The LLM receives the full conversation context, but the older portion uses ~40% fewer tokens than raw JSON. Only `role`, `content`, and `toolName` are preserved in the compressed block — metadata like `api`, `provider`, `model`, `usage`, `timestamp` are stripped since the LLM doesn't need them.
+**Config options:**
 
-### Configuration
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `progressive.enabled` | boolean | `false` | Enable progressive checkpointing |
+| `progressive.contextThreshold` | number | `0.8` | Compress when context reaches this fraction of window (0.0-1.0) |
+| `progressive.timeThreshold` | number | `300` | Compress after this many seconds gap (cache TTL) |
+
+### Static TOON
+
+**Freeze compression at a specific turn:**
+
+```json
+{
+  "historyCompression": {
+    "enabled": true,
+    "keepLastN": 4,
+    "freezeAfter": 10,  // Freeze TOON at turn 10, never update
+    "excludeModels": ["kimi", "nova"]
+  }
+}
+```
+
+**Best for:** Sessions where you want predictable compression at a known turn count (e.g., always compress after 10 turns).
+
+### Dynamic TOON (Original Behavior)
+
+**Compress every turn** (default if neither `progressive` nor `freezeAfter` is set):
 
 ```json
 {
@@ -245,13 +312,12 @@ The LLM receives the full conversation context, but the older portion uses ~40% 
 }
 ```
 
-| `enabled` | boolean | `false` | Enable TOON compression |
-| `keepLastN` | number | `4` | Recent messages to keep as native JSON turns (minimum 1) |
-| `excludeModels` | string[] | `[]` | Model patterns to skip compression (substring match against `provider/modelId`) |
+**Note:** Dynamic mode breaks prompt caching because the TOON block changes every turn. Use **progressive** or **static** for better cache reuse.
 
 ### Model Exclusion
 
-Some models handle raw conversation history better than the TOON format. Use `excludeModels` to skip compression for specific models:
+Some models handle raw conversation history better than TOON format. Use `excludeModels` to skip compression:
+
 ```json
 {
   "historyCompression": {
@@ -261,50 +327,33 @@ Some models handle raw conversation history better than the TOON format. Use `ex
   }
 }
 ```
-Patterns are matched as substrings against the full model reference (`provider/modelId`). For example:
+
+Patterns are matched as substrings against `provider/modelId`:
 - `"kimi"` matches `amazon-bedrock/moonshotai.kimi-k2.5`
 - `"nova"` matches `amazon-bedrock/amazon.nova-micro-v1:0`
-- `"deepseek"` matches `amazon-bedrock/deepseek.v3.2` (included for illustration, but DeepSeek supports compression)
-**Why exclude certain models?**
-- Open-weight models (Kimi, Nova) are often more sensitive to synthetic message formats.
-- Kimi K2.5 is excluded by default due to known tool‑call validation failures on Bedrock (violates `^[a-zA-Z0-9_-]+$` regex).
-- GLM‑5 handles TOON compression reliably and is **not** excluded by default.
-Patterns are matched as substrings against the full model reference (`provider/modelId`). For example:
-- `"kimi"` matches `amazon-bedrock/moonshotai.kimi-k2.5`
-- `"deepseek"` matches `amazon-bedrock/deepseek.v3.2`
-- `"nova"` matches `amazon-bedrock/amazon.nova-micro-v1:0`
 
-**Why exclude certain models?**
-- Open-weight models (Kimi, Nova, DeepSeek) are often more sensitive to synthetic message formats.
-- Kimi K2.5 is excluded by default due to known tool‑call validation failures on Bedrock (violates `^[a-zA-Z0-9_-]+$` regex).
-
-**Note:** GLM‑5 handles TOON compression reliably and is **not** excluded by default.
-
-Can be set globally or per-profile (profile overrides global):
-
-```json
-{
-  "historyCompression": { "enabled": false },
-  "profiles": {
-    "cheap": {
-      "historyCompression": { "enabled": true, "keepLastN": 2 },
-      "high": { ... },
-      "medium": { ... },
-      "low": { ... }
-    }
-  }
-}
-```
+**Why exclude?**
+- Kimi K2.5: Tool-call validation failures on Bedrock (violates `^[a-zA-Z0-9_-]+$` regex)
+- Nova models: More sensitive to synthetic message formats
 
 ### Monitoring
 
-The `/router usage` command shows compression statistics:
+The `/router usage` command shows compression and cache statistics:
 
 ```
-  TOON    12 requests compressed | ↓42% smaller | est. ~4.2k tokens saved
+claude-sonnet-4-6 (medium) ↑5,230 ↓2,140 📦125,000 $0.0234
+                           ↑ fresh  ↑ output  ↑ cached
+
+Token Savings: ~45.2k tokens saved by TOON compression
+Cache Savings: ~125k tokens cached (90% discount)
+
+→ Checkpoint created: context_size (165K >= 160K)
 ```
 
-The status widget shows a `[toon]` flag on decisions where compression was applied.
+**Widget displays:**
+- `[toon]` flag when compression is applied
+- 📦 icon with cached token count when cache hits
+
 
 ## Usage Commands
 
