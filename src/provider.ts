@@ -57,7 +57,7 @@ function detectTOONHistoryEnd(context: Context): number {
 	return Math.min(2, context.messages.length);
 }
 
-function estimateContextTokens(context: Context): number {
+export function estimateContextTokens(context: Context): number {
 	let totalTokens = 0;
 	
 	// Exclude TOON-compressed history from estimation (already compressed)
@@ -562,25 +562,93 @@ export const registerRouterProvider = (
 											};
 										}
 									}
-								} else {
-									// No trigger: reuse frozen checkpoint if available
-									if (state.currentCheckpoint) {
+							} else {
+								// No trigger: reuse frozen checkpoint if available, but check expiry
+								if (state.currentCheckpoint) {
+									const checkpointAge = turnNumber - state.currentCheckpoint.metadata.turn;
+									const currentContextTokens = estimateContextTokens(effectiveContext);
+									const checkpointAgeLimit = compressionCfg.progressive.maxCheckpointAge ?? 50;
+									const checkpointSizeLimit = compressionCfg.progressive.maxCheckpointSize ?? 200_000;
+									
+									// Force refresh if checkpoint is stale or context is too large
+									const isStale = checkpointAge > checkpointAgeLimit;
+									const isOversized = currentContextTokens > checkpointSizeLimit;
+									
+									if (isStale || isOversized) {
+										// Invalidate checkpoint and force fresh compression
+										if (state.currentConfig.debug) {
+											console.log('[ROUTER] Checkpoint expired:', {
+												reason: isStale ? 'age' : 'size',
+												age: checkpointAge,
+												ageLimit: checkpointAgeLimit,
+												contextTokens: currentContextTokens,
+												sizeLimit: checkpointSizeLimit,
+											});
+										}
+										
+										state.currentCheckpoint = undefined;
+										
+										// Force compression with "checkpoint_expired" reason
+										const originalTokens = estimateContextTokens(effectiveContext);
+										const result = compressHistory(effectiveContext, compressionCfg, turnNumber);
+										finalContext = result.context;
+										
+										if (result.stats) {
+											const compressedTokens = estimateContextTokens(finalContext);
+											const tokensSaved = Math.max(0, originalTokens - compressedTokens);
+											
+											result.stats.estimatedOriginalTokens = originalTokens;
+											result.stats.estimatedCompressedTokens = compressedTokens;
+											result.stats.estimatedTokensSaved = tokensSaved;
+											
+											decision.compression = result.stats;
+											decision.compressionTriggerReason = isStale ? "cache_expiry" : "context_size";
+											
+											state.compressionTotalOriginalChars += result.stats.originalChars;
+											state.compressionTotalCompressedChars += result.stats.compressedChars;
+											state.compressionRequestCount++;
+											
+											state.accumulatedOriginalTokens += originalTokens;
+											state.accumulatedCompressedTokens += compressedTokens;
+											state.accumulatedTokensSaved += tokensSaved;
+											
+											// Create new checkpoint
+											const toonBlockContent = result.context.messages
+												.find((m) => m.role === "user" && typeof m.content === "string" && m.content.includes("TOON"))
+												?.content as string | undefined;
+											
+											if (toonBlockContent) {
+												state.currentCheckpoint = {
+													frozenBlock: toonBlockContent,
+													metadata: {
+														turn: turnNumber,
+														range: [0, toonBlockContent.length],
+														stats: result.stats,
+														triggerReason: isStale ? "cache_expiry" : "context_size",
+														timestamp: now,
+													},
+												};
+											}
+										}
+									} else {
+										// Checkpoint still valid, reuse it
 										const keepLastN = compressionCfg.keepLastN ?? 4;
 										const recentMessages = effectiveContext.messages.slice(-keepLastN);
 										finalContext = {
 											...effectiveContext,
-									messages: [
-										{
-											role: "user",
-											content: state.currentCheckpoint.frozenBlock,
-											timestamp: state.currentCheckpoint.metadata.timestamp,
-										},
-										...recentMessages,
-									],
-								};
+											messages: [
+												{
+													role: "user",
+													content: state.currentCheckpoint.frozenBlock,
+													timestamp: state.currentCheckpoint.metadata.timestamp,
+												},
+												...recentMessages,
+											],
+										};
 										decision.compressionCacheHit = true;
 									}
 								}
+							}
 							} else {
 								// Static/dynamic TOON mode (backward compatible)
 								const shouldFreeze = compressionCfg.freezeAfter !== undefined && turnNumber === compressionCfg.freezeAfter;

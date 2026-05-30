@@ -1,6 +1,6 @@
 # @cakriwut/omp-model-router
 
-Cost-optimized model routing for Oh-My-Pi — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Optionally compresses conversation history using TOON format to reduce input tokens.
+Cost-optimized model routing for Oh-My-Pi — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Optionally compresses conversation history using TOON format to reduce input tokens. **NEW**: Integrates with RTK (Rust Token Killer) for 60-90% token savings on tool outputs.
 
 ## Structure
 
@@ -14,9 +14,9 @@ src/
 ├── state.ts              # Session state + budget tracking
 ├── ui.ts                 # Status widget rendering
 ├── context-compression.ts # TOON history compression
+├── rtk-integration.ts     # RTK (Rust Token Killer) integration
 ├── version-check.ts      # Auto-upgrade detection
 ├── constants.ts          # Shared constants
-└── types.ts              # Type definitions
 
 test/                     # Test suite (bun test)
 ```
@@ -26,8 +26,8 @@ test/                     # Test suite (bun test)
 - **Intelligent Routing**: Classifies prompts into High/Medium/Low tiers based on complexity
 - **Cost Optimization**: Automatically selects cheaper models for simple tasks
 - **History Compression (TOON)**: Compresses old conversation history, saving 30–50% of input tokens
+- **RTK Integration**: Reduces tool output tokens by 60-90% (requires `rtk` binary)
 - **Budget Tracking**: Enforces session budgets and downgrades tiers when exceeded
-- **Configurable Profiles**: Auto, Deep, Cheap, Hybrid, OSS profiles
 
 ## Usage
 
@@ -50,9 +50,15 @@ Config file: `~/.omp/agent/model-router.json`
   "defaultProfile": "auto",
   "debug": false,
   "maxSessionBudget": 5.0,
+  "enableRtk": true,
   "historyCompression": {
     "enabled": true,
     "keepLastN": 4,
+    "progressive": {
+      "enabled": true,
+      "maxCheckpointAge": 50,
+      "maxCheckpointSize": 200000
+    },
     "excludeModels": ["kimi", "nova"]
   },
   "rules": [
@@ -71,20 +77,30 @@ bun run deploy:dev  # Deploy to ~/.omp/agent/extensions/model-router for local t
 ```
 
 After deploying, run `/reload` in OMP to pick up changes.
+
 ## Pitfalls (read before editing)
 
 ### Adding a new top-level field to `RouterConfig`
 
-`mergeConfig()` in `src/config.ts` is **explicit field-by-field**, not spread-based. New fields silently default to `undefined` if you forget to wire them through every layer. There is **no compile-time error** — TS treats missing optional fields as valid.
+**As of v0.5.2**, the config system uses **spread-based preservation** — new optional fields automatically flow through `mergeConfig` and `normalizeConfig`. You only need to update **two locations**:
 
-When adding a field `foo` to `RouterConfig`, update **all four** of these:
+1. **`src/types.ts`** — Add `foo?: FooType` to the `RouterConfig` interface
+2. **`src/config.ts` `FALLBACK_CONFIG`** — Add the default value (optional, but recommended)
 
-1. `src/types.ts` — add `foo?: FooType` to the `RouterConfig` interface
-2. `src/config.ts` `FALLBACK_CONFIG` — add the default value
-3. `src/config.ts` `parseConfigFile()` — read from `raw`, validate, include in returned `config: { ... foo }`
-4. `src/config.ts` `mergeConfig()` — add `foo: override.foo ?? base.foo` in the returned object
+**That's it.** The `normalizeConfig` function uses `{ ...raw, ...overrides }` so any field in `raw` is preserved. The `mergeConfig` function uses `{ ...base, ...override }` so values flow through.
 
-**Step 4 is the one that gets missed.** Symptom: field shows up in raw JSON parse but `loadRouterConfig().config.foo` is `undefined`, and any runtime that gates on `config.foo?.enabled` silently no-ops with no error. Tests pass because they don't exercise the merge path.
+**Verification** — Run the regression test:
+
+```bash
+bun test test/config-field-preservation.test.ts
+```
+
+This test catches:
+- Boolean fields not flowing through
+- Number fields being dropped
+- String fields being lost
+- Nested objects (`historyCompression`, `progressive`) being incomplete
+- **Arbitrary new fields being preserved** (future-proofing test)
 
 **Quick verification** before assuming wiring works:
 
@@ -92,7 +108,7 @@ When adding a field `foo` to `RouterConfig`, update **all four** of these:
 bun -e "import {loadRouterConfig} from './src/config.ts'; console.log(JSON.stringify(loadRouterConfig(process.cwd()).config.foo))"
 ```
 
-If that prints `undefined` while the JSON file contains `foo`, it's the `mergeConfig` bug.
+If that prints `undefined` while the JSON file contains `foo`, the field is being dropped somewhere — but with the spread-based normalize, this should never happen.
 
 ### Adding extension hooks
 

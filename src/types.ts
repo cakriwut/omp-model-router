@@ -57,6 +57,16 @@ export interface HistoryCompressionConfig {
 		 * Used to detect cache expiry. Default: 300 (5 minutes).
 		 */
 		timeThreshold?: number;
+		/**
+		 * Maximum age of a checkpoint in turns before forcing refresh.
+		 * Prevents stale checkpoints from being reused indefinitely. Default: 50.
+		 */
+		maxCheckpointAge?: number;
+		/**
+		 * Maximum context size in tokens before forcing checkpoint refresh.
+		 * Prevents bloated checkpoints from being reused. Default: 200000.
+		 */
+		maxCheckpointSize?: number;
 	};
 }
 export interface AutoUpgradeConfig {
@@ -141,6 +151,14 @@ export interface RouterConfig {
 	autoUpgrade?: AutoUpgradeConfig;
 	/** Calibration system for async LLM classifier with learning. */
 	calibration?: CalibrationConfig;
+	/**
+	 * Enable RTK (Rust Token Killer) integration for token-optimized command rewrites.
+	 * Requires `rtk` binary in PATH (install: brew install rtk).
+	 * Reduces token consumption by 60-90% across 100+ commands.
+	 * See: https://github.com/rtk-ai/rtk
+	 * Default: false.
+	 */
+	enableRtk?: boolean;
 }
 
 export interface RoutingDecisionUsage {

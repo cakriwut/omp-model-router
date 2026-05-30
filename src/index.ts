@@ -20,6 +20,7 @@ import {
 	onTurnEnd as calibrationTurnEnd,
 } from "./calibration/hooks";
 import { checkForUpdate } from "./version-check";
+import { registerRtkIntegration } from "./rtk-integration";
 
 const routerExtension = (pi: ExtensionAPI) => {
 	pi.setLabel("Model Router");
@@ -163,6 +164,13 @@ const routerExtension = (pi: ExtensionAPI) => {
 	actions.reloadConfig();
 
 	registerCommands(pi, state, actions);
+	
+	// Register RTK integration if enabled and binary available
+	registerRtkIntegration(
+		pi, 
+		state.currentConfig.enableRtk ?? false,
+		state.currentConfig.debug ?? false
+	);
 
 	pi.on("session_start", async (_event, ctx) => {
 		actions.reloadConfig();

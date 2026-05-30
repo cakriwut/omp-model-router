@@ -18,6 +18,7 @@ export const ROUTER_TIERS = ["high", "medium", "low"] as const;
 export const FALLBACK_CONFIG: RouterConfig = {
 	defaultProfile: "auto",
 	debug: false,
+	enableRtk: false,  // RTK integration disabled by default (opt-in)
 	profiles: {
 		auto: {
 			high: { model: "anthropic/claude-sonnet-4-5", thinking: "high" as ThinkingLevel },
@@ -344,21 +345,32 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 	}
 
 
+	// Start with all fields from raw (preserves new optional fields automatically)
+	// Then override with normalized/validated values.
+	// This is the SINGLE SOURCE OF TRUTH for field preservation —
+	// any new optional field added to RouterConfig flows through automatically.
+	const normalizedConfig: RouterConfig = {
+		...raw,
+		// Override with normalized values for fields that need validation
+		defaultProfile,
+		debug: typeof raw.debug === "boolean" ? raw.debug : false,
+		phaseBias,
+		largeContextThreshold,
+		maxSessionBudget,
+		rules: rules.length > 0 ? rules : undefined,
+		profiles: normalizedProfiles,
+		autoUpgrade,
+		calibration,
+		// Boolean fields with explicit type validation
+		routerEnabled: typeof raw.routerEnabled === "boolean" ? raw.routerEnabled : undefined,
+		// String fields with validation
+		classifierModel,
+		// historyCompression: pass through raw (already validated structurally)
+		historyCompression: raw.historyCompression,
+	};
+
 	return {
-		config: {
-			routerEnabled: typeof raw.routerEnabled === "boolean" ? raw.routerEnabled : undefined,
-			defaultProfile,
-			debug: typeof raw.debug === "boolean" ? raw.debug : false,
-			classifierModel,
-			phaseBias,
-			largeContextThreshold,
-			maxSessionBudget,
-			rules: rules.length > 0 ? rules : undefined,
-			historyCompression: raw.historyCompression,
-			profiles: normalizedProfiles,
-			autoUpgrade,
-			calibration,
-		},
+		config: normalizedConfig,
 		warnings,
 	};
 };

@@ -7,6 +7,7 @@
   "phaseBias": 0.5,
   "maxSessionBudget": 2.0,
   "largeContextThreshold": 100000,
+  "enableRtk": false,
   "rules": [
     {
       "matches": [
@@ -84,8 +85,15 @@
     }
   },
   "historyCompression": {
-    "enabled": false,
+    "enabled": true,
     "keepLastN": 4,
+    "progressive": {
+      "enabled": true,
+      "contextThreshold": 0.8,
+      "timeThreshold": 300,
+      "maxCheckpointAge": 50,
+      "maxCheckpointSize": 200000
+    },
     "excludeModels": ["kimi", "deepseek", "nova"]
   },
   "autoUpgrade": {
@@ -93,7 +101,6 @@
     "threshold": 2,
     "tools": ["find", "search", "edit", "ast_grep"]
   }
-  },
   "calibration": {
     "enabled": false,
     "mode": "telemetry",
