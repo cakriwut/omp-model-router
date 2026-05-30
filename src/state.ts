@@ -250,11 +250,9 @@ export class RouterState {
 				: [];
 			this.lastNonRouterModel =
 				savedState.lastNonRouterModel ?? this.lastNonRouterModel;
-		this.accumulatedCost = savedState.accumulatedCost ?? 0;
-		this.accumulatedOriginalTokens = savedState.accumulatedOriginalTokens ?? 0;
-		this.accumulatedCompressedTokens = savedState.accumulatedCompressedTokens ?? 0;
-		this.accumulatedTokensSaved = savedState.accumulatedTokensSaved ?? 0;
-		this.accumulatedCacheReadTokens = savedState.accumulatedCacheReadTokens ?? 0;
+			// Accumulated metrics (cost, tokens, cache) are session-scoped and
+			// intentionally NOT restored from persisted state. They always start at 0
+			// for each new session to accurately reflect the current session's usage.
 		}
 	}
 
