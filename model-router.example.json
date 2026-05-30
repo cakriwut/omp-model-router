@@ -100,7 +100,7 @@
     "enabled": true,
     "threshold": 2,
     "tools": ["find", "search", "edit", "ast_grep"]
-  }
+  },
   "calibration": {
     "enabled": false,
     "mode": "telemetry",

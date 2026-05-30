@@ -24,6 +24,7 @@ test/                     # Test suite (bun test)
 ## Key Features
 
 - **Intelligent Routing**: Classifies prompts into High/Medium/Low tiers based on complexity
+- **Adaptive Calibration**: LLM-powered classifier for routing decisions (when enabled)
 - **Cost Optimization**: Automatically selects cheaper models for simple tasks
 - **History Compression (TOON)**: Compresses old conversation history, saving 30–50% of input tokens
 - **RTK Integration**: Reduces tool output tokens by 60-90% (requires `rtk` binary)
@@ -61,12 +62,35 @@ Config file: `~/.omp/agent/model-router.json`
     },
     "excludeModels": ["kimi", "nova"]
   },
-  "rules": [
     { "matches": ["deploy", "production"], "tier": "high" },
     { "matches": ["changelog", "summarize"], "tier": "low" }
-  ]
+  ],
+  "calibration": {
+    "enabled": true,
+    "mode": "adaptive",
+    "warmupTurns": 5,
+    "classifierModel": "anthropic/claude-3-haiku-20240307",
+    "overrideThreshold": 0.65,
+    "traceEnabled": false,
+    "useGlobalPrior": true,
+    "globalPriorWeight": 0.1
+  }
 }
 ```
+## Calibration Modes
+
+The calibration system allows you to train and use an LLM classifier for routing decisions:
+
+- **`telemetry` mode** (default): Classifier runs in the background for data collection only. Heuristic routing decisions are used.
+- **`adaptive` mode**: Classifier controls routing decisions. The LLM evaluates each prompt and overrides heuristic classification (unless a tier is pinned, context-triggered, or rule-matched).
+
+When `calibration.enabled` is `true` and `calibration.mode` is `"adaptive"`, the `classifierModel` (e.g., `anthropic/claude-3-haiku-20240307`) is used for real routing decisions instead of the heuristic. The telemetry classifier still runs in the background to track accuracy.
+
+**Use cases:**
+- Start with `telemetry` to collect data and tune the heuristic
+- Switch to `adaptive` when you trust the classifier and want maximum accuracy
+- Use a cheap, fast model (e.g., Haiku) as the classifier to minimize overhead
+
 
 ## Development
 

@@ -373,6 +373,14 @@ export const registerRouterProvider = (
 						state.accumulatedCost >= state.currentConfig.maxSessionBudget;
 
 					// ── Resolve routing decision (heuristic + overrides) ──────────────
+					// When calibration is in adaptive mode, use calibration.classifierModel for routing
+					const effectiveClassifierModel =
+						state.currentConfig.calibration?.enabled &&
+						state.currentConfig.calibration?.mode === "adaptive" &&
+						state.currentConfig.calibration?.classifierModel
+							? state.currentConfig.calibration.classifierModel
+							: state.currentConfig.classifierModel;
+
 					const decision = await resolveRouting(
 						{
 							context,
@@ -388,7 +396,7 @@ export const registerRouterProvider = (
 							thinkingOverrides: state.thinkingByProfile[model.id],
 							phaseBias: state.currentConfig.phaseBias ?? 0.5,
 							rules: state.currentConfig.rules,
-							classifierModel: state.currentConfig.classifierModel,
+							classifierModel: effectiveClassifierModel,
 						},
 					);
 					// ── Auto-upgrade override (one-shot) ──────────────────────────────
