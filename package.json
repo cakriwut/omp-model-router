@@ -11,6 +11,9 @@
   },
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "bin": {
+    "omp-router": "./src/cli/index.ts"
+  },
   "files": [
     "src",
     "model-router.example.json",
