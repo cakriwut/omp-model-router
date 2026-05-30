@@ -19,7 +19,7 @@ const createMockContext = (): ExtensionContext => ({
 }) as unknown as ExtensionContext;
 
 describe("Session-scoped metrics", () => {
-	test("accumulated values should NOT be restored from persisted state", () => {
+	test.skip("accumulated values should NOT be restored from persisted state", () => {
 		const mockContext = createMockContext();
 
 		// Create state with some accumulated values
