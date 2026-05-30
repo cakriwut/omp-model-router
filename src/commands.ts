@@ -22,8 +22,10 @@ import {
 	formatModelRef,
 	formatDecision,
 	renderUsageReport,
+	type CompressionDiagnostic,
 } from "./ui";
 import { getCurrentVersion, checkForUpdate } from "./version-check";
+import { resolveCompressionConfig } from "./context-compression";
 
 // ─── Config set helpers ───────────────────────────────────────────────────────
 
@@ -459,13 +461,62 @@ export const registerCommands = (
 			"info",
 		);
 	};
-
 	const handleUsage = async (_args: string[], ctx: ExtensionContext) => {
 		const profile = state.currentConfig.profiles[state.selectedProfile];
 		if (!profile) {
 			ctx.ui.notify("No active router profile.", "error");
 			return;
 		}
+
+		// ── Resolve effective compression config + live diagnostic ─────────
+		const compressionCfg = resolveCompressionConfig(
+			state.currentConfig.historyCompression,
+			profile.historyCompression,
+		);
+
+		let diagnostic: CompressionDiagnostic | undefined;
+		if (compressionCfg?.enabled && state.compressionRequestCount === 0) {
+			// Resolve high-tier context window (same logic as provider.ts)
+			let contextWindow = 1_000_000;
+			try {
+				const { provider, modelId } = parseCanonicalModelRef(profile.high.model);
+				const m = ctx.modelRegistry.find(provider, modelId);
+				if (m?.contextWindow) contextWindow = m.contextWindow;
+			} catch { /* ignore */ }
+
+			if (compressionCfg.progressive?.enabled) {
+				const ctxThreshold = compressionCfg.progressive.contextThreshold ?? 0.8;
+				const timeThresholdSeconds = compressionCfg.progressive.timeThreshold ?? 300;
+				// Approximate current context tokens from accumulated stats.
+				// On a fresh session with 0 compressions the input tokens are unknown
+				// here, so we report 0 — accurate enough as a "we are well under".
+				const ctxTokens = state.accumulatedOriginalTokens || 0;
+				const sinceLast = state.lastTurnTimestamp
+					? Math.floor((Date.now() - state.lastTurnTimestamp) / 1000)
+					: 0;
+				diagnostic = {
+					mode: "progressive",
+					contextTokens: ctxTokens,
+					contextThresholdTokens: Math.floor(ctxThreshold * contextWindow),
+					secondsSinceLastTurn: sinceLast,
+					timeThresholdSeconds,
+				};
+			} else if (compressionCfg.freezeAfter !== undefined) {
+				diagnostic = {
+					mode: "static",
+					currentTurn: state.debugHistory.length,
+					freezeAfter: compressionCfg.freezeAfter,
+				};
+			} else {
+				// Default mode: compresses when message count > keepLastN
+				diagnostic = {
+					mode: "default",
+					messageCount: state.debugHistory.length,
+					keepLastN: compressionCfg.keepLastN ?? 4,
+				};
+			}
+		}
+
 		const report = renderUsageReport({
 			theme: ctx.ui.theme,
 			selectedProfile: state.selectedProfile,
@@ -480,10 +531,11 @@ export const registerCommands = (
 			maxSessionBudget: state.currentConfig.maxSessionBudget,
 			modelRegistry: ctx.modelRegistry,
 			compression: {
-				enabled: state.currentConfig.historyCompression?.enabled ?? false,
+				enabled: compressionCfg?.enabled ?? false,
 				requestCount: state.compressionRequestCount,
 				totalOriginalChars: state.compressionTotalOriginalChars,
 				totalCompressedChars: state.compressionTotalCompressedChars,
+				diagnostic,
 			},
 		});
 		ctx.ui.notify(report, "info");

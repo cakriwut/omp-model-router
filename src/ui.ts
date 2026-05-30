@@ -458,6 +458,31 @@ export const updateStatus = (
 
 // ─── Usage report rendering ───────────────────────────────────────────────────
 
+export interface CompressionDiagnostic {
+	mode: "progressive" | "static" | "default";
+	/** Progressive mode: context tokens estimate vs threshold. */
+	contextTokens?: number;
+	contextThresholdTokens?: number;
+	/** Progressive mode: seconds since last turn vs timeout. */
+	secondsSinceLastTurn?: number;
+	timeThresholdSeconds?: number;
+	/** Static mode: current turn vs freezeAfter. */
+	currentTurn?: number;
+	freezeAfter?: number;
+	/** Default mode: messages in history vs keepLastN. */
+	messageCount?: number;
+	keepLastN?: number;
+}
+
+export interface CompressionUsageInput {
+	enabled: boolean;
+	requestCount: number;
+	totalOriginalChars: number;
+	totalCompressedChars: number;
+	/** Live diagnostic info shown when no compression has happened yet. */
+	diagnostic?: CompressionDiagnostic;
+}
+
 export interface UsageReportInput {
 	theme: Theme;
 	selectedProfile: string;
@@ -471,12 +496,7 @@ export interface UsageReportInput {
 	accumulatedCacheReadTokens?: number;
 	maxSessionBudget?: number;
 	modelRegistry: { find(provider: string, modelId: string): { cost?: unknown } | undefined };
-	compression?: {
-		enabled: boolean;
-		requestCount: number;
-		totalOriginalChars: number;
-		totalCompressedChars: number;
-	};
+	compression?: CompressionUsageInput;
 }
 
 /**
@@ -616,7 +636,36 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 				`  ${theme.fg("accent", "TOON")}    ${comp.requestCount} requests compressed | ${theme.fg("success", `↓${savingsPct}%`)} smaller | est. ~${savedK}k tokens saved`,
 			);
 		} else {
-			lines.push(`  ${theme.fg("accent", "TOON")}    enabled (no compressions yet — history too short)`);
+			const d = comp.diagnostic;
+			const tag = `  ${theme.fg("accent", "TOON")}    `;
+			if (!d) {
+				lines.push(`${tag}enabled (no compressions yet)`);
+			} else if (d.mode === "progressive") {
+				const ctxNow = d.contextTokens ?? 0;
+				const ctxMax = d.contextThresholdTokens ?? 0;
+				const ctxKNow = (ctxNow / 1000).toFixed(1);
+				const ctxKMax = (ctxMax / 1000).toFixed(1);
+				const elapsed = d.secondsSinceLastTurn ?? 0;
+				const maxElapsed = d.timeThresholdSeconds ?? 0;
+				lines.push(
+					`${tag}enabled — progressive mode (no triggers yet)`,
+					`         context ${ctxKNow}k / ${ctxKMax}k tokens · cache ${elapsed}s / ${maxElapsed}s timeout`,
+				);
+			} else if (d.mode === "static") {
+				const turn = d.currentTurn ?? 0;
+				const freeze = d.freezeAfter ?? 0;
+				lines.push(
+					`${tag}enabled — static mode (freezes at turn ${freeze})`,
+					`         current turn ${turn} / ${freeze} — compression freezes when reached`,
+				);
+			} else {
+				const msgs = d.messageCount ?? 0;
+				const keep = d.keepLastN ?? 4;
+				lines.push(
+					`${tag}enabled — default mode (compresses when history > keepLastN)`,
+					`         ${msgs} messages in history · keepLastN=${keep} (need at least ${keep + 1})`,
+				);
+			}
 		}
 	}
 
