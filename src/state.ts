@@ -141,7 +141,8 @@ export class RouterState {
 	}
 
 	recordDecision(decision: RoutingDecision): void {
-		this.debugHistory = [...this.debugHistory, decision].slice(-MAX_DEBUG_HISTORY);
+		const limit = this.currentConfig.debugHistoryLimit ?? MAX_DEBUG_HISTORY;
+		this.debugHistory = [...this.debugHistory, decision].slice(-limit);
 	}
 
 	getThinkingOverride(
@@ -241,7 +242,7 @@ export class RouterState {
 			this.debugEnabled = savedState.debugEnabled ?? this.debugEnabled;
 			this.widgetEnabled = savedState.widgetEnabled ?? this.widgetEnabled;
 			this.debugHistory = savedState.debugHistory
-				? [...savedState.debugHistory].slice(-MAX_DEBUG_HISTORY)
+				? [...savedState.debugHistory].slice(-(this.currentConfig.debugHistoryLimit ?? MAX_DEBUG_HISTORY))
 				: [];
 			this.lastNonRouterModel =
 				savedState.lastNonRouterModel ?? this.lastNonRouterModel;

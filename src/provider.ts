@@ -492,6 +492,7 @@ export const registerRouterProvider = (
 									timeThresholdSeconds,
 								);
 								
+								
 								if (state.currentConfig.debug && triggerReason) {
 									const compressionDebugData = {
 										reason: triggerReason,
@@ -504,10 +505,14 @@ export const registerRouterProvider = (
 										turnNumber,
 										messageCount: effectiveContext.messages.length,
 									};
-									// Log to session for auditability
-									ctx.sessionManager.appendCustomEntry('router:compression-trigger', compressionDebugData);
-									// Also log to console for real-time visibility
+									
+									// Always log to console for real-time visibility
 									console.log('[ROUTER] Compression triggered:', compressionDebugData);
+									
+									// Only persist to session JSONL if debugVerbose is enabled
+									if (state.currentConfig.debugVerbose) {
+										ctx.sessionManager.appendCustomEntry('router:compression-trigger', compressionDebugData);
+									}
 								}
 								
 								if (triggerReason) {

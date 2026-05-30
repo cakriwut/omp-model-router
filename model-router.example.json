@@ -2,6 +2,8 @@
   "routerEnabled": true,
   "defaultProfile": "auto",
   "debug": false,
+  "debugVerbose": false,
+  "debugHistoryLimit": 12,
   "phaseBias": 0.5,
   "maxSessionBudget": 2.0,
   "largeContextThreshold": 100000,

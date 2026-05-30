@@ -124,6 +124,10 @@ export interface RouterConfig {
 	routerEnabled?: boolean;
 	defaultProfile?: string;
 	debug?: boolean;
+	/** Opt-in for verbose session JSONL logging (compression triggers, etc). Default: false. */
+	debugVerbose?: boolean;
+	/** Maximum number of routing decisions to keep in debugHistory. Default: 12. */
+	debugHistoryLimit?: number;
 	classifierModel?: string;
 	phaseBias?: number;
 	largeContextThreshold?: number;

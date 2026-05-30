@@ -511,7 +511,9 @@ export const registerCommands = (
 				"  phaseBias <float>              Phase bias weight (0-1)",
 				"  budget <float>                 Max session budget ($)",
 				"  contextThreshold <int>         Large context threshold (tokens)",
-				"  debug <on|off>                 Debug mode",
+				"  debug <on|off>                 Debug mode (console logging)",
+				"  debugVerbose <on|off>          Verbose debug (session JSONL logging)",
+				"  debugHistoryLimit <int>        Max routing decisions to keep (default: 12)",
 				"  defaultProfile <name>          Default profile name",
 				"  compression <on|off>           Enable/disable TOON compression",
 				"  compression.keepLastN <int>    Messages to keep uncompressed",
@@ -751,6 +753,7 @@ export const registerCommands = (
 					if (!hasTrailingSpace || subArgs.length <= 1) {
 						const SET_KEY_LIST = [
 							"routerEnabled", "phaseBias", "budget", "contextThreshold", "debug",
+							"debugVerbose", "debugHistoryLimit",
 							"defaultProfile", "compression", "compression.keepLastN",
 						];
 						const items = SET_KEY_LIST
@@ -760,7 +763,7 @@ export const registerCommands = (
 					}
 					const setKey = subArgs[0];
 					const valPrefix = subArgs[1] ?? "";
-					if (setKey === "routerEnabled" || setKey === "debug" || setKey === "compression") {
+					if (setKey === "routerEnabled" || setKey === "debug" || setKey === "debugVerbose" || setKey === "compression") {
 						const items = ["on", "off"].filter((v) => v.startsWith(valPrefix))
 							.map((v) => ({ value: `set ${setKey} ${v}`, label: v }));
 						return items.length > 0 ? items : null;
