@@ -11,6 +11,7 @@ Cost-optimized model routing for [Oh-My-Pi](https://github.com/can1357/oh-my-pi)
 
 ### 🎯 Intelligent Routing
 - **Tier-based selection**: Automatically classifies prompts as High/Medium/Low complexity
+- **Adaptive calibration**: Optional LLM-powered classifier for routing decisions (see [Calibration Modes](#calibration-modes))
 - **Configurable profiles**: Auto, Deep, Cheap, Hybrid, OSS (bring your own!)
 - **Manual overrides**: Pin a tier when you need control
 - **Heuristic refinement**: Detects clarifications, code edits, planning, and explicit speed requests
@@ -77,7 +78,6 @@ Create or edit `~/.omp/agent/model-router.json`:
       "timeThreshold": 300
     },
     "excludeModels": ["kimi", "nova"]
-  },
   "rules": [
     {
       "matches": ["deploy", "production", "release"],
@@ -89,6 +89,13 @@ Create or edit `~/.omp/agent/model-router.json`:
       "tier": "low"
     }
   ],
+  "calibration": {
+    "enabled": false,
+    "mode": "telemetry",
+    "classifierModel": "anthropic/claude-3-haiku-20240307",
+    "warmupTurns": 5,
+    "traceEnabled": false
+  },
   "profiles": {
     "auto": {
       "high": { "model": "anthropic/claude-sonnet-4-5", "thinking": "high" },
@@ -99,6 +106,7 @@ Create or edit `~/.omp/agent/model-router.json`:
 }
 ```
 
+
 ### Key Options
 
 | Field | Description | Default |
@@ -107,6 +115,9 @@ Create or edit `~/.omp/agent/model-router.json`:
 | `defaultProfile` | Active profile on start | `"auto"` |
 | `debug` | Enable debug logging to session JSONL | `false` |
 | `maxSessionBudget` | Max $ spend per session (triggers downgrade when exceeded) | `5.0` |
+| `calibration.enabled` | Enable calibration system | `false` |
+| `calibration.mode` | `"telemetry"` (data only) or `"adaptive"` (controls routing) | `"telemetry"` |
+| `calibration.classifierModel` | Model for LLM classifier (e.g., `anthropic/claude-3-haiku-20240307`) | - |
 | `historyCompression.enabled` | Enable TOON compression | `true` |
 | `historyCompression.progressive.enabled` | Use progressive mode (trigger-based) | `true` |
 | `historyCompression.progressive.contextThreshold` | Context size trigger (0.0-1.0) | `0.8` (80%) |
@@ -204,6 +215,68 @@ At turn 5 (configurable), the router creates a **frozen checkpoint** — a TOON-
 **Widget displays:**
 - `[toon]` flag when compression is applied
 - 📦 icon with cached token count when cache hits
+
+---
+
+## Calibration Modes
+
+The calibration system allows you to use an LLM classifier for routing decisions instead of the heuristic.
+
+### Telemetry Mode (default)
+
+```json
+{
+  "calibration": {
+    "enabled": true,
+    "mode": "telemetry",
+    "classifierModel": "anthropic/claude-3-haiku-20240307"
+  }
+}
+```
+
+- Classifier runs in the background for **data collection only**
+- Heuristic routing decisions are used for actual routing
+- Tracks accuracy: heuristic vs LLM predictions
+- Use this to evaluate classifier performance before switching to adaptive mode
+
+### Adaptive Mode
+
+```json
+{
+  "calibration": {
+    "enabled": true,
+    "mode": "adaptive",
+    "classifierModel": "anthropic/claude-3-haiku-20240307"
+  }
+}
+```
+
+- Classifier **controls routing decisions**
+- LLM evaluates each prompt and overrides heuristic classification
+- Bypassed when tier is pinned, context-triggered, or rule-matched
+- Telemetry classifier still runs in background for accuracy tracking
+
+### Use Cases
+
+**Start with `telemetry`:**
+- Collect data and tune the heuristic
+- Validate classifier accuracy before committing
+- No impact on routing performance
+
+**Switch to `adaptive`:**
+- When you trust the classifier
+- Want maximum routing accuracy
+- Use a cheap, fast model (e.g., Haiku) to minimize overhead
+
+### Debug Messages
+
+When `debug: true`, calibration emits messages like:
+```
+[calibration] Initialized (mode: adaptive, warmup: 5)
+[calibration] h=medium, llm=high ✗ (42 comparisons, 1200ms)
+```
+
+To hide these messages: set `"debug": false` and run `/reload`.
 
 
 ## Usage Commands
