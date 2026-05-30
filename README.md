@@ -234,21 +234,54 @@ After deploying, run `/reload` in OMP to pick up changes.
 
 ## Publishing
 
-Automated release workflow (bump → tag → test → publish → GitHub release):
+Automated release workflow using **GitHub Actions**:
+
+### Local Release Script
 
 ```bash
-bun run release:patch  # 0.2.1 → 0.2.2
-bun run release:minor  # 0.2.1 → 0.3.0
-bun run release:major  # 0.2.1 → 1.0.0
+bun run release:patch  # 0.5.0 → 0.5.1
+bun run release:minor  # 0.5.0 → 0.6.0
+bun run release:major  # 0.5.0 → 1.0.0
 ```
 
-The release script:
-1. Runs full test suite
-2. Bumps version in `package.json`
-3. Commits and tags
-4. Pushes to GitHub
-5. Publishes to npm (so `npx @cakriwut/omp-model-router@X.Y.Z` resolves)
-6. Creates GitHub release with changelog
+The script:
+1. ✅ Runs full test suite
+2. ✅ Bumps version in `package.json`
+3. ✅ Commits and pushes to GitHub
+4. ✅ Creates git tag and pushes it
+5. 🤖 **Triggers GitHub Actions workflow**
+
+### GitHub Actions Workflow
+
+When a `v*.*.*` tag is pushed, `.github/workflows/publish.yml` automatically:
+1. ✅ Runs tests on CI
+2. ✅ Verifies package.json version matches tag
+3. ✅ Publishes to NPM (so `npx @cakriwut/omp-model-router@X.Y.Z` resolves)
+4. ✅ Creates GitHub release with auto-generated notes
+
+**Setup required (one-time):**
+
+1. **Create NPM automation token:**
+   ```bash
+   npm login
+   # Go to https://www.npmjs.com/settings/<your-username>/tokens
+   # Create new "Automation" token (for CI/CD)
+   ```
+
+2. **Add NPM_TOKEN to GitHub Secrets:**
+   ```
+   Repository Settings → Secrets and variables → Actions → New repository secret
+   Name: NPM_TOKEN
+   Value: <your-npm-automation-token>
+   ```
+
+**Manual release** (if GitHub Actions fails):
+
+```bash
+npm login
+npm publish --access public
+gh release create v0.5.1 --generate-notes
+```
 
 ---
 
