@@ -30,8 +30,20 @@ export interface SessionCalibration {
 	/** Heuristic tier for pending agent (to compare when result arrives) */
 	pendingHeuristicTier?: RouterTier;
 
+	/** Heuristic phase + reasoning captured at spawn time (for trace) */
+	pendingHeuristicPhase?: RouterPhase;
+	pendingHeuristicReasoning?: string;
+	pendingRuleMatched?: boolean;
+
+	/** Captured user prompt at spawn time (truncated 500 chars) */
+	pendingPrompt?: string;
+	pendingTurnIndex?: number;
+
 	/** Age of pending agent (turns since spawned) */
 	pendingAgentAge?: number;
+
+	/** Spawn timestamp for latency measurement */
+	pendingSpawnTime?: number;
 
 	/** Path to trace JSONL file (if traceEnabled) */
 	traceFilePath?: string;
