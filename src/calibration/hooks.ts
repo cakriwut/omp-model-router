@@ -78,11 +78,11 @@ export async function onSessionBranch(
 }
 
 /**
- * turn_start: Poll pending classifier; timeout stale agents
+ * turn_start: Increment turn counter (no polling — results self-record)
  */
 export async function onTurnStart(
 	_event: unknown,
-	ctx: ExtensionContext,
+	_ctx: ExtensionContext,
 	state: RouterState,
 	config: RouterConfig,
 ): Promise<void> {
@@ -90,49 +90,22 @@ export async function onTurnStart(
 		return;
 	}
 
-	const cal = state.calibration;
-	cal.turnsProcessed++;
-
-	if (cal.pendingAgentId && cal.pendingAgentAge !== undefined) {
-		cal.pendingAgentAge++;
-
-		if (cal.pendingAgentAge > 2) {
-			const ageMs = cal.pendingSpawnTime ? Date.now() - cal.pendingSpawnTime : 0;
-			abandonClassifier(cal.pendingAgentId);
-			cal.llmCallsFailed++;
-			writePendingAsFailed(cal, "abandoned-stale", ageMs);
-			clearPending(cal);
-
-			if (state.debugEnabled) {
-				ctx.ui.notify(
-					`[calibration] Abandoned stale classifier (age >2 turns, ${ageMs}ms)`,
-					"warning",
-				);
-			}
-		}
-	}
-
-	if (cal.pendingAgentId) {
-		await tryPollClassifier(cal.pendingAgentId, ctx, state);
-	}
+	state.calibration.turnsProcessed++;
 }
 
 /**
- * turn_end: Poll pending classifier (first chance)
+ * turn_end: No-op (classifier results handled via promise)
  */
 export async function onTurnEnd(
 	_event: unknown,
-	ctx: ExtensionContext,
-	state: RouterState,
+	_ctx: ExtensionContext,
+	_state: RouterState,
 	config: RouterConfig,
 ): Promise<void> {
-	if (!config.calibration?.enabled || !state.calibration) {
+	if (!config.calibration?.enabled) {
 		return;
 	}
-
-	if (state.calibration.pendingAgentId) {
-		await tryPollClassifier(state.calibration.pendingAgentId, ctx, state);
-	}
+	// No polling — classifier promises record results autonomously
 }
 
 /**
@@ -158,8 +131,8 @@ export async function onSessionEnd(
 
 /**
  * Spawn async classifier after routing decision.
- * Captures the actual user prompt + heuristic context at spawn time so the
- * deferred trace write (after verdict arrives) has real data.
+ * Captures the actual user prompt + heuristic context at spawn time.
+ * Result records itself via promise when LLM verdict arrives.
  */
 export function spawnClassifierForTurn(
 	state: RouterState,
@@ -170,15 +143,13 @@ export function spawnClassifierForTurn(
 	if (!config.calibration?.enabled || !state.calibration) return;
 
 	const cal = state.calibration;
-	if (cal.pendingAgentId) return;
+	if (cal.pendingAgentId) return; // skip if already pending
 	if (!config.calibration.classifierModel) return;
 
 	const ctx = state.lastExtensionContext;
 	if (!ctx) return;
 
-	// Capture the user prompt + heuristic snapshot NOW. We need this later
-	// when the LLM verdict arrives, because state.lastDecision will have
-	// moved on by then.
+	// Capture the user prompt + heuristic snapshot NOW
 	const userPrompt = getLastUserText(context);
 	const decision = state.lastDecision;
 
@@ -189,8 +160,11 @@ export function spawnClassifierForTurn(
 	cal.pendingRuleMatched = decision?.isRuleMatched ?? false;
 	cal.pendingPrompt = truncatePrompt(userPrompt, 500);
 	cal.pendingTurnIndex = cal.turnsProcessed;
-	cal.pendingAgentAge = 0;
 	cal.pendingSpawnTime = Date.now();
+
+	// Synthetic tracking ID
+	const trackingId = `classifier-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+	cal.pendingAgentId = trackingId;
 
 	if (state.debugEnabled) {
 		ctx.ui.notify(
@@ -199,19 +173,24 @@ export function spawnClassifierForTurn(
 		);
 	}
 
-	spawnClassifierAgent(
+	// Spawn the classifier — the returned promise resolves when the LLM finishes
+	const classifierPromise = spawnClassifierAgent(
 		config.calibration.classifierModel,
 		context,
 		decision?.phase,
 		ctx.modelRegistry,
-	)
-		.then((agentId) => {
-			if (agentId && state.calibration) {
-				state.calibration.pendingAgentId = agentId;
-				if (state.debugEnabled) {
-					ctx.ui.notify(`[calibration] Spawned (agent: ${agentId})`, "info");
-				}
-			} else if (state.calibration) {
+	);
+
+	// Attach promise handler for when result arrives
+	classifierPromise
+		.then(async (agentId) => {
+			// If calibration was disabled or state reset since spawn, bail
+			if (!state.calibration || state.calibration.pendingAgentId !== trackingId) {
+				return;
+			}
+
+			if (!agentId) {
+				// Spawn returned no ID
 				state.calibration.llmCallsFailed++;
 				writePendingAsFailed(state.calibration, "spawn-no-id", 0);
 				clearPending(state.calibration);
@@ -221,14 +200,132 @@ export function spawnClassifierForTurn(
 						"warning",
 					);
 				}
+				return;
 			}
+
+			// Now poll for result with a reasonable timeout
+			const startPoll = Date.now();
+			const maxPollTime = 60000; // 60s
+			const pollInterval = 1000; // 1s
+
+			const poll = async (): Promise<void> => {
+				if (!state.calibration || state.calibration.pendingAgentId !== trackingId) {
+					return; // Calibration reset or cleared
+				}
+
+				const elapsed = Date.now() - startPoll;
+				if (elapsed > maxPollTime) {
+					// Timeout
+					const ageMs = state.calibration.pendingSpawnTime
+						? Date.now() - state.calibration.pendingSpawnTime
+						: 0;
+					abandonClassifier(agentId);
+					state.calibration.llmCallsFailed++;
+					writePendingAsFailed(state.calibration, "timeout", ageMs);
+					clearPending(state.calibration);
+					if (state.debugEnabled) {
+						ctx.ui.notify(
+							`[calibration] Classifier timed out after ${ageMs}ms`,
+							"warning",
+						);
+					}
+					return;
+				}
+
+				const result = await pollClassifierResult(agentId, 0);
+				if (!result.ready) {
+					// Not ready yet, poll again after delay
+					setTimeout(poll, pollInterval);
+					return;
+				}
+
+				// Result ready
+				abandonClassifier(agentId);
+				const ageMs = state.calibration.pendingSpawnTime
+					? Date.now() - state.calibration.pendingSpawnTime
+					: 0;
+
+				if (result.error) {
+					state.calibration.llmCallsFailed++;
+					writePendingAsFailed(
+						state.calibration,
+						`error:${result.error.slice(0, 60)}`,
+						ageMs,
+					);
+					clearPending(state.calibration);
+					if (state.debugEnabled) {
+						ctx.ui.notify(
+							`[calibration] Classifier failed: ${result.error}`,
+							"warning",
+						);
+					}
+					return;
+				}
+
+				if (!result.verdict || !state.calibration.pendingHeuristicTier) {
+					state.calibration.llmCallsFailed++;
+					writePendingAsFailed(state.calibration, "no-verdict-or-tier", ageMs);
+					clearPending(state.calibration);
+					return;
+				}
+
+				const heuristicTier = state.calibration.pendingHeuristicTier;
+				const verdict = result.verdict;
+
+				updateCalibrationMatrix(state.calibration, heuristicTier, verdict.tier);
+
+				if (state.calibration.traceFilePath) {
+					writeCompletedTrace(state.calibration, verdict, ageMs);
+				}
+
+				if (state.debugEnabled) {
+					const agreed = heuristicTier === verdict.tier;
+					ctx.ui.notify(
+						`[calibration] h=${heuristicTier}, llm=${verdict.tier} ${agreed ? "✓" : "✗"} (${state.calibration.totalComparisons} comparisons, ${ageMs}ms)`,
+						"info",
+					);
+				}
+
+				clearPending(state.calibration);
+
+				// Update UI status
+				if (state.lastExtensionContext) {
+					// Update UI status
+					if (state.lastExtensionContext) {
+						const {updateStatus: updateStatusFn} = await import("../ui");
+						updateStatusFn(
+							state.lastExtensionContext,
+							state.routerEnabled,
+							state.selectedProfile,
+							state.pinnedTierByProfile,
+							state.thinkingByProfile,
+							state.lastDecision,
+							state.lastNonRouterModel,
+							state.accumulatedCost,
+							state.widgetEnabled,
+							state.currentConfig,
+							state.isStreaming,
+						);
+					}
+				}
+			};
+
+			// Start polling
+			poll();
 		})
 		.catch((err) => {
-			if (state.calibration) {
-				state.calibration.llmCallsFailed++;
-				writePendingAsFailed(state.calibration, `spawn-threw:${String(err).slice(0, 40)}`, 0);
-				clearPending(state.calibration);
+			if (!state.calibration || state.calibration.pendingAgentId !== trackingId) {
+				return;
 			}
+
+			state.calibration.llmCallsFailed++;
+			writePendingAsFailed(
+				state.calibration,
+				`spawn-threw:${String(err).slice(0, 40)}`,
+				0,
+			);
+			clearPending(state.calibration);
+
 			if (state.debugEnabled) {
 				ctx.ui.notify(
 					`[calibration] Spawn threw: ${String(err).slice(0, 100)}`,
@@ -239,70 +336,6 @@ export function spawnClassifierForTurn(
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
-
-async function tryPollClassifier(
-	agentId: string,
-	ctx: ExtensionContext,
-	state: RouterState,
-): Promise<void> {
-	const cal = state.calibration;
-	if (!cal) return;
-
-	const result = await pollClassifierResult(agentId, 0);
-	if (!result.ready) return;
-
-	abandonClassifier(agentId); // free pi-subagents cache regardless of outcome
-	const ageMs = cal.pendingSpawnTime ? Date.now() - cal.pendingSpawnTime : 0;
-
-	if (result.error) {
-		cal.llmCallsFailed++;
-		writePendingAsFailed(cal, `error:${result.error.slice(0, 60)}`, ageMs);
-		clearPending(cal);
-		if (state.debugEnabled) {
-			ctx.ui.notify(
-				`[calibration] Classifier failed: ${result.error}`,
-				"warning",
-			);
-		}
-		return;
-	}
-
-	if (!result.verdict || !cal.pendingHeuristicTier) {
-		cal.llmCallsFailed++;
-		writePendingAsFailed(cal, "no-verdict-or-tier", ageMs);
-		clearPending(cal);
-		return;
-	}
-
-	const heuristicTier = cal.pendingHeuristicTier;
-	const verdict = result.verdict;
-
-	updateCalibrationMatrix(cal, heuristicTier, verdict.tier);
-
-	if (cal.traceFilePath) {
-		writeCompletedTrace(cal, verdict, ageMs);
-	}
-
-	if (state.debugEnabled) {
-		const agreed = heuristicTier === verdict.tier;
-		ctx.ui.notify(
-			`[calibration] h=${heuristicTier}, llm=${verdict.tier} ${agreed ? "✓" : "✗"} (${cal.totalComparisons} comparisons, ${ageMs}ms)`,
-			"info",
-		);
-	}
-
-	clearPending(cal);
-
-	if (cal.llmCallsAttempted >= 10) {
-		const failureRate = cal.llmCallsFailed / cal.llmCallsAttempted;
-		if (failureRate > 0.8 && cal.llmCallsAttempted % 10 === 0) {
-			ctx.ui.notify(
-				`[calibration] High failure rate (${Math.round(failureRate * 100)}%). Check classifierModel config.`,
-				"warning",
-			);
-		}
-	}
-}
 
 /**
  * Write a complete trace record (heuristic + LLM verdict).
@@ -398,6 +431,5 @@ function clearPending(cal: import("./types").SessionCalibration): void {
 	cal.pendingRuleMatched = undefined;
 	cal.pendingPrompt = undefined;
 	cal.pendingTurnIndex = undefined;
-	cal.pendingAgentAge = undefined;
 	cal.pendingSpawnTime = undefined;
 }

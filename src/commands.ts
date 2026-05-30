@@ -878,6 +878,22 @@ export const registerCommands = (
 				case "usage":
 					await handleUsage(subArgs, ctx);
 					break;
+				case "calibrate": {
+					const { runCalibrate } = await import("./cli/calibrate/calibrate");
+					const lines: string[] = [];
+					const origLog = console.log;
+					const origErr = console.error;
+					console.log = (msg?: unknown) => lines.push(String(msg ?? ""));
+					console.error = (msg?: unknown) => lines.push(String(msg ?? ""));
+					try {
+						await runCalibrate(subArgs);
+					} finally {
+						console.log = origLog;
+						console.error = origErr;
+					}
+					ctx.ui.notify(lines.join("\n"), "info");
+					break;
+				}
 				case "status":
 					await handleStatus(subArgs, ctx);
 					break;
@@ -897,6 +913,7 @@ export const registerCommands = (
 							"  debug <on|off|show|clear>   Control routing debug logging to notifications and history.",
 							"  reload                      Hot-reload the configuration JSON from .omp/model-router.json.",
 							"  set <key> [value]            Get or set config value (writes to model-router.json). Omit value to read.",
+							"  calibrate <sub>              Calibration lab harness (analyze | simulate | export | import | reset).",
 							"  help, ?                     Show this help message.",
 							"  update                      Check for and apply extension updates from npm.",
 						].join("\n"),

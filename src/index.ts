@@ -165,12 +165,8 @@ const routerExtension = (pi: ExtensionAPI) => {
 
 	registerCommands(pi, state, actions);
 	
-	// Register RTK integration if enabled and binary available
-	registerRtkIntegration(
-		pi, 
-		state.currentConfig.enableRtk ?? false,
-		state.currentConfig.debug ?? false
-	);
+	// Register RTK integration (state-aware for observability)
+	registerRtkIntegration(pi, state);
 
 	pi.on("session_start", async (_event, ctx) => {
 		actions.reloadConfig();

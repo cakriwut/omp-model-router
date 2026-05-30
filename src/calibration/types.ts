@@ -39,9 +39,6 @@ export interface SessionCalibration {
 	pendingPrompt?: string;
 	pendingTurnIndex?: number;
 
-	/** Age of pending agent (turns since spawned) */
-	pendingAgentAge?: number;
-
 	/** Spawn timestamp for latency measurement */
 	pendingSpawnTime?: number;
 

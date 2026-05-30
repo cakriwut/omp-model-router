@@ -1,24 +1,25 @@
 /**
  * RTK (Rust Token Killer) Integration
- * 
+ *
  * Delegates tool command rewrites to `rtk rewrite`, which applies token-optimized
  * filters across 100+ commands (git, cargo, ls, cat, grep, docker, aws, etc).
- * 
+ *
  * RTK reduces token consumption by 60-90% through smart filtering, grouping,
  * truncation, and deduplication.
- * 
+ *
  * See: https://github.com/rtk-ai/rtk
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { RouterState } from "./state";
 
 type ToolCallEvent = {
 	toolName: string;
-	input: { command: string; [key: string]: any };
+	input: { command: string;[key: string]: any };
 };
 
-type RewriteDecision = 
-	| { kind: "rewrite"; rewritten: string } 
+type RewriteDecision =
+	| { kind: "rewrite"; rewritten: string }
 	| { kind: "skip" };
 
 /**
@@ -32,8 +33,8 @@ function readText(stream: ReadableStream<Uint8Array> | null | undefined, name: s
 }
 
 /**
- * Call `rtk rewrite <command>` to get token-optimized rewrite
- * 
+ * Call `rtk rewrite <command>` to get token-optimized rewrite.
+ *
  * Exit codes:
  *   0 = rewritten (stdout contains new command)
  *   3 = skip (command already optimal or not recognized)
@@ -48,7 +49,7 @@ async function rewriteWithRtk(command: string): Promise<RewriteDecision> {
 	const [exitCode, stdout] = await Promise.all([
 		proc.exited,
 		readText(proc.stdout, "stdout"),
-		proc.stderr?.cancel(), // Ignore stderr
+		proc.stderr?.cancel(),
 	]);
 
 	switch (exitCode) {
@@ -71,75 +72,59 @@ function hasRtkBinary(): boolean {
 }
 
 /**
- * Register RTK tool call hook
- * 
+ * Register RTK tool call hook.
+ *
  * Intercepts bash tool calls and rewrites them via `rtk rewrite`.
- * Only activates if:
- *   1. config.enableRtk is true
- *   2. `rtk` binary is in PATH
+ * Updates `state.rtkActive` and `state.rtkRewriteCount` for observability.
  */
 export function registerRtkIntegration(
-	pi: ExtensionAPI, 
-	enabled: boolean,
-	debug: boolean = false,
-) {
+	pi: ExtensionAPI,
+	state: RouterState,
+): void {
+	const enabled = state.currentConfig.enableRtk ?? false;
 	if (!enabled) {
+		state.rtkActive = false;
 		return;
 	}
 
 	const hasRtk = hasRtkBinary();
-
 	if (!hasRtk) {
-		// Notify user once per session that RTK is configured but not installed
+		state.rtkActive = false;
+		// Notify on session start that RTK is configured but not installed.
 		pi.on("session_start", (_event, ctx: ExtensionContext) => {
-			ctx.ui.setStatus(
-				"rtk", 
-				"⚠️ RTK enabled but binary not found. Install: brew install rtk"
+			ctx.ui.notify(
+				"RTK enabled but binary not found in PATH. Install: brew install rtk",
+				"warning",
 			);
 		});
 		return;
 	}
 
-	// RTK available — register tool call hook
+	state.rtkActive = true;
+
 	pi.on("tool_call", async (event: ToolCallEvent) => {
-		// RTK currently only supports bash tool rewrites
-		// (Other tools like read, search, edit are handled by OMP directly)
-		if (event.toolName !== "bash") {
-			return;
-		}
+		// RTK currently only supports bash tool rewrites.
+		if (event.toolName !== "bash") return;
 
 		const original = event.input.command;
-		if (!original || original.trim() === "") {
-			return;
-		}
+		if (!original || original.trim() === "") return;
 
 		try {
 			const decision = await rewriteWithRtk(original);
-			if (decision.kind === "skip") {
-				return;
-			}
+			if (decision.kind === "skip") return;
 
-			// Rewrite successful
 			event.input.command = decision.rewritten;
+			state.rtkRewriteCount++;
 
-			if (debug) {
-				console.log("[ROUTER] RTK rewrite:", {
-					original: original.slice(0, 60),
-					rewritten: decision.rewritten.slice(0, 60),
-				});
+			if (state.currentConfig.debug) {
+				console.log(
+					`[ROUTER] RTK rewrite #${state.rtkRewriteCount}: "${original.slice(0, 50)}" → "${decision.rewritten.slice(0, 50)}"`,
+				);
 			}
 		} catch (error) {
-			// RTK call failed — skip rewrite silently
-			// (Don't want to break user's workflow if RTK has issues)
-			if (debug) {
+			if (state.currentConfig.debug) {
 				console.error("[ROUTER] RTK rewrite failed:", error);
 			}
-			return;
 		}
-	});
-
-	// Set status on session start
-	pi.on("session_start", (_event, ctx: ExtensionContext) => {
-		ctx.ui.setStatus("rtk", "✓ RTK active (60-90% token savings)");
 	});
 }

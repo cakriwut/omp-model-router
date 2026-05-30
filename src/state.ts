@@ -109,6 +109,12 @@ export class RouterState {
 	compressionRequestCount = 0;
 	compressionTotalOriginalChars = 0;
 	compressionTotalCompressedChars = 0;
+
+	// ─── RTK stats (session-level) ──────────────────────────────────────
+	/** Number of bash commands rewritten by RTK. */
+	rtkRewriteCount = 0;
+	/** Whether RTK integration is active (config enabled + binary available). */
+	rtkActive = false;
 	
 	// ─── Frozen TOON compression cache ────────────────────────────────────
 	// When freezeAfter is configured, stores the frozen TOON block to reuse
