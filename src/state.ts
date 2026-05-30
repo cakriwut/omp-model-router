@@ -11,6 +11,7 @@ import type {
 	RouterPersistedState,
 	CustomSessionEntry,
 	CompressionStats,
+	CompressionCheckpoint,
 } from "./types";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { FALLBACK_CONFIG, resolveProfileName } from "./config";
@@ -112,6 +113,11 @@ export class RouterState {
 	// When freezeAfter is configured, stores the frozen TOON block to reuse
 	frozenCompressionBlock?: { messages: Message[]; stats: CompressionStats };
 
+	// ─── Progressive TOON checkpoint ────────────────────────────────────
+	/** Current checkpoint (frozen TOON block + metadata) used in progressive mode. */
+	currentCheckpoint?: CompressionCheckpoint;
+	/** Timestamp of the last turn processed (epoch ms). Used for cache expiry detection. */
+	lastTurnTimestamp?: number;
 	// ─── Auto-upgrade failure tracking (transient, not persisted) ───────
 	/** Tracks consecutive failures: toolName → count */
 	toolFailureStreak: Map<string, number> = new Map();

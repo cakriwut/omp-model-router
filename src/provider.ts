@@ -166,6 +166,40 @@ const supportsReasoning = (
 	return false;
 };
 
+/**
+ * Determine if progressive TOON compression should trigger.
+ * Returns trigger reason or null if no trigger.
+ *
+ * Triggers:
+ * 1. Context size >= contextThreshold * contextWindow
+ * 2. Time since last turn >= timeThreshold (cache expiry)
+ */
+const shouldTriggerCompression = (
+	context: Context,
+	contextWindow: number,
+	contextThreshold: number,
+	lastTurnTimestamp: number | undefined,
+	timeThreshold: number,
+): "context_size" | "cache_expiry" | null => {
+	const now = Date.now();
+
+	// Trigger 1: Context size approaching window limit
+	const contextTokens = estimateContextTokens(context);
+	if (contextTokens >= contextThreshold * contextWindow) {
+		return "context_size";
+	}
+
+	// Trigger 2: Cache expiry (time gap detection)
+	if (lastTurnTimestamp !== undefined) {
+		const timeSinceLastTurn = (now - lastTurnTimestamp) / 1000; // seconds
+		if (timeSinceLastTurn >= timeThreshold) {
+			return "cache_expiry";
+		}
+	}
+
+	return null;
+};
+
 export const registerRouterProvider = (
 	pi: ExtensionAPI,
 	state: RouterState,
@@ -354,56 +388,137 @@ export const registerRouterProvider = (
 						);
 						let finalContext = effectiveContext;
 						const turnNumber = effectiveContext.messages.length;
+						const now = Date.now();
 						
 						if (compressionCfg?.enabled && !isModelExcludedFromCompression(compressionCfg, targetProvider, targetModelId)) {
-							// Check if we should use cached frozen compression
-							const shouldFreeze = compressionCfg.freezeAfter !== undefined && turnNumber === compressionCfg.freezeAfter;
-							const shouldReuseFrozen = compressionCfg.freezeAfter !== undefined && turnNumber > compressionCfg.freezeAfter && state.frozenCompressionBlock;
-							
-							if (shouldReuseFrozen && state.frozenCompressionBlock) {
-								// Prepend cached frozen TOON block
-								finalContext = {
-									...effectiveContext,
-									messages: [...state.frozenCompressionBlock.messages, ...effectiveContext.messages.slice(-(compressionCfg.keepLastN ?? 4) * 2)]
+							// Progressive TOON mode: compress on triggers only
+							if (compressionCfg.progressive?.enabled) {
+								const contextThreshold = compressionCfg.progressive.contextThreshold ?? 0.8;
+								const timeThresholdSeconds = compressionCfg.progressive.timeThreshold ?? 300;
+								
+								const triggerReason = shouldTriggerCompression(
+									effectiveContext,
+									targetLimit,
+									contextThreshold,
+									state.lastTurnTimestamp,
+									timeThresholdSeconds,
+								);
+								
+								if (triggerReason) {
+									// Trigger fired: create new checkpoint
+									const originalTokens = estimateContextTokens(effectiveContext);
+									const result = compressHistory(effectiveContext, compressionCfg, turnNumber);
+									finalContext = result.context;
+									
+									if (result.stats) {
+										const compressedTokens = estimateContextTokens(finalContext);
+										const tokensSaved = Math.max(0, originalTokens - compressedTokens);
+										
+										result.stats.estimatedOriginalTokens = originalTokens;
+										result.stats.estimatedCompressedTokens = compressedTokens;
+										result.stats.estimatedTokensSaved = tokensSaved;
+										
+										decision.compression = result.stats;
+										decision.compressionTriggerReason = triggerReason;
+										
+										state.compressionTotalOriginalChars += result.stats.originalChars;
+										state.compressionTotalCompressedChars += result.stats.compressedChars;
+										state.compressionRequestCount++;
+										
+										state.accumulatedOriginalTokens += originalTokens;
+										state.accumulatedCompressedTokens += compressedTokens;
+										state.accumulatedTokensSaved += tokensSaved;
+										
+										// Create checkpoint for reuse
+									const toonBlockContent = result.context.messages
+										.find((m) => m.role === "user" && typeof m.content === "string" && m.content.includes("TOON"))
+										?.content as string | undefined;
+										
+										if (toonBlockContent) {
+											state.currentCheckpoint = {
+												frozenBlock: toonBlockContent,
+												metadata: {
+													turn: turnNumber,
+													range: [0, toonBlockContent.length],
+													stats: result.stats,
+													triggerReason,
+													timestamp: now,
+												},
+											};
+										}
+									}
+								} else {
+									// No trigger: reuse frozen checkpoint if available
+									if (state.currentCheckpoint) {
+										const keepLastN = compressionCfg.keepLastN ?? 4;
+										const recentMessages = effectiveContext.messages.slice(-keepLastN);
+										finalContext = {
+											...effectiveContext,
+									messages: [
+										{
+											role: "user",
+											content: state.currentCheckpoint.frozenBlock,
+											timestamp: state.currentCheckpoint.metadata.timestamp,
+										},
+										...recentMessages,
+									],
 								};
-							} else if (!shouldReuseFrozen) {
-								// Estimate tokens before compression
-								const originalTokens = estimateContextTokens(effectiveContext);
+										decision.compressionCacheHit = true;
+									}
+								}
+							} else {
+								// Static/dynamic TOON mode (backward compatible)
+								const shouldFreeze = compressionCfg.freezeAfter !== undefined && turnNumber === compressionCfg.freezeAfter;
+								const shouldReuseFrozen = compressionCfg.freezeAfter !== undefined && turnNumber > compressionCfg.freezeAfter && state.frozenCompressionBlock;
 								
-								// Apply compression with current turn number
-								const result = compressHistory(effectiveContext, compressionCfg, turnNumber);
-								finalContext = result.context;
-								
-								if (result.stats) {
-									// Estimate tokens after compression
-									const compressedTokens = estimateContextTokens(finalContext);
-									const tokensSaved = Math.max(0, originalTokens - compressedTokens);
+								if (shouldReuseFrozen && state.frozenCompressionBlock) {
+									// Prepend cached frozen TOON block
+									finalContext = {
+										...effectiveContext,
+										messages: [...state.frozenCompressionBlock.messages, ...effectiveContext.messages.slice(-(compressionCfg.keepLastN ?? 4) * 2)]
+									};
+								} else if (!shouldReuseFrozen) {
+									// Estimate tokens before compression
+									const originalTokens = estimateContextTokens(effectiveContext);
 									
-									// Populate compression stats with token data
-									result.stats.estimatedOriginalTokens = originalTokens;
-									result.stats.estimatedCompressedTokens = compressedTokens;
-									result.stats.estimatedTokensSaved = tokensSaved;
+									// Apply compression with current turn number
+									const result = compressHistory(effectiveContext, compressionCfg, turnNumber);
+									finalContext = result.context;
 									
-									decision.compression = result.stats;
-									state.compressionTotalOriginalChars += result.stats.originalChars;
-									state.compressionTotalCompressedChars += result.stats.compressedChars;
-									state.compressionRequestCount++;
-									
-									// Accumulate token metrics
-									state.accumulatedOriginalTokens += originalTokens;
-									state.accumulatedCompressedTokens += compressedTokens;
-									state.accumulatedTokensSaved += tokensSaved;
-									
-									// If at freeze point, cache the compressed block for reuse
-									if (shouldFreeze) {
-										state.frozenCompressionBlock = {
-											messages: result.context.messages.slice(0, -( compressionCfg.keepLastN ?? 4)),
-											stats: result.stats
-										};
+									if (result.stats) {
+										// Estimate tokens after compression
+										const compressedTokens = estimateContextTokens(finalContext);
+										const tokensSaved = Math.max(0, originalTokens - compressedTokens);
+										
+										// Populate compression stats with token data
+										result.stats.estimatedOriginalTokens = originalTokens;
+										result.stats.estimatedCompressedTokens = compressedTokens;
+										result.stats.estimatedTokensSaved = tokensSaved;
+										
+										decision.compression = result.stats;
+										state.compressionTotalOriginalChars += result.stats.originalChars;
+										state.compressionTotalCompressedChars += result.stats.compressedChars;
+										state.compressionRequestCount++;
+										
+										// Accumulate token metrics
+										state.accumulatedOriginalTokens += originalTokens;
+										state.accumulatedCompressedTokens += compressedTokens;
+										state.accumulatedTokensSaved += tokensSaved;
+										
+										// If at freeze point, cache the compressed block for reuse
+										if (shouldFreeze) {
+											state.frozenCompressionBlock = {
+												messages: result.context.messages.slice(0, -( compressionCfg.keepLastN ?? 4)),
+												stats: result.stats
+											};
+										}
 									}
 								}
 							}
 						}
+						
+						// Update last turn timestamp for cache expiry detection
+						state.lastTurnTimestamp = now;
 
 							const thinkingOverride = actions.getThinkingOverride(
 								model.id,

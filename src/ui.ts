@@ -592,9 +592,12 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 
 	const lines = [headerLine, barLine, labelLine, "", ...modelLines];
 	if (lastDecision) {
+		const triggerSuffix = lastDecision.compressionTriggerReason 
+			? ` [${lastDecision.compressionTriggerReason === 'context_size' ? '⟨size⟩' : '⟨expiry⟩'}]`
+			: (lastDecision.compressionCacheHit ? ' [cached]' : '');
 		lines.push(
 			"",
-			`Last: ${tierColor(lastDecision.tier, lastDecision.tier)} → ${lastDecision.targetProvider}/${lastDecision.targetModelId} (${lastDecision.thinking})`,
+			`Last: ${tierColor(lastDecision.tier, lastDecision.tier)} → ${lastDecision.targetProvider}/${lastDecision.targetModelId} (${lastDecision.thinking})${triggerSuffix}`,
 		);
 	}
 

@@ -39,6 +39,24 @@ export interface HistoryCompressionConfig {
 	 * When set, compression is applied only up to this turn, then reused for all subsequent turns.
 	 */
 	freezeAfter?: number;
+	/**
+	 * Progressive TOON configuration: compress only when beneficial (context approaching limit OR cache expiry).
+	 * When enabled, overrides freezeAfter and uses intelligent checkpointing instead.
+	 */
+	progressive?: {
+		/** Enable progressive TOON mode. Default: false. */
+		enabled: boolean;
+		/**
+		 * Context size threshold as fraction of model window. Compression triggers when context >= this.
+		 * 0.0-1.0; default: 0.8 (80%).
+		 */
+		contextThreshold?: number;
+		/**
+		 * Time threshold in seconds. Compression triggers if gap since last turn >= this.
+		 * Used to detect cache expiry. Default: 300 (5 minutes).
+		 */
+		timeThreshold?: number;
+	};
 }
 export interface AutoUpgradeConfig {
 	/** Enable automatic tier upgrade on repeated tool failures. Default: false. */
@@ -53,6 +71,28 @@ export interface AutoUpgradeConfig {
 	 * Supports exact tool names (e.g. "find", "search", "edit").
 	 */
 	tools?: string[];
+}
+
+/**
+ * Frozen TOON checkpoint created when progressive compression triggers.
+ * Reused between triggers to maximize cache hit rate on frozen block.
+ */
+export interface CompressionCheckpoint {
+	/** Frozen TOON text block (immutable across subsequent turns). */
+	frozenBlock: string;
+	/** Checkpoint metadata for tracking. */
+	metadata: {
+		/** Turn number when checkpoint was created. */
+		turn: number;
+		/** Character range of frozen content [start, end). */
+		range: [number, number];
+		/** Compression statistics. */
+		stats: CompressionStats;
+		/** Trigger reason: "context_size" or "cache_expiry". */
+		triggerReason: "context_size" | "cache_expiry";
+		/** Timestamp when checkpoint was created (epoch ms). */
+		timestamp: number;
+	};
 }
 
 
@@ -121,6 +161,8 @@ export interface RoutingDecision {
 	isBudgetForced?: boolean;
 	isRuleMatched?: boolean;
 	compression?: CompressionStats;
+	compressionTriggerReason?: "context_size" | "cache_expiry";
+	compressionCacheHit?: boolean;
 }
 
 export interface RouterPersistedState {
