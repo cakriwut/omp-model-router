@@ -41,7 +41,7 @@ jobs:
       - name: Verify all source files present
         run: |
           for f in index.ts commands.ts config.ts routing.ts provider.ts types.ts state.ts ui.ts constants.ts; do
-            [ -f "$f" ] || { echo "Missing: $f"; exit 1; }
+            [ -f "src/$f" ] || { echo "Missing: src/$f"; exit 1; }
           done
           echo "All source files present"
 
