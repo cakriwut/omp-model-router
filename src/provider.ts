@@ -388,8 +388,6 @@ export const registerRouterProvider = (
 							thinkingOverrides: state.thinkingByProfile[model.id],
 							phaseBias: state.currentConfig.phaseBias ?? 0.5,
 							rules: state.currentConfig.rules,
-							largeContextThreshold:
-								state.currentConfig.largeContextThreshold,
 							classifierModel: state.currentConfig.classifierModel,
 						},
 					);

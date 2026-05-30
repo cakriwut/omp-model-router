@@ -102,47 +102,80 @@ describe("resolveRouting — heuristic decision alone", () => {
 });
 
 describe("resolveRouting — context trigger upgrade", () => {
-	it("upgrades to high when context exceeds threshold", async () => {
-		const mockCtx = {
-			getContextUsage: async () => ({ tokens: 200_000 }),
-		};
+	// Registry where each tier has a known contextWindow + maxTokens.
+	// Usable capacity = contextWindow - max(maxTokens, 8192).
+	// low:    50k - 8k  = 42k
+	// medium: 100k - 8k = 92k
+	// high:   500k - 8k = 492k
+	const capacityRegistry = makeModelRegistry({
+		"test/low-model": { contextWindow: 50_000, maxTokens: 4096 },
+		"test/medium-model": { contextWindow: 100_000, maxTokens: 4096 },
+		"test/high-model": { contextWindow: 500_000, maxTokens: 4096 },
+	}) as unknown as RoutingInput["modelRegistry"];
+
+	it("promotes low→medium when context exceeds low model capacity but fits medium", async () => {
+		const mockCtx = { getContextUsage: async () => ({ tokens: 80_000 }) };
+		const d = await resolveRouting(
+			baseInput(makeContext("summarize the changes in this PR"), {
+				lastExtensionContext: mockCtx as any,
+				modelRegistry: capacityRegistry,
+			}),
+			baseConfig(),
+		);
+		expect(d.tier).toBe("medium");
+		expect(d.isContextTriggered).toBe(true);
+		expect(d.reasoning).toContain("Promoted low→medium");
+	});
+
+	it("promotes medium→high when context exceeds medium model capacity", async () => {
+		const mockCtx = { getContextUsage: async () => ({ tokens: 200_000 }) };
 		const d = await resolveRouting(
 			baseInput(makeContext("fix this bug"), {
-				lastExtensionContext: mockCtx as unknown as RoutingInput["lastExtensionContext"],
+				lastExtensionContext: mockCtx as any,
+				modelRegistry: capacityRegistry,
 			}),
-			baseConfig({ largeContextThreshold: 150_000 }),
+			baseConfig(),
 		);
 		expect(d.tier).toBe("high");
 		expect(d.isContextTriggered).toBe(true);
-		expect(d.reasoning).toContain("200000");
 	});
 
-	it("does not upgrade when context is below threshold", async () => {
-		const mockCtx = {
-			getContextUsage: async () => ({ tokens: 50_000 }),
-		};
+	it("does not promote when current tier model has capacity", async () => {
+		const mockCtx = { getContextUsage: async () => ({ tokens: 30_000 }) };
 		const d = await resolveRouting(
 			baseInput(makeContext("fix this bug"), {
-				lastExtensionContext: mockCtx as unknown as RoutingInput["lastExtensionContext"],
+				lastExtensionContext: mockCtx as any,
+				modelRegistry: capacityRegistry,
 			}),
-			baseConfig({ largeContextThreshold: 150_000 }),
+			baseConfig(),
 		);
 		expect(d.tier).toBe("medium");
 		expect(d.isContextTriggered).toBeUndefined();
 	});
 
-	it("skips context check when already high tier", async () => {
-		const mockCtx = {
-			getContextUsage: async () => ({ tokens: 999_999 }),
-		};
+	it("skips capacity check when already on high tier", async () => {
+		const mockCtx = { getContextUsage: async () => ({ tokens: 999_999 }) };
 		const d = await resolveRouting(
 			baseInput(makeContext("design the complete architecture for the whole system now"), {
-				lastExtensionContext: mockCtx as unknown as RoutingInput["lastExtensionContext"],
+				lastExtensionContext: mockCtx as any,
+				modelRegistry: capacityRegistry,
 			}),
-			baseConfig({ largeContextThreshold: 150_000 }),
+			baseConfig(),
 		);
-		// Already high from heuristic; isContextTriggered should not be set
 		expect(d.tier).toBe("high");
+		expect(d.isContextTriggered).toBeUndefined();
+	});
+
+	it("leaves decision alone when model not in registry (graceful fallback)", async () => {
+		const mockCtx = { getContextUsage: async () => ({ tokens: 999_999 }) };
+		const d = await resolveRouting(
+			baseInput(makeContext("fix this bug"), {
+				lastExtensionContext: mockCtx as any,
+				// default registry returns undefined for everything
+			}),
+			baseConfig(),
+		);
+		expect(d.tier).toBe("medium");
 		expect(d.isContextTriggered).toBeUndefined();
 	});
 });
@@ -169,15 +202,18 @@ describe("resolveRouting — classifier override", () => {
 	});
 
 	it("skips classifier when context-triggered", async () => {
-		const mockCtx = {
-			getContextUsage: async () => ({ tokens: 200_000 }),
-		};
+		const mockCtx = { getContextUsage: async () => ({ tokens: 200_000 }) };
+		const capacityRegistry = makeModelRegistry({
+			"test/low-model": { contextWindow: 50_000, maxTokens: 4096 },
+			"test/medium-model": { contextWindow: 100_000, maxTokens: 4096 },
+			"test/high-model": { contextWindow: 500_000, maxTokens: 4096 },
+		}) as unknown as RoutingInput["modelRegistry"];
 		const d = await resolveRouting(
 			baseInput(makeContext("quick fix"), {
-				lastExtensionContext: mockCtx as unknown as RoutingInput["lastExtensionContext"],
+				lastExtensionContext: mockCtx as any,
+				modelRegistry: capacityRegistry,
 			}),
 			baseConfig({
-				largeContextThreshold: 150_000,
 				classifierModel: "unknown/nonexistent",
 			}),
 		);

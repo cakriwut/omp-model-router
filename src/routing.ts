@@ -574,6 +574,69 @@ ${currentPhase === "implementation" ? "Consider that the conversation is current
 	return undefined;
 };
 
+// ─── Model-capacity-aware tier promotion ─────────────────────────────────────
+
+const TIER_ORDER: readonly RouterTier[] = ["low", "medium", "high"];
+const RESPONSE_HEADROOM_TOKENS = 8192;
+
+interface PromotedTier {
+	tier: RouterTier;
+	fromCapacity: number;
+}
+
+/**
+ * Resolve a tier's model and return its usable input capacity (contextWindow
+ * minus response headroom). Returns undefined if the model can't be resolved.
+ */
+const tierUsableCapacity = (
+	tier: RouterTier,
+	profile: RouterProfile,
+	registry: ExtensionContext["modelRegistry"],
+): number | undefined => {
+	const ref = profile[tier]?.model;
+	if (!ref) return undefined;
+	const slash = ref.indexOf("/");
+	if (slash === -1) return undefined;
+	const provider = ref.slice(0, slash);
+	const modelId = ref.slice(slash + 1);
+	const model = registry.find(provider, modelId);
+	if (!model || !model.contextWindow) return undefined;
+	const headroom = Math.max(model.maxTokens ?? 0, RESPONSE_HEADROOM_TOKENS);
+	return Math.max(0, model.contextWindow - headroom);
+};
+
+/**
+ * Find the cheapest tier (low → medium → high) whose model can fit `tokens`
+ * with response headroom. Returns the promoted tier or undefined if the
+ * current tier already fits or no tier fits.
+ */
+const promoteForContextCapacity = (
+	currentTier: RouterTier,
+	tokens: number,
+	profile: RouterProfile,
+	registry: ExtensionContext["modelRegistry"],
+): PromotedTier | undefined => {
+	const currentCapacity = tierUsableCapacity(currentTier, profile, registry);
+	if (currentCapacity === undefined) return undefined; // unresolvable; leave alone
+	if (tokens <= currentCapacity) return undefined; // current tier fits
+
+	const startIdx = TIER_ORDER.indexOf(currentTier) + 1;
+	for (let i = startIdx; i < TIER_ORDER.length; i++) {
+		const candidate = TIER_ORDER[i];
+		const cap = tierUsableCapacity(candidate, profile, registry);
+		if (cap !== undefined && tokens <= cap) {
+			return { tier: candidate, fromCapacity: currentCapacity };
+		}
+	}
+	// No tier fits; promote to highest available so the call at least proceeds
+	for (let i = TIER_ORDER.length - 1; i >= startIdx; i--) {
+		if (tierUsableCapacity(TIER_ORDER[i], profile, registry) !== undefined) {
+			return { tier: TIER_ORDER[i], fromCapacity: currentCapacity };
+		}
+	}
+	return undefined;
+};
+
 // ─── resolveRouting — composites heuristic + all overrides ───────────────────
 
 export interface RoutingInput {
@@ -591,7 +654,6 @@ export interface RoutingConfig {
 	thinkingOverrides?: RouterThinkingByTier;
 	phaseBias: number;
 	rules?: RoutingRule[];
-	largeContextThreshold?: number;
 	classifierModel?: string;
 }
 
@@ -619,25 +681,34 @@ export const resolveRouting = async (
 		input.isBudgetExceeded,
 	);
 
-	// 2. Context trigger upgrade — forces high tier when context window is large
-	if (
-		config.largeContextThreshold &&
-		decision.tier !== "high" &&
-		input.lastExtensionContext
-	) {
+	// 2. Context trigger — promote tier to the cheapest one whose model can
+	//    actually fit the current context. Static thresholds are wrong because
+	//    each tier's model has its own contextWindow (e.g. Haiku 200k vs
+	//    Sonnet 200k vs Nova Micro 128k). We require headroom = max(maxTokens, 8k)
+	//    so the response has room to generate.
+	if (decision.tier !== "high" && input.lastExtensionContext) {
 		try {
 			const usage = await input.lastExtensionContext.getContextUsage();
-			if (usage?.tokens && usage.tokens > config.largeContextThreshold) {
-				decision = buildRoutingDecision(
-					config.profileName,
+			const tokens = usage?.tokens ?? 0;
+			if (tokens > 0) {
+				const promoted = promoteForContextCapacity(
+					decision.tier,
+					tokens,
 					config.profile,
-					"high",
-					"planning",
-					`Context usage (${usage.tokens}) exceeds threshold (${config.largeContextThreshold}). Forced high tier.`,
-					config.thinkingOverrides,
-					false,
+					input.modelRegistry,
 				);
-				decision.isContextTriggered = true;
+				if (promoted && promoted.tier !== decision.tier) {
+					decision = buildRoutingDecision(
+						config.profileName,
+						config.profile,
+						promoted.tier,
+						decision.phase,
+						`Context (${tokens} tok) exceeds ${decision.tier} model capacity (${promoted.fromCapacity} tok). Promoted ${decision.tier}→${promoted.tier}.`,
+						config.thinkingOverrides,
+						false,
+					);
+					decision.isContextTriggered = true;
+				}
 			}
 		} catch (_e) {
 			// ignore — fall through with existing decision
