@@ -582,6 +582,8 @@ const RESPONSE_HEADROOM_TOKENS = 8192;
 interface PromotedTier {
 	tier: RouterTier;
 	fromCapacity: number;
+	toCapacity: number;
+	fits: boolean;
 }
 
 /**
@@ -625,16 +627,19 @@ const promoteForContextCapacity = (
 		const candidate = TIER_ORDER[i];
 		const cap = tierUsableCapacity(candidate, profile, registry);
 		if (cap !== undefined && tokens <= cap) {
-			return { tier: candidate, fromCapacity: currentCapacity };
+			return { tier: candidate, fromCapacity: currentCapacity, toCapacity: cap, fits: true };
 		}
 	}
-	// No tier fits; promote to highest available so the call at least proceeds
-	for (let i = TIER_ORDER.length - 1; i >= startIdx; i--) {
-		if (tierUsableCapacity(TIER_ORDER[i], profile, registry) !== undefined) {
-			return { tier: TIER_ORDER[i], fromCapacity: currentCapacity };
+	// No tier fits; promote to highest tier with biggest capacity (best-effort).
+	let best: PromotedTier | undefined;
+	for (let i = startIdx; i < TIER_ORDER.length; i++) {
+		const cap = tierUsableCapacity(TIER_ORDER[i], profile, registry);
+		if (cap === undefined) continue;
+		if (!best || cap > best.toCapacity) {
+			best = { tier: TIER_ORDER[i], fromCapacity: currentCapacity, toCapacity: cap, fits: false };
 		}
 	}
-	return undefined;
+	return best;
 };
 
 // ─── resolveRouting — composites heuristic + all overrides ───────────────────
@@ -703,7 +708,9 @@ export const resolveRouting = async (
 						config.profile,
 						promoted.tier,
 						decision.phase,
-						`Context (${tokens} tok) exceeds ${decision.tier} model capacity (${promoted.fromCapacity} tok). Promoted ${decision.tier}→${promoted.tier}.`,
+						promoted.fits
+							? `Context (${tokens} tok) exceeds ${decision.tier} capacity (${promoted.fromCapacity} tok). Promoted ${decision.tier}→${promoted.tier} (cap ${promoted.toCapacity}).`
+							: `Context (${tokens} tok) overflows every tier; ${promoted.tier} has biggest capacity (${promoted.toCapacity} tok) — compression required.`,
 						config.thinkingOverrides,
 						false,
 					);
