@@ -163,7 +163,30 @@ export class RouterState {
 		return this.thinkingByProfile[profileName]?.[tier];
 	}
 
+	/** Minimum interval between session entry writes (ms) */
+	private static readonly PERSIST_DEBOUNCE_MS = 1000;
+	private lastPersistTime = 0;
+	private pendingPersistTimer: ReturnType<typeof setTimeout> | undefined;
+
 	persist(): void {
+		const now = Date.now();
+		const elapsed = now - this.lastPersistTime;
+
+		// Debounce: if we persisted less than 1s ago, schedule a deferred write
+		if (elapsed < RouterState.PERSIST_DEBOUNCE_MS) {
+			if (!this.pendingPersistTimer) {
+				this.pendingPersistTimer = setTimeout(() => {
+					this.pendingPersistTimer = undefined;
+					this.persistNow();
+				}, RouterState.PERSIST_DEBOUNCE_MS - elapsed);
+			}
+			return;
+		}
+
+		this.persistNow();
+	}
+
+	private persistNow(): void {
 		const state = this.buildPersistedState();
 		const snapshot = JSON.stringify({
 			...state,
@@ -177,6 +200,8 @@ export class RouterState {
 			})),
 		});
 		if (snapshot === this.lastPersistedSnapshot) return;
+
+		this.lastPersistTime = Date.now();
 
 		// Save to persistent file (survives session restart)
 		savePersistentState(state);
