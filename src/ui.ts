@@ -567,24 +567,30 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 			tierColor("medium", "█".repeat(mediumWidth)) +
 			tierColor("low", "█".repeat(lowWidth)) +
 			` ${totalDecisions} decisions`;
-
 		const highPct = Math.round((tierCounts.high / totalDecisions) * 100);
 		const medPct = Math.round((tierCounts.medium / totalDecisions) * 100);
 		const lowPct = Math.round((tierCounts.low / totalDecisions) * 100);
-		const highLabel = `high ${highPct}%`;
-		const medLabel = `medium ${medPct}%`;
-		const lowLabel = `low ${lowPct}%`;
-		const hlPad = Math.max(0, Math.floor((highWidth - highLabel.length) / 2));
-		const hlEnd = Math.max(0, highWidth - hlPad - highLabel.length);
-		const mlPad = Math.max(0, Math.floor((mediumWidth - medLabel.length) / 2));
-		const mlEnd = Math.max(0, mediumWidth - mlPad - medLabel.length);
-		const llPad = Math.max(0, Math.floor((lowWidth - lowLabel.length) / 2));
-		labelLine =
-			" ".repeat(hlPad) + tierColor("high", highLabel) +
-			" ".repeat(hlEnd) +
-			" ".repeat(mlPad) + tierColor("medium", medLabel) +
-			" ".repeat(mlEnd) +
-			" ".repeat(llPad) + tierColor("low", lowLabel);
+		
+		// Build label line segment-by-segment, skipping zero-width tiers
+		let labelParts: string[] = [];
+		if (highWidth > 0) {
+			const highLabel = `high ${highPct}%`;
+			const hlPad = Math.max(0, Math.floor((highWidth - highLabel.length) / 2));
+			const hlEnd = Math.max(0, highWidth - hlPad - highLabel.length);
+			labelParts.push(" ".repeat(hlPad) + tierColor("high", highLabel) + " ".repeat(hlEnd));
+		}
+		if (mediumWidth > 0) {
+			const medLabel = `medium ${medPct}%`;
+			const mlPad = Math.max(0, Math.floor((mediumWidth - medLabel.length) / 2));
+			const mlEnd = Math.max(0, mediumWidth - mlPad - medLabel.length);
+			labelParts.push(" ".repeat(mlPad) + tierColor("medium", medLabel) + " ".repeat(mlEnd));
+		}
+		if (lowWidth > 0) {
+			const lowLabel = `low ${lowPct}%`;
+			const llPad = Math.max(0, Math.floor((lowWidth - lowLabel.length) / 2));
+			labelParts.push(" ".repeat(llPad) + tierColor("low", lowLabel));
+		}
+		labelLine = labelParts.join("");
 	} else {
 		barLine = theme.fg("dim", "░".repeat(BAR_WIDTH)) + " 0 decisions";
 		labelLine = theme.fg("dim", "no routing history");

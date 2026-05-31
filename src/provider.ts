@@ -389,6 +389,7 @@ export const registerRouterProvider = (
 							isBudgetExceeded,
 							modelRegistry: state.currentModelRegistry,
 							lastExtensionContext: state.lastExtensionContext,
+							calibration: state.calibration,
 						},
 						{
 							profileName: model.id,
@@ -397,6 +398,8 @@ export const registerRouterProvider = (
 							phaseBias: state.currentConfig.phaseBias ?? 0.5,
 							rules: state.currentConfig.rules,
 							classifierModel: effectiveClassifierModel,
+							debug: state.currentConfig.debug,
+							calibrationConfig: state.currentConfig.calibration,
 						},
 					);
 					// ── Auto-upgrade override (one-shot) ──────────────────────────────

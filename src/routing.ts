@@ -1,5 +1,7 @@
-import { streamSimple, type Context, type Message } from "@oh-my-pi/pi-ai";
+import { streamSimple, type Context } from "@oh-my-pi/pi-ai";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { parseCanonicalModelRef } from "./config";
+import { buildClassifierPrompt, parseClassifierOutput } from "./calibration/classifier-utils";
 import type {
 	RouterTier,
 	RouterPhase,
@@ -496,46 +498,33 @@ export const runClassifier = async (
 	modelRegistry: ExtensionContext["modelRegistry"],
 	context: Context,
 	currentPhase?: RouterPhase,
+	debug = false,
 ): Promise<{ tier: RouterTier; reasoning: string } | undefined> => {
+	const classifierContext: Context = {
+		...context,
+		messages: [
+			{ role: "user", content: buildClassifierPrompt(context, currentPhase), timestamp: Date.now() },
+		],
+	};
+
 	try {
 		const { provider, modelId } = parseCanonicalModelRef(classifierModelRef);
 		const model = modelRegistry.find(provider, modelId);
-		if (!model) return undefined;
+		if (!model) {
+			if (debug) {
+				console.warn(`[model-router] Classifier model not found: ${provider}/${modelId}`);
+			}
+			return undefined;
+		}
 
 		const apiKey = await modelRegistry.getApiKey(model);
-		if (!apiKey) return undefined;
+		if (!apiKey) {
+			if (debug) {
+				console.warn(`[model-router] Classifier model API key missing: ${provider}/${modelId}`);
+			}
+			return undefined;
+		}
 		const headers = model.headers;
-
-		const promptText = getLastUserText(context);
-		const historyText = getRecentConversationText(context, 4);
-
-		const classifierPrompt = `You are a model router classifier. Your job is to categorize the user's latest request into one of three tiers: "high", "medium", or "low".
-
-Tiers:
-- high: Architecture, design, planning, tradeoff analysis, broad debugging, large refactors, codebase research.
-- medium: Implementation of a known plan, multi-file edits, normal coding work, focused debugging, tests/fixes.
-- low: Summaries, changelogs, formatting, quick explanations, small bounded transforms, simple read-only lookup.
-
-${currentPhase ? `Current conversation phase: ${currentPhase}\n` : ""}
-Recent history:
-${historyText}
-
-Latest user message:
-${promptText}
-
-Return your decision in exactly two lines:
-Tier: [high|medium|low]
-Reasoning: [one short sentence]
-
-${currentPhase === "planning" ? "Consider that the conversation is currently in a planning phase. Bias toward \"high\" unless the request is clearly a simple implementation or summary." : ""}
-${currentPhase === "implementation" ? "Consider that the conversation is currently in an implementation phase. Bias toward \"medium\" unless the request is clearly planning or a simple summary." : ""}`;
-
-		const classifierContext: Context = {
-			...context,
-			messages: [
-				{ role: "user", content: classifierPrompt, timestamp: Date.now() },
-			],
-		};
 
 		const stream = streamSimple(model, classifierContext, {
 			apiKey,
@@ -551,29 +540,16 @@ ${currentPhase === "implementation" ? "Consider that the conversation is current
 			}
 		}
 
-		const lines = fullText.trim().split("\n");
-		const tierLine = lines.find((l) => l.toLowerCase().startsWith("tier:"));
-		const reasoningLine = lines.find((l) =>
-			l.toLowerCase().startsWith("reasoning:"),
-		);
-
-		if (tierLine) {
-			const tierValue = tierLine.split(":")[1].trim().toLowerCase();
-			if (isRouterTier(tierValue)) {
-				return {
-					tier: tierValue,
-					reasoning: reasoningLine
-						? reasoningLine.split(":")[1].trim()
-						: "Classifier decision.",
-				};
-			}
+		return parseClassifierOutput(fullText);
+	} catch (error) {
+		if (debug) {
+			console.warn(
+				`[model-router] Classifier failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
-	} catch (_error) {
-		// Ignore classifier errors and fall back to heuristics
+		return undefined;
 	}
-	return undefined;
 };
-
 // ─── Model-capacity-aware tier promotion ─────────────────────────────────────
 
 const TIER_ORDER: readonly RouterTier[] = ["low", "medium", "high"];
@@ -643,7 +619,6 @@ const promoteForContextCapacity = (
 };
 
 // ─── resolveRouting — composites heuristic + all overrides ───────────────────
-
 export interface RoutingInput {
 	context: Context;
 	previousDecision: RoutingDecision | undefined;
@@ -651,6 +626,7 @@ export interface RoutingInput {
 	isBudgetExceeded: boolean;
 	modelRegistry: ExtensionContext["modelRegistry"];
 	lastExtensionContext?: ExtensionContext;
+	calibration?: import("./calibration/types").SessionCalibration;
 }
 
 export interface RoutingConfig {
@@ -660,6 +636,8 @@ export interface RoutingConfig {
 	phaseBias: number;
 	rules?: RoutingRule[];
 	classifierModel?: string;
+	debug?: boolean;
+	calibrationConfig?: import("./calibration/types").CalibrationConfig;
 }
 
 /**
@@ -721,27 +699,38 @@ export const resolveRouting = async (
 			// ignore — fall through with existing decision
 		}
 	}
-
 	// 3. Classifier override — only when not pinned, context-triggered, or rule-matched
+	let syncClassifierRan = false;
+	let syncClassifierVerdict: { tier: RouterTier; reasoning: string } | undefined;
+	
 	if (
 		config.classifierModel &&
 		!input.pinnedTier &&
 		!decision.isContextTriggered &&
 		!decision.isRuleMatched
 	) {
-		const classifierResult = await runClassifier(
+		syncClassifierVerdict = await runClassifier(
 			config.classifierModel,
 			input.modelRegistry,
 			input.context,
-			input.previousDecision?.phase,
+			decision.phase, // Use current heuristic decision's phase, not previous
+			config.debug,
 		);
-		if (classifierResult) {
+		syncClassifierRan = true;
+		
+		if (syncClassifierVerdict) {
+			// Record sync classifier verdict into matrix
+			if (input.calibration && config.calibrationConfig?.enabled) {
+				const { updateCalibrationMatrix } = await import("./calibration/session");
+				updateCalibrationMatrix(input.calibration, decision.tier, syncClassifierVerdict.tier);
+			}
+			
 			decision = buildRoutingDecision(
 				config.profileName,
 				config.profile,
-				classifierResult.tier,
-				phaseForTier(classifierResult.tier),
-				`Classifier: ${classifierResult.reasoning}`,
+				syncClassifierVerdict.tier,
+				phaseForTier(syncClassifierVerdict.tier),
+				`Classifier: ${syncClassifierVerdict.reasoning}`,
 				config.thinkingOverrides,
 				true,
 			);
@@ -751,8 +740,35 @@ export const resolveRouting = async (
 				decision.reasoning = `Budget exceeded. Downgraded classifier decision to medium. (Original: ${decision.reasoning})`;
 				decision.isBudgetForced = true;
 			}
+		} else {
+			// Classifier failed — try matrix calibration as fallback
+			if (input.calibration && config.calibrationConfig?.enabled) {
+				const { applyCalibratedTier } = await import("./calibration/session");
+				const calibratedTier = applyCalibratedTier(
+					decision.tier,
+					input.calibration,
+					config.calibrationConfig,
+				);
+				if (calibratedTier !== decision.tier) {
+					decision = buildRoutingDecision(
+						config.profileName,
+						config.profile,
+						calibratedTier,
+						phaseForTier(calibratedTier),
+						`Calibrated: heuristic ${decision.tier} → ${calibratedTier} (matrix-based override)`,
+						config.thinkingOverrides,
+						false,
+					);
+				}
+			}
+			
+			// Mark decision to indicate classifier fallback
+			decision.reasoning = `Classifier unavailable, using heuristic: ${decision.reasoning}`;
 		}
 	}
+	
+	// Attach metadata for async spawn decision
+	(decision as any).syncClassifierRan = syncClassifierRan;
 
 	// 4. Image attachment upgrade — find lowest tier that supports images
 	if (hasImageAttachment(input.context)) {

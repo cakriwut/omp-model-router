@@ -145,7 +145,11 @@ export function spawnClassifierForTurn(
 	const cal = state.calibration;
 	if (cal.pendingAgentId) return; // skip if already pending
 	if (!config.calibration.classifierModel) return;
-
+	
+	// Skip async spawn in adaptive mode when sync classifier already ran
+	if (config.calibration.mode === "adaptive" && state.lastDecision && (state.lastDecision as any).syncClassifierRan) {
+		return;
+	}
 	const ctx = state.lastExtensionContext;
 	if (!ctx) return;
 

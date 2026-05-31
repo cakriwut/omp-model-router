@@ -50,15 +50,24 @@ export function isNewer(candidate: string, current: string): boolean {
 
 // ─── Dev install detection ────────────────────────────────────────────────────
 
-/** Returns true when running from a symlinked dev workspace (skip update check). */
+/** 
+ * Returns true when running from a dev install (skip update check).
+ * Detects:
+ * - Symlinked extension directories
+ * - Workspace-relative paths
+ * - file:... dependencies in package.json
+ */
 export function isDevInstall(): boolean {
 	const moduleDir = import.meta.dir;
+	
+	// Check for symlinks
 	try {
 		const stat = lstatSync(moduleDir);
 		if (stat.isSymbolicLink()) return true;
 	} catch {
 		// lstat can fail if path is unusual; fall through
 	}
+	
 	// Heuristic: development installs typically live under ~/workspace/
 	// while npm-installed packages live under node_modules/
 	if (
@@ -67,6 +76,31 @@ export function isDevInstall(): boolean {
 	) {
 		return true;
 	}
+	
+	// Check if installed via file: dependency in parent package.json
+	// This happens when users do: bun add file:../../../../workspace/omp-model-router
+	// or when deploy:dev script creates a local link
+	try {
+		// Walk up to find the extension's package.json
+		let checkDir = moduleDir;
+		for (let i = 0; i < 5; i++) {
+			const parentPkg = join(checkDir, "..", "package.json");
+			try {
+				const pkg = JSON.parse(readFileSync(parentPkg, "utf-8"));
+				const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+				// Check if this package is listed as a file: dependency
+				if (deps[PACKAGE_NAME]?.startsWith("file:")) {
+					return true;
+				}
+			} catch {
+				// Not found or parse error, try parent
+			}
+			checkDir = join(checkDir, "..");
+		}
+	} catch {
+		// Ignore errors during file: dependency detection
+	}
+	
 	return false;
 }
 

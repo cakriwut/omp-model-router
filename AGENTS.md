@@ -30,6 +30,34 @@ test/                     # Test suite (bun test)
 - **RTK Integration**: Reduces tool output tokens by 60-90% (requires `rtk` binary)
 - **Budget Tracking**: Enforces session budgets and downgrades tiers when exceeded
 
+
+## Installation
+
+### For Users (Recommended)
+
+```bash
+pi install npm:@cakriwut/omp-model-router
+```
+
+Then in OMP:
+```
+/reload
+/router
+```
+
+### For Developers
+
+```bash
+cd ~/workspace
+git clone https://github.com/cakriwut/omp-model-router.git
+cd omp-model-router
+bun install
+bun run deploy:dev
+```
+
+Then in OMP: `/reload`
+
+**Dev installs won't support `/router update`** — see troubleshooting section below.
 ## Usage
 
 ```bash
@@ -89,20 +117,42 @@ When `calibration.enabled` is `true` and `calibration.mode` is `"adaptive"`, the
 **Use cases:**
 - Start with `telemetry` to collect data and tune the heuristic
 - Switch to `adaptive` when you trust the classifier and want maximum accuracy
-- Use a cheap, fast model (e.g., Haiku) as the classifier to minimize overhead
+- Use a cheap, fast model (e.g., Haiku, Nova Micro) as the classifier to minimize overhead
 
+**Troubleshooting adaptive mode:**
+
+If the classifier decision isn't being used (check decision reasoning with `debug: true`):
+1. Verify `classifierModel` ref is valid and model exists in registry
+2. Check API key is configured for the model's provider
+3. Look for `[model-router] Classifier failed: ...` in console logs (requires `debug: true`)
+4. Decision reasoning will show `"Classifier unavailable, using heuristic: ..."` when classifier fails
 
 ## Development
 
 ```bash
 bun install
-bun run test                # Run test suite with summary output (323 tests)
+bun run test                # Run test suite with summary output (334 tests)
 bun run test:verbose        # Show all output with dots reporter
 bun run deploy:dev          # Deploy to ~/.omp/agent/extensions/model-router for local testing
 ```
 
 After deploying, run `/reload` in OMP to pick up changes.
 
+
+## Extension Best Practices
+
+This extension **follows Oh-My-Pi best practices** (audited 2026-05-31). Key compliance areas:
+
+✅ **Factory pattern** — Default export receiving `ExtensionAPI`  
+✅ **No runtime actions during load** — All `ctx` actions happen inside handlers  
+✅ **Proper event handlers** — Uses standard events (`session_start`, `turn_end`, `tool_call`, etc.)  
+✅ **Error handling** — `tool_call` handlers never throw; errors logged with debug flag  
+✅ **Manifest** — `package.json` uses `omp.extensions` field  
+✅ **Dev install detection** — Detects symlinks, workspace paths, and `file:` dependencies  
+
+See `docs/BEST_PRACTICES_AUDIT.md` for detailed compliance report.
+
+**Reference:** https://github.com/can1357/oh-my-pi/blob/main/docs/skills/authoring-extensions.md
 ## Pitfalls (read before editing)
 
 ### Adding a new top-level field to `RouterConfig`
@@ -140,6 +190,38 @@ If that prints `undefined` while the JSON file contains `foo`, the field is bein
 - `pi.on("turn_start", ...)` handler must be `async` if the body uses `await`. TypeScript will catch this, but if you copy a sync handler and add `await` you'll see `error TS1308`.
 - There is **no `session_end` event** in the OMP extension API. Persist on `turn_end` and on debounced timers instead.
 - `ExtensionContext` does **not** expose `ctx.session` or `ctx.context`. For session ID, derive a synthetic one (e.g. timestamp). For conversation messages, use `ctx.sessionManager.getBranch()`.
+
+### `/router update` fails with "No matching package found"
+
+**Symptom:** Running `/router update` shows:
+```
+Error: No matching package found for npm:@cakriwut/omp-model-router
+```
+
+**Root cause:** Extension is installed via local file path (`file:...`) instead of npm.
+
+**Fix:** Reinstall from npm:
+
+```bash
+# Option A: Using Bun
+cd ~/.omp/agent/extensions/model-router
+bun add @cakriwut/omp-model-router
+
+# Option B: Using Pi CLI
+pi uninstall model-router
+pi install npm:@cakriwut/omp-model-router
+```
+
+**Verify:** Check `~/.omp/agent/extensions/model-router/package.json` shows:
+```json
+"dependencies": {
+  "@cakriwut/omp-model-router": "^0.6.1"
+}
+```
+
+NOT `"file:..."`.
+
+After v0.6.2, the `/router update` command will detect dev installs and show this help automatically.
 
 
 ## Publish

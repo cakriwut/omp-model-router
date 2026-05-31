@@ -24,7 +24,7 @@ import {
 	renderUsageReport,
 	type CompressionDiagnostic,
 } from "./ui";
-import { getCurrentVersion, checkForUpdate } from "./version-check";
+import { getCurrentVersion, checkForUpdate, isDevInstall } from "./version-check";
 import { resolveCompressionConfig } from "./context-compression";
 
 // ─── Config set helpers ───────────────────────────────────────────────────────
@@ -646,6 +646,27 @@ export const registerCommands = (
 	};
 
 	const handleUpdate = async (_args: string[], ctx: ExtensionContext) => {
+		// Block dev installs from attempting npm updates
+		if (isDevInstall()) {
+			ctx.ui.notify(
+				[
+					"Update unavailable: dev install detected.",
+					"",
+					"This extension is installed via local file path or symlink.",
+					"To enable updates, reinstall from npm:",
+					"",
+					"  cd ~/.omp/agent/extensions/model-router",
+					"  bun add @cakriwut/omp-model-router",
+					"",
+					"Or reinstall via pi CLI:",
+					"  pi uninstall model-router",
+					"  pi install npm:@cakriwut/omp-model-router",
+				].join("\n"),
+				"info",
+			);
+			return;
+		}
+		
 		const currentVersion = getCurrentVersion();
 
 		// If we already know about an update from the session check, use that

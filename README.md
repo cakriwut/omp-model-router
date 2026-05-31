@@ -41,8 +41,21 @@ Cost-optimized model routing for [Oh-My-Pi](https://github.com/can1357/oh-my-pi)
 
 ## Installation
 
+### Via Pi CLI (Recommended)
+
 ```bash
-# From source (requires bun and OMP environment)
+pi install npm:@cakriwut/omp-model-router
+```
+
+Then in OMP:
+```
+/reload
+/router help
+```
+
+### From Source (Development)
+
+```bash
 git clone https://github.com/cakriwut/omp-model-router.git
 cd omp-model-router
 bun install
@@ -54,6 +67,8 @@ Then in OMP:
 /reload
 /router help
 ```
+
+> **Note**: Source installs use `file:` dependencies and won't support `/router update`. For production use, install via Pi CLI above.
 
 ---
 
