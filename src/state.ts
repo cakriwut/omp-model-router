@@ -3,6 +3,31 @@ import type { SessionCalibration } from "./calibration/types";
 import { join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+
+// ─── Session-scoped cost state ──────────────────────────────────────────────
+
+/**
+ * Per-session cost/metrics scope.
+ * Each session (including sub-agent sessions) gets its own scope
+ * to prevent cross-contamination when multiple agents share one process.
+ */
+export interface SessionScope {
+	sessionId: string;
+	parentSessionId?: string;
+	accumulatedCost: number;
+	accumulatedOriginalTokens: number;
+	accumulatedCompressedTokens: number;
+	accumulatedTokensSaved: number;
+	accumulatedCacheReadTokens: number;
+	compressionRequestCount: number;
+	compressionTotalOriginalChars: number;
+	compressionTotalCompressedChars: number;
+	debugHistory: RoutingDecision[];
+	lastDecision: RoutingDecision | undefined;
+	lastTurnTimestamp?: number;
+	currentCheckpoint?: CompressionCheckpoint;
+	isStreaming: boolean;
+}
 import type {
 	RouterConfig,
 	RouterPinByProfile,
@@ -84,31 +109,22 @@ export class RouterState {
 	routerEnabled = false;
 	selectedProfile: string;
 	isInternalModelSwitch = false;
-	isStreaming = false;
 
 	// ─── Routing state ───────────────────────────────────────────────────
-	lastDecision: RoutingDecision | undefined;
 	pinnedTierByProfile: RouterPinByProfile = {};
 	thinkingByProfile: RouterThinkingByProfile = {};
+
+	// ─── Session-scoped state (per-session isolation) ───────────────────
+	private sessionScopes = new Map<string, SessionScope>();
+	activeSessionId: string | undefined;
 
 	// ─── Debug & UI ──────────────────────────────────────────────────────
 	debugEnabled = false;
 	widgetEnabled = false;
-	debugHistory: RoutingDecision[] = [];
 
-	// ─── Cost & model tracking ───────────────────────────────────────────
-	accumulatedCost = 0;
-	accumulatedOriginalTokens = 0;
-	accumulatedCompressedTokens = 0;
-	accumulatedTokensSaved = 0;
-	accumulatedCacheReadTokens = 0;
+	// ─── Cost & model tracking (shared across scopes for backward compat) ─
 	lastNonRouterModel: string | undefined;
 	lastRegisteredModels = "";
-
-	// ─── Compression stats (session-level) ──────────────────────────────
-	compressionRequestCount = 0;
-	compressionTotalOriginalChars = 0;
-	compressionTotalCompressedChars = 0;
 
 	// ─── RTK stats (session-level) ──────────────────────────────────────
 	/** Number of bash commands rewritten by RTK. */
@@ -119,12 +135,6 @@ export class RouterState {
 	// ─── Frozen TOON compression cache ────────────────────────────────────
 	// When freezeAfter is configured, stores the frozen TOON block to reuse
 	frozenCompressionBlock?: { messages: Message[]; stats: CompressionStats };
-
-	// ─── Progressive TOON checkpoint ────────────────────────────────────
-	/** Current checkpoint (frozen TOON block + metadata) used in progressive mode. */
-	currentCheckpoint?: CompressionCheckpoint;
-	/** Timestamp of the last turn processed (epoch ms). Used for cache expiry detection. */
-	lastTurnTimestamp?: number;
 
 	// ─── Calibration (session-level, ephemeral) ─────────────────────────
 	calibration: SessionCalibration | undefined;
@@ -149,6 +159,121 @@ export class RouterState {
 			FALLBACK_CONFIG.defaultProfile,
 		);
 	}
+
+	// ─── Session scope management ───────────────────────────────────────
+
+	/**
+	 * Activate a session scope. Called on session_start/turn_start.
+	 * Creates a new scope if one doesn't exist for this session ID.
+	 */
+	activateSession(sessionId: string, parentSessionId?: string): void {
+		this.activeSessionId = sessionId;
+		if (!this.sessionScopes.has(sessionId)) {
+			this.sessionScopes.set(sessionId, {
+				sessionId,
+				parentSessionId,
+				accumulatedCost: 0,
+				accumulatedOriginalTokens: 0,
+				accumulatedCompressedTokens: 0,
+				accumulatedTokensSaved: 0,
+				accumulatedCacheReadTokens: 0,
+				compressionRequestCount: 0,
+				compressionTotalOriginalChars: 0,
+				compressionTotalCompressedChars: 0,
+				debugHistory: [],
+				lastDecision: undefined,
+				isStreaming: false,
+			});
+		}
+	}
+
+	/** Get the active session scope (creates a default if none active). */
+	get scope(): SessionScope {
+		if (this.activeSessionId) {
+			const s = this.sessionScopes.get(this.activeSessionId);
+			if (s) return s;
+		}
+		// Fallback: create an ephemeral scope (should not normally happen)
+		const fallbackId = "__default__";
+		if (!this.sessionScopes.has(fallbackId)) {
+			this.activateSession(fallbackId);
+		}
+		return this.sessionScopes.get(fallbackId)!;
+	}
+
+	/**
+	 * Finalize a child session scope and merge its cost into the parent.
+	 * Called when a sub-agent completes.
+	 */
+	finalizeChildSession(childSessionId: string): void {
+		const child = this.sessionScopes.get(childSessionId);
+		if (!child) return;
+
+		const parentId = child.parentSessionId;
+		if (parentId) {
+			const parent = this.sessionScopes.get(parentId);
+			if (parent) {
+				parent.accumulatedCost += child.accumulatedCost;
+				parent.accumulatedOriginalTokens += child.accumulatedOriginalTokens;
+				parent.accumulatedCompressedTokens += child.accumulatedCompressedTokens;
+				parent.accumulatedTokensSaved += child.accumulatedTokensSaved;
+				parent.accumulatedCacheReadTokens += child.accumulatedCacheReadTokens;
+			}
+		}
+
+		// Clean up child scope to free memory
+		this.sessionScopes.delete(childSessionId);
+	}
+
+	/** Get total cost across all active session scopes. */
+	get totalCost(): number {
+		let total = 0;
+		for (const scope of this.sessionScopes.values()) {
+			total += scope.accumulatedCost;
+		}
+		return total;
+	}
+
+	// ─── Backward-compatible accessors (delegate to active scope) ────────
+
+	get accumulatedCost(): number { return this.scope.accumulatedCost; }
+	set accumulatedCost(v: number) { this.scope.accumulatedCost = v; }
+
+	get accumulatedOriginalTokens(): number { return this.scope.accumulatedOriginalTokens; }
+	set accumulatedOriginalTokens(v: number) { this.scope.accumulatedOriginalTokens = v; }
+
+	get accumulatedCompressedTokens(): number { return this.scope.accumulatedCompressedTokens; }
+	set accumulatedCompressedTokens(v: number) { this.scope.accumulatedCompressedTokens = v; }
+
+	get accumulatedTokensSaved(): number { return this.scope.accumulatedTokensSaved; }
+	set accumulatedTokensSaved(v: number) { this.scope.accumulatedTokensSaved = v; }
+
+	get accumulatedCacheReadTokens(): number { return this.scope.accumulatedCacheReadTokens; }
+	set accumulatedCacheReadTokens(v: number) { this.scope.accumulatedCacheReadTokens = v; }
+
+	get compressionRequestCount(): number { return this.scope.compressionRequestCount; }
+	set compressionRequestCount(v: number) { this.scope.compressionRequestCount = v; }
+
+	get compressionTotalOriginalChars(): number { return this.scope.compressionTotalOriginalChars; }
+	set compressionTotalOriginalChars(v: number) { this.scope.compressionTotalOriginalChars = v; }
+
+	get compressionTotalCompressedChars(): number { return this.scope.compressionTotalCompressedChars; }
+	set compressionTotalCompressedChars(v: number) { this.scope.compressionTotalCompressedChars = v; }
+
+	get debugHistory(): RoutingDecision[] { return this.scope.debugHistory; }
+	set debugHistory(v: RoutingDecision[]) { this.scope.debugHistory = v; }
+
+	get lastDecision(): RoutingDecision | undefined { return this.scope.lastDecision; }
+	set lastDecision(v: RoutingDecision | undefined) { this.scope.lastDecision = v; }
+
+	get isStreaming(): boolean { return this.scope.isStreaming; }
+	set isStreaming(v: boolean) { this.scope.isStreaming = v; }
+
+	get currentCheckpoint(): CompressionCheckpoint | undefined { return this.scope.currentCheckpoint; }
+	set currentCheckpoint(v: CompressionCheckpoint | undefined) { this.scope.currentCheckpoint = v; }
+
+	get lastTurnTimestamp(): number | undefined { return this.scope.lastTurnTimestamp; }
+	set lastTurnTimestamp(v: number | undefined) { this.scope.lastTurnTimestamp = v; }
 
 	recordDecision(decision: RoutingDecision): void {
 		const limit = this.currentConfig.debugHistoryLimit ?? MAX_DEBUG_HISTORY;

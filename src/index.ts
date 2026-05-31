@@ -174,6 +174,10 @@ const routerExtension = (pi: ExtensionAPI) => {
 		// Wait for registerProvider to propagate (see switchToRouterProfile comment).
 		await new Promise((resolve) => setTimeout(resolve, 50));
 
+		// Activate session scope (isolates cost/state per session)
+		const sessionId = ctx.sessionManager.getSessionId();
+		state.activateSession(sessionId);
+
 		state.restoreFromSession(ctx);
 
 		await actions.ensureValidActiveRouterProfile(ctx);
@@ -235,6 +239,10 @@ const routerExtension = (pi: ExtensionAPI) => {
 
 		await new Promise((resolve) => setTimeout(resolve, 50));
 
+		// Activate scope for the branched session
+		const sessionId = ctx.sessionManager.getSessionId();
+		state.activateSession(sessionId);
+
 		state.restoreFromSession(ctx);
 
 		await actions.ensureValidActiveRouterProfile(ctx);
@@ -274,6 +282,13 @@ const routerExtension = (pi: ExtensionAPI) => {
 
 	pi.on("turn_start", async (_event, ctx) => {
 		state.lastExtensionContext = ctx;
+
+		// Re-activate the correct session scope (handles sub-agent context switches)
+		const sessionId = ctx.sessionManager.getSessionId();
+		if (sessionId !== state.activeSessionId) {
+			state.activateSession(sessionId, state.activeSessionId);
+		}
+
 		if (state.updateBannerShown) {
 			state.updateBannerShown = false;
 		}
@@ -326,6 +341,13 @@ const routerExtension = (pi: ExtensionAPI) => {
 	// session_end is not a standard extension event; instead merge calibration
 	// on turn_end when the session is about to close. The global merge also
 	// happens via debounced writes during the session, so data is not lost.
+
+	// ─── Agent end: finalize child session and merge cost to parent ────────────
+	pi.on("agent_end", (_event, ctx) => {
+		const sessionId = ctx.sessionManager.getSessionId();
+		// If this session is a child (has a parent), merge its cost upward
+		state.finalizeChildSession(sessionId);
+	});
 
 	// ─── Auto-upgrade: track consecutive tool failures ─────────────────────────
 	pi.on("tool_execution_end", (event, ctx) => {
