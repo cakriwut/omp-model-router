@@ -1,6 +1,5 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { RouterState } from "../state";
-import type { RouterProfile } from "../types";
 import type { Actions } from "./shared";
 import { profileNames } from "../config";
 import {
@@ -25,7 +24,7 @@ export const handleProfile = (
 				"✕ Delete a profile",
 			];
 
-			const onSave = async (_updatedProfiles: Record<string, RouterProfile>) => {
+			const onSave = async () => {
 				await actions.reloadConfig(ctx, { preserveDebug: true });
 				await actions.ensureValidActiveRouterProfile(ctx);
 				ctx.ui.notify("Profile saved.", "info");

@@ -1,0 +1,208 @@
+import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { RouterState, ModelCostEntry } from "../state";
+import { parseCanonicalModelRef, ROUTER_TIERS } from "../config";
+import { resolveCompressionConfig } from "../context-compression";
+import { renderUsageReport, type CompressionDiagnostic } from "../ui";
+
+export const handleUsage = (
+	state: RouterState,
+) => async (_args: string[], ctx: ExtensionContext) => {
+	const profile = state.currentConfig.profiles[state.selectedProfile];
+	if (!profile) {
+		ctx.ui.notify("No active router profile.", "error");
+		return;
+	}
+
+	// ── Build model cost data from session messages (authoritative) ────────
+	const sessionModelCosts = new Map<string, ModelCostEntry>();
+	let sessionTotalCost = 0;
+	try {
+		const branch = ctx.sessionManager.getBranch() as unknown[];
+		for (const entry of branch) {
+			if (
+				typeof entry !== "object" ||
+				!entry ||
+				!("type" in entry) ||
+				entry.type !== "message"
+			)
+				continue;
+			const msg =
+				"message" in entry && typeof entry.message === "object"
+					? entry.message
+					: entry;
+			if (
+				!msg ||
+				typeof msg !== "object" ||
+				!("role" in msg) ||
+				msg.role !== "assistant"
+			)
+				continue;
+			if (!("usage" in msg) || !msg.usage) continue;
+			const u =
+				typeof msg.usage === "object" && msg.usage
+					? msg.usage
+					: undefined;
+			if (!u) continue;
+
+			const costObj =
+				typeof u === "object" &&
+				"cost" in u &&
+				typeof (u as { cost?: { total?: number } }).cost ===
+					"object" &&
+				(u as { cost?: { total?: number } }).cost
+					? (u as { cost?: { total?: number } }).cost
+					: undefined;
+			const cost = costObj && typeof costObj.total === "number" ? costObj.total : 0;
+
+			const model =
+				typeof msg === "object" &&
+				"provider" in msg &&
+				"model" in msg &&
+				typeof msg.provider === "string" &&
+				typeof msg.model === "string"
+					? `${msg.provider}/${msg.model}`
+					: typeof msg === "object" &&
+						  "model" in msg &&
+						  typeof msg.model === "string"
+						? msg.model
+						: "unknown";
+			sessionTotalCost += cost;
+
+			const usageTyped =
+				typeof u === "object"
+					? (u as {
+							input?: number;
+							output?: number;
+							cacheRead?: number;
+							cacheWrite?: number;
+						})
+					: undefined;
+
+			const existing = sessionModelCosts.get(model);
+			if (existing) {
+				existing.invocations++;
+				existing.inputTokens += usageTyped?.input ?? 0;
+				existing.outputTokens += usageTyped?.output ?? 0;
+				existing.cacheReadTokens += usageTyped?.cacheRead ?? 0;
+				existing.cacheWriteTokens += usageTyped?.cacheWrite ?? 0;
+				existing.cost += cost;
+			} else {
+				sessionModelCosts.set(model, {
+					model,
+					tier: "", // resolved below
+					invocations: 1,
+					inputTokens: usageTyped?.input ?? 0,
+					outputTokens: usageTyped?.output ?? 0,
+					cacheReadTokens: usageTyped?.cacheRead ?? 0,
+					cacheWriteTokens: usageTyped?.cacheWrite ?? 0,
+					cost,
+				});
+			}
+		}
+
+		// Resolve tier for each model by matching against profile config
+		for (const [modelRef, entry] of sessionModelCosts) {
+			for (const tier of ROUTER_TIERS) {
+				const tierConfig = profile[tier];
+				if (tierConfig.model === modelRef || tierConfig.fallbacks?.includes(modelRef)) {
+					entry.tier = tier;
+					break;
+				}
+			}
+		}
+	} catch {
+		// Fall back to router's own tracking if session read fails
+	}
+
+	// ── Resolve effective compression config + live diagnostic ─────────
+	const compressionCfg = resolveCompressionConfig(
+		state.currentConfig.historyCompression,
+		profile.historyCompression,
+	);
+
+	let diagnostic: CompressionDiagnostic | undefined;
+	if (compressionCfg?.enabled && state.compressionRequestCount === 0) {
+		// Resolve high-tier context window (same logic as provider.ts)
+		let contextWindow = 1_000_000;
+		try {
+			const { provider, modelId } = parseCanonicalModelRef(profile.high.model);
+			const m = ctx.modelRegistry.find(provider, modelId);
+			if (m?.contextWindow) contextWindow = m.contextWindow;
+		} catch {
+			/* ignore */
+		}
+
+		if (compressionCfg.progressive?.enabled) {
+			const ctxThreshold = compressionCfg.progressive.contextThreshold ?? 0.8;
+			const timeThresholdSeconds = compressionCfg.progressive.timeThreshold ?? 300;
+			// Approximate current context tokens from accumulated stats.
+			// On a fresh session with 0 compressions the input tokens are unknown
+			// here, so we report 0 — accurate enough as a "we are well under".
+			const ctxTokens = state.accumulatedOriginalTokens || 0;
+			const sinceLast = state.lastTurnTimestamp
+				? Math.floor((Date.now() - state.lastTurnTimestamp) / 1000)
+				: 0;
+			diagnostic = {
+				mode: "progressive",
+				contextTokens: ctxTokens,
+				contextThresholdTokens: Math.floor(ctxThreshold * contextWindow),
+				secondsSinceLastTurn: sinceLast,
+				timeThresholdSeconds,
+			};
+		} else if (compressionCfg.freezeAfter !== undefined) {
+			diagnostic = {
+				mode: "static",
+				currentTurn: state.debugHistory.length,
+				freezeAfter: compressionCfg.freezeAfter,
+			};
+		} else {
+			// Default mode: compresses when message count > keepLastN
+			diagnostic = {
+				mode: "default",
+				messageCount: state.debugHistory.length,
+				keepLastN: compressionCfg.keepLastN ?? 4,
+			};
+		}
+	}
+
+	// Derive tier counts from session model costs (authoritative)
+	const sessionTierCounter = { high: 0, medium: 0, low: 0 };
+	for (const entry of sessionModelCosts.values()) {
+		if (entry.tier === "high" || entry.tier === "medium" || entry.tier === "low") {
+			sessionTierCounter[entry.tier] += entry.invocations;
+		}
+	}
+
+	const report = renderUsageReport({
+		theme: ctx.ui.theme,
+		selectedProfile: state.selectedProfile,
+		profile,
+		tierCounter: sessionModelCosts.size > 0 ? sessionTierCounter : state.tierCounter,
+		modelCosts: sessionModelCosts.size > 0 ? sessionModelCosts : state.modelCosts,
+		lastDecision: state.lastDecision,
+		accumulatedCost: sessionTotalCost > 0 ? sessionTotalCost : state.accumulatedCost,
+		accumulatedOriginalTokens: state.accumulatedOriginalTokens,
+		accumulatedCompressedTokens: state.accumulatedCompressedTokens,
+		accumulatedTokensSaved: state.accumulatedTokensSaved,
+		accumulatedCacheReadTokens: state.accumulatedCacheReadTokens,
+		maxSessionBudget: state.currentConfig.maxSessionBudget,
+		modelRegistry: ctx.modelRegistry,
+		compression: {
+			enabled: compressionCfg?.enabled ?? false,
+			requestCount: state.compressionRequestCount,
+			totalOriginalChars: state.compressionTotalOriginalChars,
+			totalCompressedChars: state.compressionTotalCompressedChars,
+			diagnostic,
+		},
+		calibration: state.calibration
+			? {
+					mode: state.currentConfig.calibration?.mode ?? "telemetry",
+					totalComparisons: state.calibration.totalComparisons,
+					llmCallsAttempted: state.calibration.llmCallsAttempted,
+					llmCallsFailed: state.calibration.llmCallsFailed,
+					matrix: state.calibration.matrix,
+				}
+			: undefined,
+	});
+	ctx.ui.notify(report, "info");
+};

@@ -11,7 +11,7 @@ import {
 } from "./config";
 import { RouterState } from "./state";
 import { updateStatus } from "./ui";
-import { registerCommands } from "./commands";
+import { registerCommands } from "./commands/index.js";
 import { registerRouterProvider } from "./provider";
 import {
 	onSessionStart as calibrationSessionStart,
