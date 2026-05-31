@@ -41,10 +41,16 @@ Cost-optimized model routing for [Oh-My-Pi](https://github.com/can1357/oh-my-pi)
 
 ## Installation
 
-### Via Pi CLI (Recommended)
+### Via CLI (Recommended)
 
+**Using `pi` CLI:**
 ```bash
 pi install npm:@cakriwut/omp-model-router
+```
+
+**Using `omp` CLI:**
+```bash
+omp install @cakriwut/omp-model-router
 ```
 
 Then in OMP:
