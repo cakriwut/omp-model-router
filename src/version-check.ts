@@ -155,17 +155,29 @@ async function fetchLatestVersion(): Promise<string | undefined> {
 
 /**
  * Returns the current package version read from package.json.
- * Uses import.meta.dir to locate the file relative to this module.
+ * Walks up from import.meta.dir to find the package.json with matching name,
+ * which handles different installation layouts (npm, dev, bundled).
  */
 export function getCurrentVersion(): string {
-	const pkgPath = join(import.meta.dir, "..", "package.json");
-	try {
-		const raw = readFileSync(pkgPath, "utf-8");
-		const pkg = JSON.parse(raw) as { version?: string };
-		return pkg.version ?? "0.0.0";
-	} catch {
-		return "0.0.0";
+	let dir = import.meta.dir;
+	// Walk up to 6 levels looking for our package.json
+	for (let i = 0; i < 6; i++) {
+		const pkgPath = join(dir, "package.json");
+		try {
+			const raw = readFileSync(pkgPath, "utf-8");
+			const pkg = JSON.parse(raw) as { name?: string; version?: string };
+			// Verify this is our package, not a parent's wrapper
+			if (pkg.name === PACKAGE_NAME && pkg.version) {
+				return pkg.version;
+			}
+		} catch {
+			// File not found or parse error, continue walking up
+		}
+		const parent = join(dir, "..");
+		if (parent === dir) break; // Hit root
+		dir = parent;
 	}
+	return "unknown";
 }
 
 /**

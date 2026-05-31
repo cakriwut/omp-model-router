@@ -143,8 +143,13 @@ export const registerCommands = (
 ) => {
 	const handleStatus = async (_args: string[], ctx: ExtensionContext) => {
 		const names = profileNames(state.currentConfig).join(", ");
+		const currentVersion = getCurrentVersion();
+		const updateLine = state.updateAvailable
+			? `Version: v${currentVersion} (v${state.updateAvailable.latest} available — run /router update)`
+			: `Version: v${currentVersion}`;
 		const lines = [
 			"Model Router Status:",
+			updateLine,
 			`Router enabled: ${state.routerEnabled ? "yes" : "off"}`,
 			`Selected profile: ${state.selectedProfile}`,
 			`Selected profile pin: ${state.pinnedTierByProfile[state.selectedProfile] ?? "auto"}`,
