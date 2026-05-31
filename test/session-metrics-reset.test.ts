@@ -49,17 +49,19 @@ describe("Session metrics reset", () => {
 			profiles: {},
 		};
 
-		// Simulate accumulated metrics from previous activity
+		// Simulate old session with accumulated metrics
+		state.activateSession("old-session");
 		state.accumulatedCost = 5.0;
 		state.accumulatedOriginalTokens = 500000;
 		state.accumulatedCompressedTokens = 250000;
 		state.accumulatedTokensSaved = 222000;
 		state.accumulatedCacheReadTokens = 7961800;
 
-		// ─── Act: restore from session (simulates new session start) ──
+		// ─── Act: start a new session (different ID → fresh scope) ──
+		state.activateSession("new-session");
 		state.restoreFromSession(mockCtx as any);
 
-		// ─── Assert: all accumulated metrics should be reset to 0 ─────
+		// ─── Assert: all accumulated metrics should be 0 (new scope) ─────
 		expect(state.accumulatedCost).toBe(0);
 		expect(state.accumulatedOriginalTokens).toBe(0);
 		expect(state.accumulatedCompressedTokens).toBe(0);

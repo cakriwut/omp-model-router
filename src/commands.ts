@@ -567,6 +567,11 @@ export const registerCommands = (
 			}
 		}
 
+		// Debug: trace scope state at command time
+		if (state.debugEnabled) {
+			console.log(`[router usage] activeSessionId=${state.activeSessionId} cost=${state.accumulatedCost} tierCounter=${JSON.stringify(state.tierCounter)} modelCosts.size=${state.modelCosts.size}`);
+		}
+
 		const report = renderUsageReport({
 			theme: ctx.ui.theme,
 			selectedProfile: state.selectedProfile,

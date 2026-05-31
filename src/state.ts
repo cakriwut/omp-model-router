@@ -423,11 +423,9 @@ export class RouterState {
 		this.thinkingByProfile = {};
 		this.widgetEnabled = false;
 		this.debugHistory = [];
-		this.accumulatedCost = 0;
-		this.accumulatedOriginalTokens = 0;
-		this.accumulatedCompressedTokens = 0;
-		this.accumulatedTokensSaved = 0;
-		this.accumulatedCacheReadTokens = 0;
+		// NOTE: Do NOT reset accumulatedCost, tierCounter, modelCosts here.
+		// These are session-scoped metrics that persist across /reload.
+		// They are only zero-initialized when activateSession() creates a NEW scope.
 		this.lastNonRouterModel =
 			ctx.model && ctx.model.provider !== "router"
 				? `${ctx.model.provider}/${ctx.model.id}`
