@@ -16,6 +16,8 @@ export interface ExtractOptions {
 	toolCallFormat?: "args" | "name-only";
 	/** Truncate the resulting string to this many characters (default: no limit). */
 	maxLength?: number;
+	/** String used to join extracted parts (default: "\n"). */
+	joiner?: string;
 }
 
 /**
@@ -31,6 +33,7 @@ export function extractMessageText(
 		includeToolCalls = true,
 		toolCallFormat = "args",
 		maxLength,
+		joiner = "\n",
 	} = opts;
 
 	if (typeof content === "string") {
@@ -53,7 +56,7 @@ export function extractMessageText(
 		}
 	}
 
-	const joined = parts.join("\n");
+	const joined = parts.join(joiner);
 	return maxLength !== undefined ? joined.slice(0, maxLength) : joined;
 }
 
