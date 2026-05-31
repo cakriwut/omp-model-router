@@ -1,4 +1,4 @@
-import { streamSimple, type Context, type Message } from "@oh-my-pi/pi-ai";
+import { type Context, type Message, streamSimple } from "@oh-my-pi/pi-ai";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { parseCanonicalModelRef, isRouterTier } from "./config";
 import { buildClassifierPrompt, parseClassifierOutput } from "./calibration/classifier-utils";
@@ -10,36 +10,18 @@ import type {
 	RoutingRule,
 	RouterThinkingByTier,
 } from "./types";
+import {
+	extractMessageText,
+	getLastUserText as getLastUserTextUtil,
+} from "./utils/messages.js";
 
 // ─── Text extraction utilities ────────────────────────────────────────────────
 
-export const extractTextFromContent = (
+export const extractTextFromContent: (
 	content: string | Message["content"],
-): string => {
-	if (typeof content === "string") {
-		return content;
-	}
-	return content
-		.map((part) => {
-			if (part.type === "text") return part.text;
-			if (part.type === "thinking") return part.thinking;
-			if (part.type === "toolCall")
-				return `${part.name} ${JSON.stringify(part.arguments)}`;
-			return "";
-		})
-		.filter(Boolean)
-		.join("\n");
-};
+) => string = extractMessageText;
 
-export const getLastUserText = (context: Context): string => {
-	for (let i = context.messages.length - 1; i >= 0; i--) {
-		const message = context.messages[i];
-		if (message.role === "user") {
-			return extractTextFromContent(message.content).trim();
-		}
-	}
-	return "";
-};
+export const getLastUserText: (context: Context) => string = getLastUserTextUtil;
 
 export const getRecentConversationText = (
 	context: Context,
