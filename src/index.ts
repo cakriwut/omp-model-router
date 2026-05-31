@@ -24,16 +24,18 @@ import { registerRtkIntegration } from "./rtk-integration";
 
 // ─── Single-instance guard ────────────────────────────────────────────────────
 // omp may load the extension twice when both the dev path and the installed
-// extension resolve to the same package (e.g. via symlink). The second call
-// is a no-op: it skips registration and logs a warning.
+// extension resolve to the same package (e.g. via symlink). The guard is set
+// at module evaluation time so that whichever copy is imported second sees the
+// flag immediately — before routerExtension() is ever called.
 const _INSTANCE_KEY = Symbol.for("@cakriwut/omp-model-router:loaded");
-
+const _g = globalThis as Record<symbol, unknown>;
+const _alreadyLoaded = !!_g[_INSTANCE_KEY];
+if (_alreadyLoaded) {
+	console.warn("[model-router] duplicate module load detected — second instance will be a no-op");
+}
+_g[_INSTANCE_KEY] = true;
 const routerExtension = (pi: ExtensionAPI) => {
-	if ((globalThis as Record<symbol, unknown>)[_INSTANCE_KEY]) {
-		console.warn("[model-router] duplicate instance detected — skipping registration");
-		return;
-	}
-	(globalThis as Record<symbol, unknown>)[_INSTANCE_KEY] = true;
+	if (_alreadyLoaded) return;
 
 	pi.setLabel("Model Router");
 
