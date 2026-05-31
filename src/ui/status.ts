@@ -54,6 +54,10 @@ class ShimmerWidget {
 		return [" " + shimmerSegments(this.#segments, this.#theme) + this.#suffix];
 	}
 
+	invalidate(): void {
+		this.#tui.requestRender();
+	}
+
 	dispose(): void {
 		if (this.#interval) {
 			clearInterval(this.#interval);

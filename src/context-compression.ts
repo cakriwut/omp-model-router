@@ -556,7 +556,7 @@ export function applyCompression(input: ApplyCompressionInput): CompressionResul
 
 			// Extract TOON block for checkpoint
 			const toonBlockContent = result.context.messages
-				.find((m) => m.role === "user" && typeof m.content === "string" && m.content.includes("TOON"))
+				.find((m) => m.role === "user" && typeof m.content === "string" && m.content.startsWith("[HISTORY:"))
 				?.content as string | undefined;
 
 			const newCheckpoint = toonBlockContent
@@ -606,9 +606,8 @@ export function applyCompression(input: ApplyCompressionInput): CompressionResul
 				}
 
 				const toonBlockContent = result.context.messages
-					.find((m) => m.role === "user" && typeof m.content === "string" && m.content.includes("TOON"))
+					.find((m) => m.role === "user" && typeof m.content === "string" && m.content.startsWith("[HISTORY:"))
 					?.content as string | undefined;
-
 				const newCheckpoint = toonBlockContent
 					? {
 							frozenBlock: toonBlockContent,

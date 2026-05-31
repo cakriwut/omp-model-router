@@ -118,7 +118,7 @@ export class ModelPickerComponent implements Component {
 	#scope: string = "all";
 	#filtered: ModelItem[];
 	#selectedIndex: number = 0;
-	#selectList: SelectList;
+	#selectList: SelectList | undefined;
 
 	constructor(
 		_tui: unknown,
@@ -150,10 +150,15 @@ export class ModelPickerComponent implements Component {
 		this.#searchInput.focused = true;
 
 		this.#filtered = [...this.#models];
-		this.#selectList = this.#buildSelectList();
+		this.#filtered = [...this.#models];
+		this.#selectList = undefined; // Lazy init in render()
 	}
-
 	render(width: number): string[] {
+		// Lazy init SelectList on first render (when theme is available)
+		if (!this.#selectList) {
+			this.#selectList = this.#buildSelectList();
+		}
+
 		const t = this.#theme;
 		const lines: string[] = [];
 

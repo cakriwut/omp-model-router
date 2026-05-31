@@ -31,7 +31,7 @@ export class FallbackPickerComponent implements Component {
 	// UI state
 	#tabBar: TabBar;
 	#searchInput: Input;
-	#selectList: SelectList;
+	#selectList: SelectList | undefined;
 	#scope: string = "all";
 	#selectedIndex: number = 0;
 	#filteredModels: SelectItem[] = [];
@@ -87,17 +87,20 @@ export class FallbackPickerComponent implements Component {
 		// Initialize search input
 		this.#searchInput = new Input();
 		
-		// Initialize select list with item formatting
-		this.#selectList = new SelectList([], 8, selectListTheme);
+		// SelectList will be initialized lazily in render()
+		this.#selectList = undefined;
 		
 		// Apply initial filter
 		this.#applyFilters();
 	}
 
 	render(width: number): string[] {
+		// Lazy init SelectList on first render (when theme is available)
+		if (!this.#selectList) {
+			this.#selectList = new SelectList(this.#filteredModels, 8, getSelectListTheme());
+		}
+
 		const lines: string[] = [];
-		
-		// Header line: "Pick fallbacks for {TIER}" left-aligned, "(primary: {shortName})" right-aligned
 		const primaryShortName = this.#getShortName(this.#primaryRef);
 		const tierLabel = `Pick fallbacks for ${this.#currentTier.toUpperCase()}`;
 		const primaryInfo = `(primary: ${primaryShortName})`;

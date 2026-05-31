@@ -102,18 +102,19 @@ export function registerRtkIntegration(
 
 	state.rtkActive = true;
 
-	pi.on("tool_call", async (event: ToolCallEvent) => {
+	pi.on("tool_execution_start", async (event) => {
 		// RTK currently only supports bash tool rewrites.
 		if (event.toolName !== "bash") return;
 
-		const original = event.input.command;
+		const args = event.args as { command?: string };
+		const original = args.command;
 		if (!original || original.trim() === "") return;
 
 		try {
 			const decision = await rewriteWithRtk(original);
 			if (decision.kind === "skip") return;
 
-			event.input.command = decision.rewritten;
+			args.command = decision.rewritten;
 			state.rtkRewriteCount++;
 
 			if (state.currentConfig.debug) {

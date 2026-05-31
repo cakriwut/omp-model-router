@@ -7,6 +7,7 @@ import {
 	type SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -434,10 +435,10 @@ export const registerRouterProvider = (
 								};
 								
 								console.log('[ROUTER] Compression triggered:', compressionDebugData);
-								
-								if (state.currentConfig.debugVerbose) {
-									ctx.sessionManager.appendCustomEntry('router:compression-trigger', compressionDebugData);
-								}
+								// TODO: Debug logging to session - API not available yet
+								// if (state.currentConfig.debugVerbose && state.lastExtensionContext) {
+								// 	state.lastExtensionContext.sessionManager.appendCustomEntry('router:compression-trigger', compressionDebugData);
+								// }
 							}
 						}
 						
@@ -470,63 +471,70 @@ export const registerRouterProvider = (
 						// Update last turn timestamp for cache expiry detection
 						state.lastTurnTimestamp = now;
 
-							const delegatedReasoning =
-								targetModel.reasoning &&
-								(thinkingOverride ?? decision.thinking) !== "off"
-									? (thinkingOverride ?? decision.thinking)
-									: undefined;
+						const thinkingOverride = actions.getThinkingOverride(
+							model.id,
+							decision.tier,
+						);
+						const effectiveThinking = thinkingOverride ?? decision.thinking;
+						const delegatedReasoning =
+							targetModel.reasoning &&
+							effectiveThinking !== ThinkingLevel.Off &&
+							effectiveThinking !== ThinkingLevel.Inherit
+								? effectiveThinking
+								: undefined;
 
-							if (state.lastExtensionContext) {
-								if (delegatedReasoning) {
-									state.lastExtensionContext.ui.setHiddenThinkingLabel?.(
-										`Thinking (${targetProvider}/${targetModelId})...`,
-									);
-								} else {
-									state.lastExtensionContext.ui.setHiddenThinkingLabel?.();
-								}
+						// TODO: Hidden thinking label - API not available yet
+						// if (state.lastExtensionContext) {
+						// 	if (delegatedReasoning) {
+						// 		state.lastExtensionContext.ui.setHiddenThinkingLabel?.(
+						// 			`Thinking (${targetProvider}/${targetModelId})...`,
+						// 		);
+						// 	} else {
+						// 		state.lastExtensionContext.ui.setHiddenThinkingLabel?.();
+						// 	}
+						// }
+
+						const delegatedStream = streamSimple(targetModel, sanitizeContext(finalContext), {
+							...options,
+							apiKey,
+							headers: targetModel.headers,
+							...(delegatedReasoning ? { reasoning: delegatedReasoning } : {}),
+						});
+
+						for await (const event of delegatedStream) {
+							if (event.type === "done") {
+								const u = event.message.usage;
+								const cost = u?.cost?.total ?? 0;
+								state.accumulatedCost += cost;
+								state.accumulatedCacheReadTokens += u?.cacheRead ?? 0;
+								decision.usage = {
+									inputTokens:
+										(decision.usage?.inputTokens ?? 0) + (u?.input ?? 0),
+									outputTokens:
+										(decision.usage?.outputTokens ?? 0) + (u?.output ?? 0),
+									cacheReadTokens:
+										(decision.usage?.cacheReadTokens ?? 0) +
+										(u?.cacheRead ?? 0),
+									cacheWriteTokens:
+										(decision.usage?.cacheWriteTokens ?? 0) +
+										(u?.cacheWrite ?? 0),
+									cost: (decision.usage?.cost ?? 0) + cost,
+								};
+								// Track model cost
+								state.recordModelCost(decision.targetLabel, decision.tier, {
+									inputTokens: u?.input ?? 0,
+									outputTokens: u?.output ?? 0,
+									cacheReadTokens: u?.cacheRead ?? 0,
+									cacheWriteTokens: u?.cacheWrite ?? 0,
+									cost,
+								});
 							}
-
-							const delegatedStream = streamSimple(targetModel, sanitizeContext(finalContext), {
-								...options,
-								apiKey,
-								headers: targetModel.headers,
-								...(delegatedReasoning ? { reasoning: delegatedReasoning } : {}),
-							});
-
-							for await (const event of delegatedStream) {
-								if (event.type === "done") {
-									const u = event.message.usage;
-									const cost = u?.cost?.total ?? 0;
-									state.accumulatedCost += cost;
-									state.accumulatedCacheReadTokens += u?.cacheRead ?? 0;
-									decision.usage = {
-										inputTokens:
-											(decision.usage?.inputTokens ?? 0) + (u?.input ?? 0),
-										outputTokens:
-											(decision.usage?.outputTokens ?? 0) + (u?.output ?? 0),
-										cacheReadTokens:
-											(decision.usage?.cacheReadTokens ?? 0) +
-											(u?.cacheRead ?? 0),
-										cacheWriteTokens:
-											(decision.usage?.cacheWriteTokens ?? 0) +
-											(u?.cacheWrite ?? 0),
-										cost: (decision.usage?.cost ?? 0) + cost,
-									};
-									// Track model cost
-									state.recordModelCost(decision.targetLabel, decision.tier, {
-										inputTokens: u?.input ?? 0,
-										outputTokens: u?.output ?? 0,
-										cacheReadTokens: u?.cacheRead ?? 0,
-										cacheWriteTokens: u?.cacheWrite ?? 0,
-										cost,
-									});
-								}
-								if (event.type === "error") {
-									throw new Error(
-										(event as { error?: { errorMessage?: string } }).error
-											?.errorMessage || "Model failed.",
-									);
-								}
+							if (event.type === "error") {
+								throw new Error(
+									(event as { error?: { errorMessage?: string } }).error
+										?.errorMessage || "Model failed.",
+								);
+							}
 							stream.push(event);
 						}
 						if (state.currentConfig.debug) {

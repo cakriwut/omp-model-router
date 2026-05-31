@@ -1,18 +1,26 @@
 /**
- * Heuristic keyword-based routing logic.
+ * Tier resolution heuristics.
+ * Keyword matching, context triggers, and decision primitives.
  */
 
 import type { Context } from "@oh-my-pi/pi-ai";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { parseCanonicalModelRef } from "../config";
 import type {
 	RouterTier,
-	RouterPhase,
 	RouterProfile,
+	RouterPhase,
 	RoutingDecision,
 	RoutingRule,
 	RouterThinkingByTier,
 } from "../types";
-import { getLastUserText, countToolResults, countWords, getRecentConversationText } from "./text";
+import {
+	hasImageAttachment,
+	getLastUserText,
+	countToolResults,
+	countWords,
+	getRecentConversationText,
+} from "./text";
 
 // ─── Keyword matching ─────────────────────────────────────────────────────────
 
@@ -239,10 +247,15 @@ export const buildRoutingDecision = (
 ): RoutingDecision => {
 	const routed = profile[tier];
 	const { provider, modelId } = parseCanonicalModelRef(routed.model);
-	const baseThinking =
+	const baseThinking: ThinkingLevel =
 		routed.thinking ??
-		(tier === "high" ? "high" : tier === "low" ? "low" : "medium");
-	const effectiveThinking = thinkingOverrides?.[tier] ?? baseThinking;
+		(tier === "high"
+			? ThinkingLevel.High
+			: tier === "low"
+				? ThinkingLevel.Low
+				: ThinkingLevel.Medium);
+	const effectiveThinking: ThinkingLevel =
+		thinkingOverrides?.[tier] ?? baseThinking;
 
 	return {
 		profile: profileName,

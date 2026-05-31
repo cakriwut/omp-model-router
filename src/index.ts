@@ -202,10 +202,10 @@ const routerExtension = (pi: ExtensionAPI) => {
 					"warning",
 				);
 				state.routerEnabled = false;
-				ctx.ui.setHiddenThinkingLabel?.();
+				// ctx.ui.setHiddenThinkingLabel?.(); // API not available yet
 			}
 		} else {
-			ctx.ui.setHiddenThinkingLabel?.();
+			// ctx.ui.setHiddenThinkingLabel?.(); // API not available yet
 		}
 
 		state.persist();
@@ -267,10 +267,10 @@ const routerExtension = (pi: ExtensionAPI) => {
 					"warning",
 				);
 				state.routerEnabled = false;
-				ctx.ui.setHiddenThinkingLabel?.();
+				// ctx.ui.setHiddenThinkingLabel?.(); // API not available yet
 			}
 		} else {
-			ctx.ui.setHiddenThinkingLabel?.();
+			// ctx.ui.setHiddenThinkingLabel?.(); // API not available yet
 		}
 
 		state.persist();
@@ -306,7 +306,7 @@ const routerExtension = (pi: ExtensionAPI) => {
 			state.lastNonRouterModel = `${ctx.model.provider}/${ctx.model.id}`;
 			patchConfigFile({ routerEnabled: false });
 			state.persist();
-			ctx.ui.setHiddenThinkingLabel?.();
+			// ctx.ui.setHiddenThinkingLabel?.(); // API not available yet
 			actions.updateStatus(ctx);
 		}
 

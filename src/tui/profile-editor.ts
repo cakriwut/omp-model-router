@@ -1,13 +1,17 @@
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import type { KeybindingsManager, Theme, ModelRegistry } from "@oh-my-pi/pi-coding-agent";
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { RouterProfile, RouterTier } from "../types";
 import { ModelPickerComponent } from "./model-picker";
 import { FallbackPickerComponent } from "./fallback-picker";
 
 const TIERS: readonly RouterTier[] = ["high", "medium", "low"] as const;
-const THINKING_CYCLE: readonly ThinkingLevel[] = ["low" as const, "medium" as const, "high" as const];
+const THINKING_CYCLE: readonly ThinkingLevel[] = [
+	ThinkingLevel.Low,
+	ThinkingLevel.Medium,
+	ThinkingLevel.High,
+] as const;
 type FieldKind = "model" | "thinking" | "fallbacks";
 const FIELDS: readonly FieldKind[] = ["model", "thinking", "fallbacks"] as const;
 
@@ -271,9 +275,9 @@ export class ProfileEditorComponent implements Component {
 		const tierCfg = this.#draft[tier];
 		const fallbacks = tierCfg.fallbacks ?? [];
 		
-		this.#customUI<string | undefined>((_tui, theme, keybindings, done) => {
+		this.#customUI<string | undefined>((tui, theme, keybindings, done) => {
 			return new ModelPickerComponent(
-				_tui,
+				tui as TUI,
 				theme,
 				keybindings,
 				done,
@@ -302,9 +306,9 @@ export class ProfileEditorComponent implements Component {
 				description: `${m.provider} · ${Math.floor(m.contextWindow / 1000)}k`,
 			}));
 		
-		this.#customUI<string[] | undefined>((_tui, theme, keybindings, done) => {
+		this.#customUI<string[] | undefined>((tui, theme, keybindings, done) => {
 			return new FallbackPickerComponent(
-				_tui,
+				tui as TUI,
 				theme,
 				keybindings,
 				done,
@@ -492,7 +496,7 @@ export async function openDeleteProfile(
 	const target = await ctx.ui.select("Select profile to delete:", profiles);
 	if (!target) return;
 
-	const confirmed = await ctx.ui.confirm(`Delete profile "${target}"?`);
+	const confirmed = await ctx.ui.confirm(`Delete profile "${target}"?`, "This action cannot be undone.");
 	if (!confirmed) return;
 
 	const updatedProfiles = { ...config.profiles };
