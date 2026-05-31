@@ -445,34 +445,50 @@ export const registerRouterProvider = (
 					let lastError: unknown;
 					let success = false;
 
-					for (let i = 0; i < modelsToTry.length; i++) {
-						const modelRef = modelsToTry[i];
-						const { provider: targetProvider, modelId: targetModelId } =
-							parseCanonicalModelRef(modelRef);
+				for (let i = 0; i < modelsToTry.length; i++) {
+					const modelRef = modelsToTry[i];
+					const { provider: targetProvider, modelId: targetModelId } =
+						parseCanonicalModelRef(modelRef);
 
-						if (targetProvider === "router") continue;
-
-						const targetModel = state.currentModelRegistry.find(
-							targetProvider,
-							targetModelId,
+					if (state.currentConfig.debug) {
+						console.log(
+							`[model-router] Attempt ${i + 1}/${modelsToTry.length}: ${modelRef}`,
 						);
-						if (!targetModel) {
-							lastError = new Error(
-								`Routed model not found: ${targetProvider}/${targetModelId}`,
-							);
-							continue;
-						}
+					}
 
-						const apiKey = await state.currentModelRegistry.getApiKey(
-							targetModel,
+					if (targetProvider === "router") {
+						if (state.currentConfig.debug) {
+							console.log(`  ✗ Skipped: router provider`);
+						}
+						continue;
+					}
+
+					const targetModel = state.currentModelRegistry.find(
+						targetProvider,
+						targetModelId,
+					);
+					if (!targetModel) {
+						if (state.currentConfig.debug) {
+							console.log(`  ✗ Skipped: model not in registry`);
+						}
+						lastError = new Error(
+							`Routed model not found: ${targetProvider}/${targetModelId}`,
 						);
-						if (!apiKey) {
-							lastError = new Error(
-								`No API key for routed model: ${targetProvider}/${targetModelId}`,
-							);
-							continue;
-						}
+						continue;
+					}
 
+					const apiKey = await state.currentModelRegistry.getApiKey(
+						targetModel,
+					);
+					if (!apiKey) {
+						if (state.currentConfig.debug) {
+							console.log(`  ✗ Skipped: no API key`);
+						}
+						lastError = new Error(
+							`No API key for routed model: ${targetProvider}/${targetModelId}`,
+						);
+						continue;
+					}
 						try {
 							// Auto-truncation if picked model has smaller context window
 							const targetLimit = targetModel.contextWindow || 128_000;
@@ -765,19 +781,32 @@ export const registerRouterProvider = (
 											?.errorMessage || "Model failed.",
 									);
 								}
-								stream.push(event);
-							}
-							success = true;
-							if (i > 0) decision.isFallback = true;
-							break;
-						} catch (err) {
-							lastError = err;
+							stream.push(event);
 						}
+						if (state.currentConfig.debug) {
+							console.log(`  ✓ Success with ${modelRef}`);
+						}
+						success = true;
+						if (i > 0) decision.isFallback = true;
+						break;
+					} catch (err) {
+						const errMsg = err instanceof Error ? err.message : String(err);
+						if (state.currentConfig.debug) {
+							console.log(`  ✗ Failed: ${errMsg}`);
+						}
+						lastError = err;
 					}
+				}
 
-					if (!success) {
-						throw lastError || new Error("Failed to delegate to any model in the chain.");
+				if (!success) {
+					if (state.currentConfig.debug) {
+						console.log(
+							`[model-router] ❌ All ${modelsToTry.length} models failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+						);
 					}
+					throw lastError || new Error("Failed to delegate to any model in the chain.");
+				}
+
 
 					stream.end();
 				} catch (error) {

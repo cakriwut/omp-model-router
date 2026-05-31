@@ -21,14 +21,14 @@ src/
 test/                     # Test suite (bun test)
 ```
 
-## Key Features
-
 - **Intelligent Routing**: Classifies prompts into High/Medium/Low tiers based on complexity
 - **Adaptive Calibration**: LLM-powered classifier for routing decisions (when enabled)
 - **Cost Optimization**: Automatically selects cheaper models for simple tasks
+- **Model Fallback Chain**: Automatically retries fallback models when primary fails
 - **History Compression (TOON)**: Compresses old conversation history, saving 30–50% of input tokens
 - **RTK Integration**: Reduces tool output tokens by 60-90% (requires `rtk` binary)
 - **Budget Tracking**: Enforces session budgets and downgrades tiers when exceeded
+- **Debug Logging**: Detailed fallback attempt logging when `debug: true`
 
 
 ## Installation
@@ -238,6 +238,39 @@ bun run release:patch  # 0.4.0 → 0.4.1
 bun run release:minor  # 0.4.0 → 0.5.0
 bun run release:major  # 0.4.0 → 1.0.0
 ```
+
+## Testing & Debugging
+
+### Fallback Chain Testing
+
+To verify the model fallback mechanism works:
+
+1. **Enable debug mode** (`debug: true` in config)
+2. **Run unit tests:**
+   ```bash
+   bun test test/fallback-chain.test.ts
+   ```
+3. **Simulate a failure** by setting an invalid primary model
+4. **Check logs** for fallback attempts:
+   ```
+   [model-router] Attempt 1/4: amazon-bedrock/primary-model
+     ✗ Failed: Service unavailable
+   [model-router] Attempt 2/4: amazon-bedrock/fallback-model
+     ✓ Success with amazon-bedrock/fallback-model
+   ```
+
+See `docs/FALLBACK_TESTING_GUIDE.md` for detailed instructions.
+
+### Common Issues
+
+**Fallbacks not triggering?**
+- Check logs with `debug: true`
+- Verify fallback models exist in registry
+- Ensure API keys are configured
+
+**Bedrock models failing?**
+- Use correct inference profile ARNs, not raw model IDs
+- Example: `amazon-bedrock/global.anthropic.claude-opus-4-7`
 
 ## License
 

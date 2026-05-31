@@ -26,6 +26,12 @@ import {
 } from "./ui";
 import { getCurrentVersion, checkForUpdate, isDevInstall } from "./version-check";
 import { resolveCompressionConfig } from "./context-compression";
+import {
+	openProfileEditor,
+	openCreateProfile,
+	openRenameProfile,
+	openDeleteProfile,
+} from "./tui/profile-editor";
 
 // ─── Config set helpers ───────────────────────────────────────────────────────
 
@@ -183,10 +189,51 @@ export const registerCommands = (
 	const handleProfile = async (args: string[], ctx: ExtensionContext) => {
 		const profileName = args[0];
 		if (!profileName) {
-			ctx.ui.notify(
-				`Current profile: ${state.selectedProfile}. Available: ${profileNames(state.currentConfig).join(", ")}`,
-				"info",
-			);
+			// Interactive TUI mode when available
+			if (ctx.hasUI) {
+				const profiles = profileNames(state.currentConfig);
+				const items = [
+					...profiles.map((name) => ({
+						value: name,
+						label: `router/${name}`,
+					})),
+					{ value: "＋ Create new profile", label: "＋ Create new profile" },
+					{ value: "✎ Rename a profile", label: "✎ Rename a profile" },
+					{ value: "✕ Delete a profile", label: "✕ Delete a profile" },
+				];
+
+				const onSave = async (updatedProfiles: Record<string, RouterProfile>) => {
+					await actions.reloadConfig(ctx, { preserveDebug: true });
+					await actions.ensureValidActiveRouterProfile(ctx);
+					ctx.ui.notify("Profile saved.", "info");
+				};
+
+				const selected = await ctx.ui.select("Select a profile or action", items);
+				if (!selected) return;
+
+				if (selected === "＋ Create new profile") {
+					await openCreateProfile(state.currentConfig, ctx.modelRegistry, ctx, onSave);
+				} else if (selected === "✎ Rename a profile") {
+					await openRenameProfile(state.currentConfig, ctx.modelRegistry, ctx, onSave);
+				} else if (selected === "✕ Delete a profile") {
+					await openDeleteProfile(state.currentConfig, ctx, onSave);
+				} else {
+					// It's a profile name - switch to it
+					const success = await actions.switchToRouterProfile(selected, ctx);
+					if (success) {
+						ctx.ui.notify(
+							`Switched to router profile: ${state.selectedProfile}`,
+							"info",
+						);
+					}
+				}
+			} else {
+				// Non-interactive fallback
+				ctx.ui.notify(
+					`Current profile: ${state.selectedProfile}. Available: ${profileNames(state.currentConfig).join(", ")}`,
+					"info",
+				);
+			}
 			return;
 		}
 		const success = await actions.switchToRouterProfile(profileName, ctx);
