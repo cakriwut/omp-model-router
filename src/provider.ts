@@ -774,6 +774,20 @@ export const registerRouterProvider = (
 											(u?.cacheWrite ?? 0),
 										cost: (decision.usage?.cost ?? 0) + cost,
 									};
+									// Record into authoritative usage ledger
+									state.recordUsage({
+										timestamp: Date.now(),
+										profile: decision.profile,
+										tier: decision.tier,
+										model: decision.targetLabel,
+										inputTokens: u?.input ?? 0,
+										outputTokens: u?.output ?? 0,
+										cacheReadTokens: u?.cacheRead ?? 0,
+										cacheWriteTokens: u?.cacheWrite ?? 0,
+										cost,
+										isClassifier: decision.isClassifier,
+										isFallback: decision.isFallback,
+									});
 								}
 								if (event.type === "error") {
 									throw new Error(

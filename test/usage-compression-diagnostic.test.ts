@@ -20,7 +20,7 @@ const baseInput = {
 	theme: makeTheme(),
 	selectedProfile: "default",
 	profile: baseProfile,
-	debugHistory: [],
+	usageLedger: [],
 	lastDecision: undefined,
 	modelRegistry: { find: () => ({ contextWindow: 200_000 }) },
 };

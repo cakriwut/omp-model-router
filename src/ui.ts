@@ -487,7 +487,7 @@ export interface UsageReportInput {
 	theme: Theme;
 	selectedProfile: string;
 	profile: RouterConfig["profiles"][string];
-	debugHistory: RoutingDecision[];
+	usageLedger: import("./state").UsageLedgerEntry[];
 	lastDecision: RoutingDecision | undefined;
 	accumulatedCost?: number;
 	accumulatedOriginalTokens?: number;
@@ -516,7 +516,7 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 		theme,
 		selectedProfile,
 		profile,
-		debugHistory,
+		usageLedger,
 		lastDecision,
 		accumulatedCost,
 		maxSessionBudget,
@@ -530,16 +530,18 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 		return theme.fg("dim", text);
 	};
 
-	// Gather per-model usage from debug history for this profile
-	const modelUsage: Record<string, { count: number; tier: string; cost: number }> = {};
+	// Gather per-model usage from ledger (authoritative, not capped)
+	const modelUsage: Record<string, { count: number; tier: string; cost: number; inputTokens: number; outputTokens: number }> = {};
 	const tierCounts = { high: 0, medium: 0, low: 0 };
-	for (const d of debugHistory) {
-		if (d.profile !== selectedProfile) continue;
-		const key = d.targetLabel;
-		if (!modelUsage[key]) modelUsage[key] = { count: 0, tier: d.tier, cost: 0 };
+	for (const entry of usageLedger) {
+		if (entry.profile !== selectedProfile) continue;
+		const key = entry.model;
+		if (!modelUsage[key]) modelUsage[key] = { count: 0, tier: entry.tier, cost: 0, inputTokens: 0, outputTokens: 0 };
 		modelUsage[key].count++;
-		modelUsage[key].cost += d.usage?.cost ?? 0;
-		if (d.tier in tierCounts) tierCounts[d.tier as keyof typeof tierCounts]++;
+		modelUsage[key].cost += entry.cost;
+		modelUsage[key].inputTokens += entry.inputTokens;
+		modelUsage[key].outputTokens += entry.outputTokens;
+		if (entry.tier in tierCounts) tierCounts[entry.tier as keyof typeof tierCounts]++;
 	}
 	const totalDecisions = tierCounts.high + tierCounts.medium + tierCounts.low;
 

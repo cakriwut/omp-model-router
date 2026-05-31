@@ -573,7 +573,7 @@ export const registerCommands = (
 			theme: ctx.ui.theme,
 			selectedProfile: state.selectedProfile,
 			profile,
-			debugHistory: state.debugHistory,
+			usageLedger: state.usageLedger,
 			lastDecision: state.lastDecision,
 			accumulatedCost: state.accumulatedCost,
 			accumulatedOriginalTokens: state.accumulatedOriginalTokens,

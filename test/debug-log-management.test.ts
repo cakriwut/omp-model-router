@@ -77,12 +77,13 @@ describe("Debug log management", () => {
 		expect(state.debugHistory.length).toBe(30);
 	});
 
-	test("debugHistoryLimit applies when restoring from saved state", () => {
+	test("debugHistory is NOT restored from saved state (session-scoped, starts empty)", () => {
 		const mockContext: any = {
 			cwd: "/test",
 			modelRegistry: {},
 			model: { provider: "router", id: "auto" },
 			sessionManager: {
+				getSessionId: () => "test-session-1",
 				getBranch: () => [
 					{
 						type: "custom",
@@ -105,10 +106,12 @@ describe("Debug log management", () => {
 			...mockConfig,
 			debugHistoryLimit: 8,
 		};
+		state.activateSession("test-session-1");
 		state.restoreFromSession(mockContext);
 
-		// Should only keep last 8 of the 20 saved decisions
-		expect(state.debugHistory.length).toBe(8);
+		// debugHistory should be empty — it's session-scoped and not restored
+		// Usage ledger is the authoritative source now
+		expect(state.debugHistory.length).toBe(0);
 	});
 
 	test("debugVerbose defaults to false (no session JSONL logging)", () => {

@@ -27,6 +27,27 @@ export interface SessionScope {
 	lastTurnTimestamp?: number;
 	currentCheckpoint?: CompressionCheckpoint;
 	isStreaming: boolean;
+	/** Authoritative usage ledger — every completed model invocation */
+	usageLedger: UsageLedgerEntry[];
+}
+
+/**
+ * A single entry in the usage ledger.
+ * Recorded once per completed model invocation (after stream finishes).
+ * Unlike debugHistory (capped at 12), this is unbounded for the session lifetime.
+ */
+export interface UsageLedgerEntry {
+	timestamp: number;
+	profile: string;
+	tier: RouterTier;
+	model: string;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	cost: number;
+	isClassifier?: boolean;
+	isFallback?: boolean;
 }
 import type {
 	RouterConfig,
@@ -183,6 +204,7 @@ export class RouterState {
 				debugHistory: [],
 				lastDecision: undefined,
 				isStreaming: false,
+				usageLedger: [],
 			});
 		}
 	}
@@ -274,6 +296,13 @@ export class RouterState {
 
 	get lastTurnTimestamp(): number | undefined { return this.scope.lastTurnTimestamp; }
 	set lastTurnTimestamp(v: number | undefined) { this.scope.lastTurnTimestamp = v; }
+
+	get usageLedger(): UsageLedgerEntry[] { return this.scope.usageLedger; }
+
+	/** Record a completed model invocation into the session usage ledger. */
+	recordUsage(entry: UsageLedgerEntry): void {
+		this.scope.usageLedger.push(entry);
+	}
 
 	recordDecision(decision: RoutingDecision): void {
 		const limit = this.currentConfig.debugHistoryLimit ?? MAX_DEBUG_HISTORY;
@@ -402,9 +431,9 @@ export class RouterState {
 			}
 			this.debugEnabled = savedState.debugEnabled ?? this.debugEnabled;
 			this.widgetEnabled = savedState.widgetEnabled ?? this.widgetEnabled;
-			this.debugHistory = savedState.debugHistory
-				? [...savedState.debugHistory].slice(-(this.currentConfig.debugHistoryLimit ?? MAX_DEBUG_HISTORY))
-				: [];
+			// debugHistory is session-scoped and NOT restored — usage ledger is
+			// the authoritative source for /router usage. debugHistory only shows
+			// the last N routing decisions for debugging purposes.
 			this.lastNonRouterModel =
 				savedState.lastNonRouterModel ?? this.lastNonRouterModel;
 			// Accumulated metrics (cost, tokens, cache) are session-scoped and

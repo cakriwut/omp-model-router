@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { renderUsageReport } from "../src/ui";
 import type { RouterConfig } from "../src/types";
+import type { UsageLedgerEntry } from "../src/state";
 
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -16,25 +17,32 @@ const baseProfile: RouterConfig["profiles"][string] = {
 	low: { model: "anthropic/claude-haiku-4-5" },
 };
 
+function makeLedgerEntry(tier: "high" | "medium" | "low", model: string, cost: number): UsageLedgerEntry {
+	return {
+		timestamp: Date.now(),
+		profile: "default",
+		tier,
+		model,
+		inputTokens: 100,
+		outputTokens: 50,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		cost,
+	};
+}
+
 describe("Usage report — tier label display", () => {
 	test("shows only low 100% label when all decisions are low tier", () => {
-		const debugHistory = Array.from({ length: 12 }, (_, i) => ({
-			tier: "low" as const,
-			profile: "default",
-			targetProvider: "anthropic",
-			targetModelId: "claude-haiku-4-5",
-			targetLabel: "anthropic/claude-haiku-4-5",
-			thinking: "fast" as const,
-			reasoning: "test",
-			usage: { cost: 0.001 },
-		}));
+		const usageLedger = Array.from({ length: 12 }, () =>
+			makeLedgerEntry("low", "anthropic/claude-haiku-4-5", 0.001)
+		);
 
 		const report = stripAnsi(
 			renderUsageReport({
 				theme: makeTheme(),
 				selectedProfile: "default",
 				profile: baseProfile,
-				debugHistory,
+				usageLedger,
 				lastDecision: undefined,
 				modelRegistry: { find: () => ({ contextWindow: 200_000, cost: { input: 0.25, output: 1.25 } }) },
 			}),
@@ -50,23 +58,16 @@ describe("Usage report — tier label display", () => {
 	});
 
 	test("shows only high 100% label when all decisions are high tier", () => {
-		const debugHistory = Array.from({ length: 8 }, (_, i) => ({
-			tier: "high" as const,
-			profile: "default",
-			targetProvider: "anthropic",
-			targetModelId: "claude-sonnet-4-5",
-			targetLabel: "anthropic/claude-sonnet-4-5",
-			thinking: "extended" as const,
-			reasoning: "test",
-			usage: { cost: 0.05 },
-		}));
+		const usageLedger = Array.from({ length: 8 }, () =>
+			makeLedgerEntry("high", "anthropic/claude-sonnet-4-5", 0.05)
+		);
 
 		const report = stripAnsi(
 			renderUsageReport({
 				theme: makeTheme(),
 				selectedProfile: "default",
 				profile: baseProfile,
-				debugHistory,
+				usageLedger,
 				lastDecision: undefined,
 				modelRegistry: { find: () => ({ contextWindow: 200_000, cost: { input: 3.0, output: 15.0 } }) },
 			}),
@@ -82,37 +83,10 @@ describe("Usage report — tier label display", () => {
 	});
 
 	test("shows all three labels when distribution is mixed", () => {
-		const debugHistory = [
-			...Array.from({ length: 2 }, () => ({
-				tier: "high" as const,
-				profile: "default",
-				targetProvider: "anthropic",
-				targetModelId: "claude-sonnet-4-5",
-				targetLabel: "anthropic/claude-sonnet-4-5",
-				thinking: "extended" as const,
-				reasoning: "test",
-				usage: { cost: 0.05 },
-			})),
-			...Array.from({ length: 3 }, () => ({
-				tier: "medium" as const,
-				profile: "default",
-				targetProvider: "anthropic",
-				targetModelId: "claude-sonnet-4-5",
-				targetLabel: "anthropic/claude-sonnet-4-5",
-				thinking: "normal" as const,
-				reasoning: "test",
-				usage: { cost: 0.02 },
-			})),
-			...Array.from({ length: 5 }, () => ({
-				tier: "low" as const,
-				profile: "default",
-				targetProvider: "anthropic",
-				targetModelId: "claude-haiku-4-5",
-				targetLabel: "anthropic/claude-haiku-4-5",
-				thinking: "fast" as const,
-				reasoning: "test",
-				usage: { cost: 0.001 },
-			})),
+		const usageLedger = [
+			...Array.from({ length: 2 }, () => makeLedgerEntry("high", "anthropic/claude-sonnet-4-5", 0.05)),
+			...Array.from({ length: 3 }, () => makeLedgerEntry("medium", "anthropic/claude-sonnet-4-5", 0.02)),
+			...Array.from({ length: 5 }, () => makeLedgerEntry("low", "anthropic/claude-haiku-4-5", 0.001)),
 		];
 
 		const report = stripAnsi(
@@ -120,7 +94,7 @@ describe("Usage report — tier label display", () => {
 				theme: makeTheme(),
 				selectedProfile: "default",
 				profile: baseProfile,
-				debugHistory,
+				usageLedger,
 				lastDecision: undefined,
 				modelRegistry: { find: () => ({ contextWindow: 200_000, cost: { input: 3.0, output: 15.0 } }) },
 			}),
