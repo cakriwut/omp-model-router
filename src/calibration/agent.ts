@@ -211,7 +211,6 @@ async function spawnViaStreamSimple(
 
 		const prompt = buildClassifierPrompt(context, currentPhase);
 		const classifierContext: Context = {
-			...context,
 			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 		};
 

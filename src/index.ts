@@ -277,6 +277,24 @@ const routerExtension = (pi: ExtensionAPI) => {
 		if (state.updateBannerShown) {
 			state.updateBannerShown = false;
 		}
+
+		// Honor user-initiated model switches: if router is marked enabled but the
+		// active model is no longer "router", the user changed it via /model. Treat
+		// it as an opt-out — disable router so we don't force-restore it on turn_end.
+		if (
+			state.routerEnabled &&
+			!state.isInternalModelSwitch &&
+			ctx.model &&
+			ctx.model.provider !== "router"
+		) {
+			state.routerEnabled = false;
+			state.lastNonRouterModel = `${ctx.model.provider}/${ctx.model.id}`;
+			patchConfigFile({ routerEnabled: false });
+			state.persist();
+			ctx.ui.setHiddenThinkingLabel?.();
+			actions.updateStatus(ctx);
+		}
+
 		if (state.routerEnabled) {
 			state.isStreaming = true;
 			actions.updateStatus(ctx);

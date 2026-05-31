@@ -493,6 +493,9 @@ export const decideRouting = (
 
 // ─── LLM classifier ───────────────────────────────────────────────────────────
 
+/** Timeout for the synchronous classifier LLM call (prevents indefinite blocking) */
+const SYNC_CLASSIFIER_TIMEOUT_MS = 10_000;
+
 export const runClassifier = async (
 	classifierModelRef: string,
 	modelRegistry: ExtensionContext["modelRegistry"],
@@ -501,7 +504,6 @@ export const runClassifier = async (
 	debug = false,
 ): Promise<{ tier: RouterTier; reasoning: string } | undefined> => {
 	const classifierContext: Context = {
-		...context,
 		messages: [
 			{ role: "user", content: buildClassifierPrompt(context, currentPhase), timestamp: Date.now() },
 		],
@@ -531,28 +533,37 @@ export const runClassifier = async (
 			console.log(`⚡ classifier → ${shortName} (sync·adaptive)`);
 		}
 
-		const stream = streamSimple(model, classifierContext, {
-			apiKey,
-			headers,
-		});
-		let fullText = "";
-		for await (const event of stream) {
-			if (
-				event.type === "text_delta" &&
-				typeof (event as { delta?: unknown }).delta === "string"
-			) {
-				fullText += (event as { delta: string }).delta;
+		// Race classifier stream against a hard timeout to prevent blocking
+		const ac = new AbortController();
+		const timeout = setTimeout(() => ac.abort(), SYNC_CLASSIFIER_TIMEOUT_MS);
+
+		try {
+			const stream = streamSimple(model, classifierContext, {
+				apiKey,
+				headers,
+				signal: ac.signal,
+			});
+			let fullText = "";
+			for await (const event of stream) {
+				if (
+					event.type === "text_delta" &&
+					typeof (event as { delta?: unknown }).delta === "string"
+				) {
+					fullText += (event as { delta: string }).delta;
+				}
 			}
+
+			const result = parseClassifierOutput(fullText);
+
+			// Log decision: ⚡ classifier → nova-micro (sync·adaptive) → high
+			if (debug && result) {
+				console.log(`⚡ classifier → ${shortName} (sync·adaptive) → ${result.tier}`);
+			}
+
+			return result;
+		} finally {
+			clearTimeout(timeout);
 		}
-
-		const result = parseClassifierOutput(fullText);
-
-		// Log decision: ⚡ classifier → nova-micro (sync·adaptive) → high
-		if (debug && result) {
-			console.log(`⚡ classifier → ${shortName} (sync·adaptive) → ${result.tier}`);
-		}
-
-		return result;
 	} catch (error) {
 		if (debug) {
 			console.warn(
