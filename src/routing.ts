@@ -525,7 +525,6 @@ export const runClassifier = async (
 			return undefined;
 		}
 		const headers = model.headers;
-		
 		// Badge-style log: ⚡ classifier → nova-micro (sync·adaptive)
 		const shortName = modelId.split('.').pop()?.replace(/-v\d+:\d+$/, '') || modelId;
 		if (debug) {
@@ -547,14 +546,20 @@ export const runClassifier = async (
 		}
 
 		const result = parseClassifierOutput(fullText);
-		
+
 		// Log decision: ⚡ classifier → nova-micro (sync·adaptive) → high
 		if (debug && result) {
 			console.log(`⚡ classifier → ${shortName} (sync·adaptive) → ${result.tier}`);
 		}
-		
+
 		return result;
 	} catch (error) {
+		if (debug) {
+			console.warn(
+				`[model-router] Classifier failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+		return undefined;
 	}
 };
 // ─── Model-capacity-aware tier promotion ─────────────────────────────────────
