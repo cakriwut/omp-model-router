@@ -25,7 +25,7 @@
 
 import { encode as toonEncode } from "@toon-format/toon";
 import type { Context, Message } from "@oh-my-pi/pi-ai";
-import type { HistoryCompressionConfig, CompressionStats } from "./types";
+import type { HistoryCompressionConfig, CompressionStats, CompressionCheckpoint } from "./types";
 import { extractText as extractMessageText } from "./utils/messages.js";
 
 const COMPRESS_EXTRACT_OPTS = {
@@ -457,6 +457,266 @@ export function compressIfNeeded(
 	return { context: result.context, stats: result.stats, reason };
 }
 
+
+/**
+ * Apply compression to context with checkpoint management and stats tracking.
+ * Handles progressive mode (trigger-based + checkpoint reuse) and static/dynamic modes.
+ * 
+ * @returns Updated context, stats, trigger reason, and checkpoint operations.
+ */
+export interface CompressionResult {
+	/** Compressed or checkpoint-reused context. */
+	context: Context;
+	/** Compression stats (undefined if checkpoint was reused without compression). */
+	stats: CompressionStats | undefined;
+	/** Trigger reason when compression fired. */
+	triggerReason: CompressionTriggerReason | null;
+	/** New checkpoint to store (progressive mode only). */
+	newCheckpoint?: CompressionCheckpoint;
+	/** Whether checkpoint was reused without fresh compression. */
+	checkpointReused: boolean;
+	/** Whether checkpoint was expired and cleared. */
+	checkpointExpired: boolean;
+}
+
+export interface ApplyCompressionInput {
+	/** Current context to potentially compress. */
+	context: Context;
+	/** Resolved compression config for this profile. */
+	config: HistoryCompressionConfig;
+	/** Target model's context window size. */
+	contextWindow: number;
+	/** Target provider string. */
+	targetProvider: string;
+	/** Target model ID string. */
+	targetModelId: string;
+	/** Timestamp of last turn (for cache expiry). */
+	lastTurnTimestamp: number | undefined;
+	/** Current checkpoint (progressive mode). */
+	currentCheckpoint: CompressionCheckpoint | undefined;
+	/** Frozen block (static/dynamic mode). */
+	frozenBlock?: { messages: Message[]; stats: CompressionStats };
+	/** Override clock for tests. */
+	now?: number;
+}
+
+/**
+ * Apply compression with full checkpoint management.
+ * Extracted from provider.ts to eliminate duplication and centralize compression logic.
+ */
+export function applyCompression(input: ApplyCompressionInput): CompressionResult {
+	const {
+		context,
+		config,
+		contextWindow,
+		targetProvider,
+		targetModelId,
+		lastTurnTimestamp,
+		currentCheckpoint,
+		frozenBlock,
+	} = input;
+	const now = input.now ?? Date.now();
+	const turnNumber = context.messages.length;
+
+	// ── Guard: check if compression is applicable ───────────────────────
+	if (!canCompressForModel(config, targetProvider, targetModelId)) {
+		return {
+			context,
+			stats: undefined,
+			triggerReason: null,
+			checkpointReused: false,
+			checkpointExpired: false,
+		};
+	}
+
+	// ── Progressive TOON mode ────────────────────────────────────────────
+	if (config.progressive?.enabled) {
+		const triggerReason = shouldCompress({
+			context,
+			config,
+			contextWindow,
+			targetProvider,
+			targetModelId,
+			lastTurnTimestamp,
+			now,
+		});
+
+		if (triggerReason) {
+			// Trigger fired: create new checkpoint
+			const originalTokens = estimateContextTokens(context);
+			const result = compressHistory(context, config, turnNumber);
+			const compressedTokens = estimateContextTokens(result.context);
+			const tokensSaved = Math.max(0, originalTokens - compressedTokens);
+
+			if (result.stats) {
+				result.stats.estimatedOriginalTokens = originalTokens;
+				result.stats.estimatedCompressedTokens = compressedTokens;
+				result.stats.estimatedTokensSaved = tokensSaved;
+			}
+
+			// Extract TOON block for checkpoint
+			const toonBlockContent = result.context.messages
+				.find((m) => m.role === "user" && typeof m.content === "string" && m.content.includes("TOON"))
+				?.content as string | undefined;
+
+			const newCheckpoint = toonBlockContent
+				? {
+						frozenBlock: toonBlockContent,
+						metadata: {
+							turn: turnNumber,
+							range: [0, toonBlockContent.length] as [number, number],
+							stats: result.stats!,
+							triggerReason,
+							timestamp: now,
+						},
+				  }
+				: undefined;
+
+			return {
+				context: result.context,
+				stats: result.stats,
+				triggerReason,
+				newCheckpoint,
+				checkpointReused: false,
+				checkpointExpired: false,
+			};
+		}
+
+		// No trigger: check checkpoint reuse or expiry
+		if (currentCheckpoint) {
+			const checkpointAge = turnNumber - currentCheckpoint.metadata.turn;
+			const currentContextTokens = estimateContextTokens(context);
+			const checkpointAgeLimit = config.progressive.maxCheckpointAge ?? 50;
+			const checkpointSizeLimit = config.progressive.maxCheckpointSize ?? 200_000;
+
+			const isStale = checkpointAge > checkpointAgeLimit;
+			const isOversized = currentContextTokens > checkpointSizeLimit;
+
+			if (isStale || isOversized) {
+				// Checkpoint expired: force fresh compression
+				const originalTokens = estimateContextTokens(context);
+				const result = compressHistory(context, config, turnNumber);
+				const compressedTokens = estimateContextTokens(result.context);
+				const tokensSaved = Math.max(0, originalTokens - compressedTokens);
+
+				if (result.stats) {
+					result.stats.estimatedOriginalTokens = originalTokens;
+					result.stats.estimatedCompressedTokens = compressedTokens;
+					result.stats.estimatedTokensSaved = tokensSaved;
+				}
+
+				const toonBlockContent = result.context.messages
+					.find((m) => m.role === "user" && typeof m.content === "string" && m.content.includes("TOON"))
+					?.content as string | undefined;
+
+				const newCheckpoint = toonBlockContent
+					? {
+							frozenBlock: toonBlockContent,
+							metadata: {
+								turn: turnNumber,
+								range: [0, toonBlockContent.length] as [number, number],
+								stats: result.stats!,
+								triggerReason: (isStale ? "cache_expiry" : "context_size") as CompressionTriggerReason,
+								timestamp: now,
+							},
+					  }
+					: undefined;
+
+				return {
+					context: result.context,
+					stats: result.stats,
+					triggerReason: isStale ? "cache_expiry" : "context_size",
+					newCheckpoint,
+					checkpointReused: false,
+					checkpointExpired: true,
+				};
+			}
+
+			// Checkpoint still valid: reuse it
+			const keepLastN = config.keepLastN ?? 4;
+			const recentMessages = context.messages.slice(-keepLastN);
+			return {
+				context: {
+					...context,
+					messages: [
+						{
+							role: "user",
+							content: currentCheckpoint.frozenBlock,
+							timestamp: currentCheckpoint.metadata.timestamp,
+						},
+						...recentMessages,
+					],
+				},
+				stats: undefined,
+				triggerReason: null,
+				checkpointReused: true,
+				checkpointExpired: false,
+			};
+		}
+
+		// No trigger, no checkpoint: pass through
+		return {
+			context,
+			stats: undefined,
+			triggerReason: null,
+			checkpointReused: false,
+			checkpointExpired: false,
+		};
+	}
+
+	// ── Static/dynamic TOON mode (backward compatible) ──────────────────
+	const shouldFreeze = config.freezeAfter !== undefined && turnNumber === config.freezeAfter;
+	const shouldReuseFrozen =
+		config.freezeAfter !== undefined && turnNumber > config.freezeAfter && frozenBlock;
+
+	if (shouldReuseFrozen && frozenBlock) {
+		// Prepend cached frozen TOON block
+		return {
+			context: {
+				...context,
+				messages: [
+					...frozenBlock.messages,
+					...context.messages.slice(-(config.keepLastN ?? 4) * 2),
+				],
+			},
+			stats: undefined,
+			triggerReason: null,
+			checkpointReused: true,
+			checkpointExpired: false,
+		};
+	}
+
+	if (!shouldReuseFrozen) {
+		// Apply compression with current turn number
+		const originalTokens = estimateContextTokens(context);
+		const result = compressHistory(context, config, turnNumber);
+		const compressedTokens = estimateContextTokens(result.context);
+		const tokensSaved = Math.max(0, originalTokens - compressedTokens);
+
+		if (result.stats) {
+			result.stats.estimatedOriginalTokens = originalTokens;
+			result.stats.estimatedCompressedTokens = compressedTokens;
+			result.stats.estimatedTokensSaved = tokensSaved;
+		}
+
+		return {
+			context: result.context,
+			stats: result.stats,
+			triggerReason: null,
+			checkpointReused: false,
+			checkpointExpired: false,
+		};
+	}
+
+	// No compression applied
+	return {
+		context,
+		stats: undefined,
+		triggerReason: null,
+		checkpointReused: false,
+		checkpointExpired: false,
+	};
+}
 /**
  * Compress old conversation history into a TOON block prepended as a user
  * message. Returns the context unchanged if compression is not warranted.

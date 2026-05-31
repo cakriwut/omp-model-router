@@ -46,11 +46,10 @@ export class ProfileEditorComponent implements Component {
 	readonly #original: RouterProfile;
 	readonly #originalJson: string;
 	readonly #modelRegistry: ModelRegistry;
+	readonly #customUI: <T>(factory: (tui: unknown, theme: Theme, kb: KeybindingsManager, done: (v: T) => void) => Component) => Promise<T>;
 	#draft: RouterProfile;
 	#cursor = 0;
 	#state: EditorState = "editing";
-	/** When non-null, all input is forwarded to this submenu. */
-	#submenu: Component | undefined;
 
 	constructor(
 		tui: TUI,
@@ -60,6 +59,7 @@ export class ProfileEditorComponent implements Component {
 		profileName: string,
 		profile: RouterProfile,
 		modelRegistry: ModelRegistry,
+		customUI: <T>(factory: (tui: unknown, theme: Theme, kb: KeybindingsManager, done: (v: T) => void) => Component) => Promise<T>,
 	) {
 		this.#tui = tui;
 		this.#theme = theme;
@@ -69,6 +69,7 @@ export class ProfileEditorComponent implements Component {
 		this.#original = profile;
 		this.#originalJson = JSON.stringify(profile);
 		this.#modelRegistry = modelRegistry;
+		this.#customUI = customUI;
 		this.#draft = structuredClone(profile);
 	}
 
@@ -79,9 +80,6 @@ export class ProfileEditorComponent implements Component {
 	// ─── Render ────────────────────────────────────────────────────────────
 
 	render(width: number): string[] {
-		// While a submenu is open, delegate rendering entirely to it.
-		if (this.#submenu) return this.#submenu.render(width);
-
 		const t = this.#theme;
 		const lines: string[] = [];
 
@@ -185,11 +183,6 @@ export class ProfileEditorComponent implements Component {
 	// ─── Input ─────────────────────────────────────────────────────────────
 
 	handleInput(data: string): void {
-		// Submenu owns input while open.
-		if (this.#submenu) {
-			this.#submenu.handleInput?.(data);
-			return;
-		}
 
 		if (this.#state === "dirty_confirm") {
 			this.#handleDirtyConfirm(data);
@@ -277,24 +270,25 @@ export class ProfileEditorComponent implements Component {
 	#openModelPicker(tier: RouterTier): void {
 		const tierCfg = this.#draft[tier];
 		const fallbacks = tierCfg.fallbacks ?? [];
-		const picker = new ModelPickerComponent(
-			this.#tui,
-			this.#theme,
-			this.#keybindings,
-			(result: string | undefined) => {
-				this.#submenu = undefined;
-				if (typeof result === "string" && result.length > 0) {
-					this.#draft[tier] = { ...this.#draft[tier], model: result };
-				}
-			},
-			{
-				tier,
-				modelRegistry: this.#modelRegistry,
-				currentPrimary: tierCfg.model,
-				currentFallbacks: fallbacks,
-			},
-		);
-		this.#submenu = picker;
+		
+		this.#customUI<string | undefined>((_tui, theme, keybindings, done) => {
+			return new ModelPickerComponent(
+				_tui,
+				theme,
+				keybindings,
+				done,
+				{
+					tier,
+					modelRegistry: this.#modelRegistry,
+					currentPrimary: tierCfg.model,
+					currentFallbacks: fallbacks,
+				},
+			);
+		}).then((result) => {
+			if (typeof result === "string" && result.length > 0) {
+				this.#draft[tier] = { ...this.#draft[tier], model: result };
+			}
+		});
 	}
 
 	#openFallbackPicker(tier: RouterTier): void {
@@ -307,25 +301,26 @@ export class ProfileEditorComponent implements Component {
 				label: m.name,
 				description: `${m.provider} · ${Math.floor(m.contextWindow / 1000)}k`,
 			}));
-		const picker = new FallbackPickerComponent(
-			this.#tui,
-			this.#theme,
-			this.#keybindings,
-			(result: string[] | undefined) => {
-				this.#submenu = undefined;
-				if (Array.isArray(result)) {
-					this.#draft[tier] = {
-						...this.#draft[tier],
-						fallbacks: result.length === 0 ? undefined : result,
-					};
-				}
-			},
-			allModels,
-			tierCfg.model,
-			tierCfg.fallbacks ?? [],
-			tier,
-		);
-		this.#submenu = picker;
+		
+		this.#customUI<string[] | undefined>((_tui, theme, keybindings, done) => {
+			return new FallbackPickerComponent(
+				_tui,
+				theme,
+				keybindings,
+				done,
+				allModels,
+				tierCfg.model,
+				tierCfg.fallbacks ?? [],
+				tier,
+			);
+		}).then((result) => {
+			if (Array.isArray(result)) {
+				this.#draft[tier] = {
+					...this.#draft[tier],
+					fallbacks: result.length === 0 ? undefined : result,
+				};
+			}
+		});
 	}
 
 	// ─── Helpers ───────────────────────────────────────────────────────────
@@ -359,6 +354,7 @@ export function createProfileEditorFactory(
 	profileName: string,
 	profile: RouterProfile,
 	modelRegistry: ModelRegistry,
+	customUI: <T>(factory: (tui: unknown, theme: Theme, kb: KeybindingsManager, done: (v: T) => void) => Component) => Promise<T>,
 ): (
 	tui: TUI,
 	theme: Theme,
@@ -374,6 +370,7 @@ export function createProfileEditorFactory(
 			profileName,
 			profile,
 			modelRegistry,
+			customUI,
 		);
 }
 
@@ -400,7 +397,7 @@ export async function openProfileEditor(
 	}
 
 	const result = await ctx.ui.custom<RouterProfile | undefined>(
-		createProfileEditorFactory(profileName, profile, modelRegistry),
+		createProfileEditorFactory(profileName, profile, modelRegistry, ctx.ui.custom.bind(ctx.ui)),
 		{ overlay: false },
 	);
 
@@ -437,7 +434,7 @@ export async function openCreateProfile(
 	}
 
 	const result = await ctx.ui.custom<RouterProfile | undefined>(
-		createProfileEditorFactory(name, structuredClone(activeProfile), modelRegistry),
+		createProfileEditorFactory(name, structuredClone(activeProfile), modelRegistry, ctx.ui.custom.bind(ctx.ui)),
 		{ overlay: false },
 	);
 

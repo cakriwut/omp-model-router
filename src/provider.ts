@@ -21,12 +21,7 @@ import {
 import type { RouterState } from "./state";
 import {
 	resolveCompressionConfig,
-	compressHistory,
-	estimateContextTokens,
-	canCompressForModel,
-	shouldCompress,
-	DEFAULT_CONTEXT_THRESHOLD,
-	DEFAULT_TIME_THRESHOLD_SECONDS,
+	applyCompression,
 } from "./context-compression";
 import { spawnClassifierForTurn } from "./calibration/hooks";
 
@@ -384,240 +379,97 @@ export const registerRouterProvider = (
 							state.currentConfig.historyCompression,
 							state.currentConfig.profiles[model.id]?.historyCompression,
 						);
-						let finalContext = effectiveContext;
-						const turnNumber = effectiveContext.messages.length;
 						const now = Date.now();
 						
-						if (compressionCfg && canCompressForModel(compressionCfg, targetProvider, targetModelId)) {
-							// Progressive TOON mode: compress on triggers only
-							if (compressionCfg.progressive?.enabled) {
-								const contextThreshold =
-									compressionCfg.progressive.contextThreshold ?? DEFAULT_CONTEXT_THRESHOLD;
-								const timeThresholdSeconds =
-									compressionCfg.progressive.timeThreshold ?? DEFAULT_TIME_THRESHOLD_SECONDS;
-
-								const contextTokens = estimateContextTokens(effectiveContext);
-								const triggerReason = shouldCompress({
+						const compressionResult = compressionCfg
+							? applyCompression({
 									context: effectiveContext,
 									config: compressionCfg,
 									contextWindow: targetLimit,
 									targetProvider,
 									targetModelId,
 									lastTurnTimestamp: state.lastTurnTimestamp,
+									currentCheckpoint: state.currentCheckpoint,
+									frozenBlock: state.frozenCompressionBlock,
 									now,
+							  })
+							: {
+									context: effectiveContext,
+									stats: undefined,
+									triggerReason: null,
+									checkpointReused: false,
+									checkpointExpired: false,
+							  };
+						
+						const finalContext = compressionResult.context;
+						const turnNumber = effectiveContext.messages.length;
+						
+						// ── Update state and decision based on compression result ────
+						if (compressionResult.stats) {
+							decision.compression = compressionResult.stats;
+							decision.compressionTriggerReason = compressionResult.triggerReason ?? undefined;
+							
+							state.compressionTotalOriginalChars += compressionResult.stats.originalChars;
+							state.compressionTotalCompressedChars += compressionResult.stats.compressedChars;
+							state.compressionRequestCount++;
+							
+							state.accumulatedOriginalTokens += compressionResult.stats.estimatedOriginalTokens ?? 0;
+							state.accumulatedCompressedTokens += compressionResult.stats.estimatedCompressedTokens ?? 0;
+							state.accumulatedTokensSaved += compressionResult.stats.estimatedTokensSaved ?? 0;
+							
+							// Debug logging
+							if (state.currentConfig.debug && compressionResult.triggerReason) {
+								const compressionDebugData = {
+									reason: compressionResult.triggerReason,
+									contextTokens: compressionResult.stats.estimatedOriginalTokens ?? 0,
+									threshold: compressionCfg?.progressive?.contextThreshold
+										? Math.floor((compressionCfg.progressive.contextThreshold) * targetLimit)
+										: 'N/A',
+									timeSinceLastTurn: state.lastTurnTimestamp
+										? Math.floor((now - state.lastTurnTimestamp) / 1000)
+										: 'N/A',
+									timeThreshold: compressionCfg?.progressive?.timeThreshold ?? 'N/A',
+									turnNumber,
+									messageCount: effectiveContext.messages.length,
+								};
+								
+								console.log('[ROUTER] Compression triggered:', compressionDebugData);
+								
+								if (state.currentConfig.debugVerbose) {
+									ctx.sessionManager.appendCustomEntry('router:compression-trigger', compressionDebugData);
+								}
+							}
+						}
+						
+						// ── Update checkpoints ───────────────────────────────────────
+						if (compressionResult.newCheckpoint) {
+							state.currentCheckpoint = compressionResult.newCheckpoint;
+						} else if (compressionResult.checkpointExpired) {
+							state.currentCheckpoint = undefined;
+							if (state.currentConfig.debug) {
+								console.log('[ROUTER] Checkpoint expired:', {
+									reason: compressionResult.triggerReason === 'cache_expiry' ? 'age' : 'size',
 								});
-								
-								
-								if (state.currentConfig.debug && triggerReason) {
-									const compressionDebugData = {
-										reason: triggerReason,
-										contextTokens,
-										threshold: Math.floor(contextThreshold * targetLimit),
-										timeSinceLastTurn: state.lastTurnTimestamp
-											? Math.floor((now - state.lastTurnTimestamp) / 1000)
-											: 'N/A',
-										timeThreshold: timeThresholdSeconds,
-										turnNumber,
-										messageCount: effectiveContext.messages.length,
-									};
-									
-									// Always log to console for real-time visibility
-									console.log('[ROUTER] Compression triggered:', compressionDebugData);
-									
-									// Only persist to session JSONL if debugVerbose is enabled
-									if (state.currentConfig.debugVerbose) {
-										ctx.sessionManager.appendCustomEntry('router:compression-trigger', compressionDebugData);
-									}
-								}
-								
-								if (triggerReason) {
-									// Trigger fired: create new checkpoint
-									const originalTokens = estimateContextTokens(effectiveContext);
-									const result = compressHistory(effectiveContext, compressionCfg, turnNumber);
-									finalContext = result.context;
-									
-									if (result.stats) {
-										const compressedTokens = estimateContextTokens(finalContext);
-										const tokensSaved = Math.max(0, originalTokens - compressedTokens);
-										
-										result.stats.estimatedOriginalTokens = originalTokens;
-										result.stats.estimatedCompressedTokens = compressedTokens;
-										result.stats.estimatedTokensSaved = tokensSaved;
-										
-										decision.compression = result.stats;
-										decision.compressionTriggerReason = triggerReason;
-										
-										state.compressionTotalOriginalChars += result.stats.originalChars;
-										state.compressionTotalCompressedChars += result.stats.compressedChars;
-										state.compressionRequestCount++;
-										
-										state.accumulatedOriginalTokens += originalTokens;
-										state.accumulatedCompressedTokens += compressedTokens;
-										state.accumulatedTokensSaved += tokensSaved;
-										
-										// Create checkpoint for reuse
-									const toonBlockContent = result.context.messages
-										.find((m) => m.role === "user" && typeof m.content === "string" && m.content.includes("TOON"))
-										?.content as string | undefined;
-										
-										if (toonBlockContent) {
-											state.currentCheckpoint = {
-												frozenBlock: toonBlockContent,
-												metadata: {
-													turn: turnNumber,
-													range: [0, toonBlockContent.length],
-													stats: result.stats,
-													triggerReason,
-													timestamp: now,
-												},
-											};
-										}
-									}
-							} else {
-								// No trigger: reuse frozen checkpoint if available, but check expiry
-								if (state.currentCheckpoint) {
-									const checkpointAge = turnNumber - state.currentCheckpoint.metadata.turn;
-									const currentContextTokens = estimateContextTokens(effectiveContext);
-									const checkpointAgeLimit = compressionCfg.progressive.maxCheckpointAge ?? 50;
-									const checkpointSizeLimit = compressionCfg.progressive.maxCheckpointSize ?? 200_000;
-									
-									// Force refresh if checkpoint is stale or context is too large
-									const isStale = checkpointAge > checkpointAgeLimit;
-									const isOversized = currentContextTokens > checkpointSizeLimit;
-									
-									if (isStale || isOversized) {
-										// Invalidate checkpoint and force fresh compression
-										if (state.currentConfig.debug) {
-											console.log('[ROUTER] Checkpoint expired:', {
-												reason: isStale ? 'age' : 'size',
-												age: checkpointAge,
-												ageLimit: checkpointAgeLimit,
-												contextTokens: currentContextTokens,
-												sizeLimit: checkpointSizeLimit,
-											});
-										}
-										
-										state.currentCheckpoint = undefined;
-										
-										// Force compression with "checkpoint_expired" reason
-										const originalTokens = estimateContextTokens(effectiveContext);
-										const result = compressHistory(effectiveContext, compressionCfg, turnNumber);
-										finalContext = result.context;
-										
-										if (result.stats) {
-											const compressedTokens = estimateContextTokens(finalContext);
-											const tokensSaved = Math.max(0, originalTokens - compressedTokens);
-											
-											result.stats.estimatedOriginalTokens = originalTokens;
-											result.stats.estimatedCompressedTokens = compressedTokens;
-											result.stats.estimatedTokensSaved = tokensSaved;
-											
-											decision.compression = result.stats;
-											decision.compressionTriggerReason = isStale ? "cache_expiry" : "context_size";
-											
-											state.compressionTotalOriginalChars += result.stats.originalChars;
-											state.compressionTotalCompressedChars += result.stats.compressedChars;
-											state.compressionRequestCount++;
-											
-											state.accumulatedOriginalTokens += originalTokens;
-											state.accumulatedCompressedTokens += compressedTokens;
-											state.accumulatedTokensSaved += tokensSaved;
-											
-											// Create new checkpoint
-											const toonBlockContent = result.context.messages
-												.find((m) => m.role === "user" && typeof m.content === "string" && m.content.includes("TOON"))
-												?.content as string | undefined;
-											
-											if (toonBlockContent) {
-												state.currentCheckpoint = {
-													frozenBlock: toonBlockContent,
-													metadata: {
-														turn: turnNumber,
-														range: [0, toonBlockContent.length],
-														stats: result.stats,
-														triggerReason: isStale ? "cache_expiry" : "context_size",
-														timestamp: now,
-													},
-												};
-											}
-										}
-									} else {
-										// Checkpoint still valid, reuse it
-										const keepLastN = compressionCfg.keepLastN ?? 4;
-										const recentMessages = effectiveContext.messages.slice(-keepLastN);
-										finalContext = {
-											...effectiveContext,
-											messages: [
-												{
-													role: "user",
-													content: state.currentCheckpoint.frozenBlock,
-													timestamp: state.currentCheckpoint.metadata.timestamp,
-												},
-												...recentMessages,
-											],
-										};
-										decision.compressionCacheHit = true;
-									}
-								}
 							}
-							} else {
-								// Static/dynamic TOON mode (backward compatible)
-								const shouldFreeze = compressionCfg.freezeAfter !== undefined && turnNumber === compressionCfg.freezeAfter;
-								const shouldReuseFrozen = compressionCfg.freezeAfter !== undefined && turnNumber > compressionCfg.freezeAfter && state.frozenCompressionBlock;
-								
-								if (shouldReuseFrozen && state.frozenCompressionBlock) {
-									// Prepend cached frozen TOON block
-									finalContext = {
-										...effectiveContext,
-										messages: [...state.frozenCompressionBlock.messages, ...effectiveContext.messages.slice(-(compressionCfg.keepLastN ?? 4) * 2)]
-									};
-								} else if (!shouldReuseFrozen) {
-									// Estimate tokens before compression
-									const originalTokens = estimateContextTokens(effectiveContext);
-									
-									// Apply compression with current turn number
-									const result = compressHistory(effectiveContext, compressionCfg, turnNumber);
-									finalContext = result.context;
-									
-									if (result.stats) {
-										// Estimate tokens after compression
-										const compressedTokens = estimateContextTokens(finalContext);
-										const tokensSaved = Math.max(0, originalTokens - compressedTokens);
-										
-										// Populate compression stats with token data
-										result.stats.estimatedOriginalTokens = originalTokens;
-										result.stats.estimatedCompressedTokens = compressedTokens;
-										result.stats.estimatedTokensSaved = tokensSaved;
-										
-										decision.compression = result.stats;
-										state.compressionTotalOriginalChars += result.stats.originalChars;
-										state.compressionTotalCompressedChars += result.stats.compressedChars;
-										state.compressionRequestCount++;
-										
-										// Accumulate token metrics
-										state.accumulatedOriginalTokens += originalTokens;
-										state.accumulatedCompressedTokens += compressedTokens;
-										state.accumulatedTokensSaved += tokensSaved;
-										
-										// If at freeze point, cache the compressed block for reuse
-										if (shouldFreeze) {
-											state.frozenCompressionBlock = {
-												messages: result.context.messages.slice(0, -( compressionCfg.keepLastN ?? 4)),
-												stats: result.stats
-											};
-										}
-									}
-								}
-							}
+						}
+						
+						if (compressionResult.checkpointReused) {
+							decision.compressionCacheHit = true;
+						}
+						
+						// ── Static/dynamic mode: update frozen block ─────────────────
+						if (compressionCfg?.freezeAfter !== undefined && 
+						    turnNumber === compressionCfg.freezeAfter && 
+						    compressionResult.stats) {
+							state.frozenCompressionBlock = {
+								messages: compressionResult.context.messages.slice(0, -(compressionCfg.keepLastN ?? 4)),
+								stats: compressionResult.stats,
+							};
 						}
 						
 						// Update last turn timestamp for cache expiry detection
 						state.lastTurnTimestamp = now;
 
-							const thinkingOverride = actions.getThinkingOverride(
-								model.id,
-								decision.tier,
-							);
 							const delegatedReasoning =
 								targetModel.reasoning &&
 								(thinkingOverride ?? decision.thinking) !== "off"

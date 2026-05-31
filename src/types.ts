@@ -202,6 +202,12 @@ export interface RouterPersistedState {
 	lastPhase?: RouterPhase;
 	lastDecision?: RoutingDecision;
 	lastNonRouterModel?: string;
+	// ─── Per-session accumulated cost (backward compat) ──────────────
+	accumulatedCost?: number;
+	accumulatedOriginalTokens?: number;
+	accumulatedCompressedTokens?: number;
+	accumulatedTokensSaved?: number;
+	accumulatedCacheReadTokens?: number;
 	timestamp: number;
 	// ─── Progressive TOON state ───────────────────────────────────────
 	compressionRequestCount?: number;
