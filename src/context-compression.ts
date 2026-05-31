@@ -26,6 +26,18 @@
 import { encode as toonEncode } from "@toon-format/toon";
 import type { Context, Message } from "@oh-my-pi/pi-ai";
 import type { HistoryCompressionConfig, CompressionStats } from "./types";
+import { extractText as extractMessageText } from "./utils/messages.js";
+
+const COMPRESS_EXTRACT_OPTS = {
+	includeThinking: false,
+	includeToolCalls: true,
+	toolCallFormat: "name-only",
+	joiner: " ",
+} as const;
+
+function extractText(msg: Message): string {
+	return extractMessageText(msg, COMPRESS_EXTRACT_OPTS);
+}
 
 // ─── Message classification ──────────────────────────────────────────────────
 
@@ -123,21 +135,6 @@ function mergeMessages(a: Message, b: Message): Message {
 	} as Message;
 }
 
-/**
- * Extract plain text from a message's content.
- */
-function extractText(msg: Message): string {
-	if (typeof msg.content === "string") return msg.content;
-	if (!Array.isArray(msg.content)) return "";
-	return msg.content
-		.map((b: any) => {
-			if (b.type === "text") return b.text;
-			if (b.type === "toolCall") return `[tool:${b.name}]`;
-			return "";
-		})
-		.filter(Boolean)
-		.join(" ");
-}
 
 // ─── Smart split boundary ─────────────────────────────────────────────────────
 
