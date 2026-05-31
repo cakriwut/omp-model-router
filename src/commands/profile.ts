@@ -1,12 +1,11 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { RouterState } from "../state";
 import type { Actions } from "./shared";
-import { profileNames } from "../config";
+import { patchConfigFile, profileNames } from "../config";
 import {
 	openCreateProfile,
 	openRenameProfile,
 	openDeleteProfile,
-	openProfileEditor,
 } from "../tui/profile-editor";
 
 export const handleProfile = (
@@ -26,10 +25,9 @@ export const handleProfile = (
 				profile: state.currentConfig.profiles[name],
 			}));
 
-			const onSave = async () => {
+			const onReload = async () => {
 				await actions.reloadConfig(ctx, { preserveDebug: true });
 				await actions.ensureValidActiveRouterProfile(ctx);
-				ctx.ui.notify("Profile saved.", "info");
 			};
 
 			// Don't await — return immediately so loading animation stops
@@ -56,31 +54,45 @@ export const handleProfile = (
 								break;
 							}
 							case "edit": {
-								openProfileEditor(
-									result.profile,
-									state.currentConfig,
-									ctx.modelRegistry,
-									ctx,
-									onSave,
-								);
+								// Legacy fallback — should not be hit when inlineOptions are provided
 								break;
 							}
 							case "create": {
-								openCreateProfile(state.currentConfig, ctx.modelRegistry, ctx, onSave);
+								openCreateProfile(state.currentConfig, ctx.modelRegistry, ctx, async () => {
+									await onReload();
+									ctx.ui.notify("Profile saved.", "info");
+								});
 								break;
 							}
 							case "rename": {
-								openRenameProfile(state.currentConfig, ctx.modelRegistry, ctx, onSave);
+								openRenameProfile(state.currentConfig, ctx.modelRegistry, ctx, async () => {
+									await onReload();
+									ctx.ui.notify("Profile renamed.", "info");
+								});
 								break;
 							}
 							case "delete": {
-								openDeleteProfile(state.currentConfig, ctx, onSave);
+								openDeleteProfile(state.currentConfig, ctx, async () => {
+									await onReload();
+									ctx.ui.notify("Profile deleted.", "info");
+								});
 								break;
 							}
 						}
 					},
 					profiles,
 					state.selectedProfile,
+					// Inline options: enable edit sub-view navigation
+					{
+						config: state.currentConfig,
+						modelRegistry: ctx.modelRegistry,
+						onSave: (savedProfileName, profile) => {
+							// Persist and reload config
+							patchConfigFile({ profiles: { ...state.currentConfig.profiles, [savedProfileName]: profile } })
+								.then(() => onReload())
+								.then(() => ctx.ui.notify("Profile saved.", "info"));
+						},
+					},
 				);
 				tui.requestRender();
 				return component;

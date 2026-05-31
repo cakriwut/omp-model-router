@@ -1,7 +1,29 @@
-import type { Component, TUI } from "@oh-my-pi/pi-tui";
+import type { Component, TUI, SelectListTheme, SymbolTheme } from "@oh-my-pi/pi-tui";
 import { Input, SelectList, TabBar, fuzzyFilter, replaceTabs, truncateToWidth, matchesKey } from "@oh-my-pi/pi-tui";
 import type { KeybindingsManager, Theme } from "@oh-my-pi/pi-coding-agent";
-import { getSelectListTheme } from "@oh-my-pi/pi-coding-agent";
+
+/** Build a SelectListTheme from a Theme instance (avoids relying on uninitialized module global). */
+function buildSelectListTheme(theme: Theme): SelectListTheme {
+	const preset = theme.getSymbolPreset();
+	const symbols: SymbolTheme = {
+		cursor: theme.nav.cursor,
+		inputCursor: preset === "ascii" ? "|" : "\u258f",
+		boxRound: theme.boxRound,
+		boxSharp: theme.boxSharp,
+		table: theme.boxSharp,
+		quoteBorder: theme.md.quoteBorder,
+		hrChar: theme.md.hrChar,
+		spinnerFrames: theme.getSpinnerFrames("activity"),
+	};
+	return {
+		selectedPrefix: (text: string) => theme.fg("accent", text),
+		selectedText: (text: string) => theme.fg("accent", text),
+		description: (text: string) => theme.fg("muted", text),
+		scrollInfo: (text: string) => theme.fg("muted", text),
+		noMatch: (text: string) => theme.fg("muted", text),
+		symbols,
+	};
+}
 
 export interface SelectItem {
 	value: string;
@@ -64,7 +86,7 @@ export class FallbackPickerComponent implements Component {
 		});
 		
 		// Initialize TabBar with provider scopes
-		const selectListTheme = getSelectListTheme();
+		const selectListTheme = buildSelectListTheme(this.#theme);
 		const tabs = [
 			{ id: "all", label: "ALL" },
 			{ id: "amazon-bedrock", label: "AMAZON BEDROCK" },
@@ -97,7 +119,7 @@ export class FallbackPickerComponent implements Component {
 	render(width: number): string[] {
 		// Lazy init SelectList on first render (when theme is available)
 		if (!this.#selectList) {
-			this.#selectList = new SelectList(this.#filteredModels, 8, getSelectListTheme());
+			this.#selectList = new SelectList(this.#filteredModels, 8, buildSelectListTheme(this.#theme));
 		}
 
 		const lines: string[] = [];
@@ -139,7 +161,7 @@ export class FallbackPickerComponent implements Component {
 				description: model.description,
 			}));
 			
-			this.#selectList = new SelectList(items, 8, getSelectListTheme());
+			this.#selectList = new SelectList(items, 8, buildSelectListTheme(this.#theme));
 			
 			// Set cursor position
 			if (this.#selectedIndex < items.length) {

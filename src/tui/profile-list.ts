@@ -2,13 +2,15 @@ import {
 	type Component,
 	Input,
 	type KeybindingsManager,
+	type TUI,
 	matchesKey,
 	padding,
 	replaceTabs,
 	truncateToWidth,
 } from "@oh-my-pi/pi-tui";
-import type { Theme } from "@oh-my-pi/pi-coding-agent";
-import type { RouterProfile, RouterTier } from "../types";
+import type { ModelRegistry, Theme } from "@oh-my-pi/pi-coding-agent";
+import type { RouterConfig, RouterProfile, RouterTier } from "../types";
+import { ProfileEditorComponent } from "./profile-editor";
 
 export type ProfileListResult =
 	| { action: "activate"; profile: string }
@@ -20,6 +22,13 @@ export type ProfileListResult =
 interface ProfileEntry {
 	name: string;
 	profile: RouterProfile;
+}
+
+/** Options for enabling inline sub-view editing within the list. */
+export interface ProfileListInlineOptions {
+	config: RouterConfig;
+	modelRegistry: ModelRegistry;
+	onSave: (profileName: string, profile: RouterProfile) => void;
 }
 
 const NARROW_THRESHOLD = 80;
@@ -86,6 +95,7 @@ function countFallbacks(p: RouterProfile): number {
 }
 
 export class ProfileListComponent implements Component {
+	#tui: unknown;
 	#theme: Theme;
 	#keybindings: KeybindingsManager;
 	#done: (result: ProfileListResult | undefined) => void;
@@ -95,19 +105,26 @@ export class ProfileListComponent implements Component {
 	#filtered: ProfileEntry[];
 	#cursor: number;
 
+	// Inline sub-view support
+	#inlineOptions: ProfileListInlineOptions | undefined;
+	#subView: ProfileEditorComponent | undefined;
+
 	constructor(
-		_tui: unknown,
+		tui: unknown,
 		theme: Theme,
 		keybindings: KeybindingsManager,
 		done: (result: ProfileListResult | undefined) => void,
 		profiles: ProfileEntry[],
 		activeProfile: string | undefined,
+		inlineOptions?: ProfileListInlineOptions,
 	) {
+		this.#tui = tui;
 		this.#theme = theme;
 		this.#keybindings = keybindings;
 		this.#done = done;
 		this.#profiles = profiles;
 		this.#activeProfile = activeProfile;
+		this.#inlineOptions = inlineOptions;
 		this.#search = new Input();
 		this.#filtered = profiles.slice();
 		// Start cursor on active profile when present.
@@ -118,6 +135,12 @@ export class ProfileListComponent implements Component {
 	invalidate(): void {}
 
 	handleInput(data: string): void {
+		// If a sub-view (ProfileEditor) is active, delegate input to it.
+		if (this.#subView) {
+			this.#subView.handleInput(data);
+			return;
+		}
+
 		const kb = this.#keybindings;
 
 		// 1. Cancel
@@ -129,7 +152,7 @@ export class ProfileListComponent implements Component {
 		// 2. Action shortcuts
 		if (matchesKey(data, "ctrl+e")) {
 			const profile = this.#highlighted();
-			if (profile) this.#done({ action: "edit", profile });
+			if (profile) this.#handleEdit(profile);
 			return;
 		}
 		if (matchesKey(data, "ctrl+n")) {
@@ -176,6 +199,11 @@ export class ProfileListComponent implements Component {
 	}
 
 	render(width: number): string[] {
+		// If a sub-view (ProfileEditor) is active, delegate rendering to it.
+		if (this.#subView) {
+			return this.#subView.render(width);
+		}
+
 		const t = this.#theme;
 		const narrow = width < NARROW_THRESHOLD;
 		const lines: string[] = [];
@@ -239,6 +267,43 @@ export class ProfileListComponent implements Component {
 
 		return lines.map(line => truncateToWidth(replaceTabs(line), width));
 	}
+
+	// ─── Inline edit handling ──────────────────────────────────────────────
+
+	#handleEdit(profileName: string): void {
+		// If inline options are available, open the editor as a sub-view.
+		if (this.#inlineOptions) {
+			const profile = this.#inlineOptions.config.profiles[profileName];
+			if (!profile) return;
+
+			const done = (result: RouterProfile | undefined): void => {
+				this.#subView = undefined;
+				if (result) {
+					this.#inlineOptions!.onSave(profileName, result);
+					// Update local profile data to reflect save
+					const entry = this.#profiles.find(e => e.name === profileName);
+					if (entry) entry.profile = result;
+					this.#applyFilter();
+				}
+			};
+
+			this.#subView = new ProfileEditorComponent(
+				this.#tui as TUI,
+				this.#theme,
+				this.#keybindings,
+				done,
+				profileName,
+				profile,
+				this.#inlineOptions.modelRegistry,
+			);
+			return;
+		}
+
+		// Fallback: emit result for external handling (legacy path).
+		this.#done({ action: "edit", profile: profileName });
+	}
+
+	// ─── Internals ─────────────────────────────────────────────────────────
 
 	#highlighted(): string | undefined {
 		const entry = this.#filtered[this.#cursor];

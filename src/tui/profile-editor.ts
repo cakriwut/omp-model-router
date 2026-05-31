@@ -26,13 +26,18 @@ const ROWS: readonly Row[] = TIERS.flatMap((tier) =>
 
 type EditorState = "editing" | "dirty_confirm";
 
+/** Active sub-view state (model picker or fallback picker). */
+type SubView =
+	| { kind: "model"; tier: RouterTier; component: ModelPickerComponent }
+	| { kind: "fallbacks"; tier: RouterTier; component: FallbackPickerComponent };
+
 /**
  * Profile editor component with three tier sections (HIGH / MEDIUM / LOW),
  * each with `model`, `thinking`, and `fallbacks` rows.
  *
  * Submenus:
- * - `model` row → opens {@link ModelPickerComponent}, result updates `draft.{tier}.model`.
- * - `fallbacks` row → opens {@link FallbackPickerComponent}, result updates `draft.{tier}.fallbacks`.
+ * - `model` row → opens {@link ModelPickerComponent} inline, result updates `draft.{tier}.model`.
+ * - `fallbacks` row → opens {@link FallbackPickerComponent} inline, result updates `draft.{tier}.fallbacks`.
  * - `thinking` row → cycles through `low → medium → high → low` via SPACE.
  *
  * Exit paths:
@@ -40,6 +45,9 @@ type EditorState = "editing" | "dirty_confirm";
  * - `Esc` (clean) → `done(undefined)`
  * - `Esc` (dirty) → enters `dirty_confirm`; then `S` saves, `y` discards (`done(undefined)`),
  *   `n` returns to `editing`.
+ *
+ * Sub-views are rendered inline — ESC in a sub-view navigates back to the
+ * editor (not out of the entire component).
  */
 export class ProfileEditorComponent implements Component {
 	readonly #tui: TUI;
@@ -50,10 +58,10 @@ export class ProfileEditorComponent implements Component {
 	readonly #original: RouterProfile;
 	readonly #originalJson: string;
 	readonly #modelRegistry: ModelRegistry;
-	readonly #customUI: <T>(factory: (tui: unknown, theme: Theme, kb: KeybindingsManager, done: (v: T) => void) => Component) => Promise<T>;
 	#draft: RouterProfile;
 	#cursor = 0;
 	#state: EditorState = "editing";
+	#subView: SubView | undefined;
 
 	constructor(
 		tui: TUI,
@@ -63,7 +71,7 @@ export class ProfileEditorComponent implements Component {
 		profileName: string,
 		profile: RouterProfile,
 		modelRegistry: ModelRegistry,
-		customUI: <T>(factory: (tui: unknown, theme: Theme, kb: KeybindingsManager, done: (v: T) => void) => Component) => Promise<T>,
+		_customUI?: unknown,
 	) {
 		this.#tui = tui;
 		this.#theme = theme;
@@ -73,7 +81,6 @@ export class ProfileEditorComponent implements Component {
 		this.#original = profile;
 		this.#originalJson = JSON.stringify(profile);
 		this.#modelRegistry = modelRegistry;
-		this.#customUI = customUI;
 		this.#draft = structuredClone(profile);
 	}
 
@@ -84,6 +91,11 @@ export class ProfileEditorComponent implements Component {
 	// ─── Render ────────────────────────────────────────────────────────────
 
 	render(width: number): string[] {
+		// If a sub-view is active, delegate rendering entirely to it.
+		if (this.#subView) {
+			return this.#subView.component.render(width);
+		}
+
 		const t = this.#theme;
 		const lines: string[] = [];
 
@@ -187,6 +199,11 @@ export class ProfileEditorComponent implements Component {
 	// ─── Input ─────────────────────────────────────────────────────────────
 
 	handleInput(data: string): void {
+		// If a sub-view is active, delegate input to it.
+		if (this.#subView) {
+			this.#subView.component.handleInput(data);
+			return;
+		}
 
 		if (this.#state === "dirty_confirm") {
 			this.#handleDirtyConfirm(data);
@@ -269,30 +286,34 @@ export class ProfileEditorComponent implements Component {
 		this.#draft[tier] = { ...this.#draft[tier], thinking: next };
 	}
 
-	// ─── Submenu wiring ────────────────────────────────────────────────────
+	// ─── Submenu wiring (inline sub-views) ─────────────────────────────────
 
 	#openModelPicker(tier: RouterTier): void {
 		const tierCfg = this.#draft[tier];
 		const fallbacks = tierCfg.fallbacks ?? [];
-		
-		this.#customUI<string | undefined>((tui, theme, keybindings, done) => {
-			return new ModelPickerComponent(
-				tui as TUI,
-				theme,
-				keybindings,
-				done,
-				{
-					tier,
-					modelRegistry: this.#modelRegistry,
-					currentPrimary: tierCfg.model,
-					currentFallbacks: fallbacks,
-				},
-			);
-		}).then((result) => {
+
+		const done = (result: string | undefined): void => {
+			// Close the sub-view and return to the editor.
+			this.#subView = undefined;
 			if (typeof result === "string" && result.length > 0) {
 				this.#draft[tier] = { ...this.#draft[tier], model: result };
 			}
-		});
+		};
+
+		const component = new ModelPickerComponent(
+			this.#tui,
+			this.#theme,
+			this.#keybindings,
+			done,
+			{
+				tier,
+				modelRegistry: this.#modelRegistry,
+				currentPrimary: tierCfg.model,
+				currentFallbacks: fallbacks,
+			},
+		);
+
+		this.#subView = { kind: "model", tier, component };
 	}
 
 	#openFallbackPicker(tier: RouterTier): void {
@@ -305,26 +326,30 @@ export class ProfileEditorComponent implements Component {
 				label: m.name,
 				description: `${m.provider} · ${Math.floor(m.contextWindow / 1000)}k`,
 			}));
-		
-		this.#customUI<string[] | undefined>((tui, theme, keybindings, done) => {
-			return new FallbackPickerComponent(
-				tui as TUI,
-				theme,
-				keybindings,
-				done,
-				allModels,
-				tierCfg.model,
-				tierCfg.fallbacks ?? [],
-				tier,
-			);
-		}).then((result) => {
+
+		const done = (result: string[] | undefined): void => {
+			// Close the sub-view and return to the editor.
+			this.#subView = undefined;
 			if (Array.isArray(result)) {
 				this.#draft[tier] = {
 					...this.#draft[tier],
 					fallbacks: result.length === 0 ? undefined : result,
 				};
 			}
-		});
+		};
+
+		const component = new FallbackPickerComponent(
+			this.#tui as TUI,
+			this.#theme,
+			this.#keybindings,
+			done,
+			allModels,
+			tierCfg.model,
+			tierCfg.fallbacks ?? [],
+			tier,
+		);
+
+		this.#subView = { kind: "fallbacks", tier, component };
 	}
 
 	// ─── Helpers ───────────────────────────────────────────────────────────
@@ -358,7 +383,7 @@ export function createProfileEditorFactory(
 	profileName: string,
 	profile: RouterProfile,
 	modelRegistry: ModelRegistry,
-	customUI: <T>(factory: (tui: unknown, theme: Theme, kb: KeybindingsManager, done: (v: T) => void) => Component) => Promise<T>,
+	_customUI?: unknown,
 ): (
 	tui: TUI,
 	theme: Theme,
@@ -374,7 +399,6 @@ export function createProfileEditorFactory(
 			profileName,
 			profile,
 			modelRegistry,
-			customUI,
 		);
 }
 
@@ -401,7 +425,7 @@ export async function openProfileEditor(
 	}
 
 	const result = await ctx.ui.custom<RouterProfile | undefined>(
-		createProfileEditorFactory(profileName, profile, modelRegistry, ctx.ui.custom.bind(ctx.ui)),
+		createProfileEditorFactory(profileName, profile, modelRegistry),
 		{ overlay: false },
 	);
 
@@ -438,7 +462,7 @@ export async function openCreateProfile(
 	}
 
 	const result = await ctx.ui.custom<RouterProfile | undefined>(
-		createProfileEditorFactory(name, structuredClone(activeProfile), modelRegistry, ctx.ui.custom.bind(ctx.ui)),
+		createProfileEditorFactory(name, structuredClone(activeProfile), modelRegistry),
 		{ overlay: false },
 	);
 
