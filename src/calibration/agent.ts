@@ -167,8 +167,10 @@ async function spawnViaSubagent(
 	currentPhase: RouterPhase | undefined,
 ): Promise<string | undefined> {
 	try {
-		console.log(`[model-router] Spawning classifier with model: ${classifierModelRef}`);
-		const prompt = buildClassifierPrompt(context, currentPhase);
+		const shortName = classifierModelRef.split('/').pop()?.split('.').pop()?.replace(/-v\d+:\d+$/, '') || classifierModelRef;
+		console.log(`⚡ classifier → ${shortName} (async·telemetry)`);
+		
+ 		const prompt = buildClassifierPrompt(context, currentPhase);
 
 		const result = await Agent({
 			subagent_type: "quick_task",
@@ -212,9 +214,9 @@ async function spawnViaStreamSimple(
 		};
 
 		const agentId = `classifier-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-		console.log(`[model-router] Spawning classifier (streamSimple) with model: ${classifierModelRef}`);
-
-		const promise = runClassifierStream(model, classifierContext, apiKey, model.headers);
+		const shortName = classifierModelRef.split('/').pop()?.split('.').pop()?.replace(/-v\d+:\d+$/, '') || classifierModelRef;
+		console.log(`⚡ classifier → ${shortName} (async·telemetry)`);
+ 		const promise = runClassifierStream(model, classifierContext, apiKey, model.headers);
 
 		pendingClassifiers.set(agentId, {
 			promise,

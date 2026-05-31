@@ -273,22 +273,25 @@ export function spawnClassifierForTurn(
 					}
 
 					clearPending(state.calibration);
+					const heuristicTier = state.calibration.pendingHeuristicTier;
+					const verdict = result.verdict;
 
-					// Update UI status
-					if (state.lastExtensionContext) {
-						const {updateStatus: updateStatusFn} = await import("../ui");
-						updateStatusFn(
-							state.lastExtensionContext,
-							state.routerEnabled,
-							state.selectedProfile,
-							state.pinnedTierByProfile,
-							state.thinkingByProfile,
-							state.lastDecision,
-							state.lastNonRouterModel,
-							state.accumulatedCost,
-							state.widgetEnabled,
-							state.currentConfig,
-							state.isStreaming,
+					updateCalibrationMatrix(state.calibration, heuristicTier, verdict.tier);
+
+					if (state.calibration.traceFilePath) {
+						writeCompletedTrace(state.calibration, verdict, ageMs);
+					}
+					
+					// Badge-style log with decision
+					const shortName = config.calibration?.classifierModel
+						?.split('/').pop()?.split('.').pop()?.replace(/-v\d+:\d+$/, '') || 'classifier';
+					if (state.debugEnabled) {
+						const agreed = heuristicTier === verdict.tier;
+						const modeLabel = config.calibration?.mode === 'adaptive' ? 'adaptive' : 'telemetry';
+						console.log(`⚡ classifier → ${shortName} (async·${modeLabel}) → ${verdict.tier} ${agreed ? '✓' : '✗'}`);
+						ctx.ui.notify(
+							`[calibration] h=${heuristicTier}, llm=${verdict.tier} ${agreed ? '✓' : '✗'} (${state.calibration.totalComparisons} comparisons, ${ageMs}ms)`,
+							"info",
 						);
 					}
 				} catch (err: unknown) {

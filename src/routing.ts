@@ -525,6 +525,12 @@ export const runClassifier = async (
 			return undefined;
 		}
 		const headers = model.headers;
+		
+		// Badge-style log: ⚡ classifier → nova-micro (sync·adaptive)
+		const shortName = modelId.split('.').pop()?.replace(/-v\d+:\d+$/, '') || modelId;
+		if (debug) {
+			console.log(`⚡ classifier → ${shortName} (sync·adaptive)`);
+		}
 
 		const stream = streamSimple(model, classifierContext, {
 			apiKey,
@@ -540,14 +546,15 @@ export const runClassifier = async (
 			}
 		}
 
-		return parseClassifierOutput(fullText);
-	} catch (error) {
-		if (debug) {
-			console.warn(
-				`[model-router] Classifier failed: ${error instanceof Error ? error.message : String(error)}`,
-			);
+		const result = parseClassifierOutput(fullText);
+		
+		// Log decision: ⚡ classifier → nova-micro (sync·adaptive) → high
+		if (debug && result) {
+			console.log(`⚡ classifier → ${shortName} (sync·adaptive) → ${result.tier}`);
 		}
-		return undefined;
+		
+		return result;
+	} catch (error) {
 	}
 };
 // ─── Model-capacity-aware tier promotion ─────────────────────────────────────
