@@ -619,11 +619,19 @@ export const registerCommands = (
 			}
 		}
 
+		// Derive tier counts from session model costs (authoritative)
+		const sessionTierCounter = { high: 0, medium: 0, low: 0 };
+		for (const entry of sessionModelCosts.values()) {
+			if (entry.tier === "high" || entry.tier === "medium" || entry.tier === "low") {
+				sessionTierCounter[entry.tier] += entry.invocations;
+			}
+		}
+
 		const report = renderUsageReport({
 			theme: ctx.ui.theme,
 			selectedProfile: state.selectedProfile,
 			profile,
-			tierCounter: state.tierCounter,
+			tierCounter: sessionModelCosts.size > 0 ? sessionTierCounter : state.tierCounter,
 			modelCosts: sessionModelCosts.size > 0 ? sessionModelCosts : state.modelCosts,
 			lastDecision: state.lastDecision,
 			accumulatedCost: sessionTotalCost > 0 ? sessionTotalCost : state.accumulatedCost,
