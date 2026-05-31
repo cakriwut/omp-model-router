@@ -1,14 +1,8 @@
 import { describe, test, expect } from "bun:test";
 import { renderUsageReport, type CompressionDiagnostic } from "../src/ui";
 import type { RouterConfig } from "../src/types";
-
-const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
-
-const makeTheme = (): any => ({
-	fg: (_color: string, text: string) => text,
-	bg: (_color: string, text: string) => text,
-	dim: (text: string) => text,
-});
+import { stripAnsi } from "./_helpers/ansi";
+import { makeTheme } from "./_helpers/theme";
 
 const baseProfile: RouterConfig["profiles"][string] = {
 	high: { model: "anthropic/claude-sonnet-4-5" },

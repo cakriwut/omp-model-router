@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from "bun:test";
 import type { RoutingDecision, RoutingDecisionUsage, RouterTier } from "../src/types";
+import { stripAnsi } from "./_helpers/ansi";
 
 // Simulate theme.fg — wraps text in identifiable ANSI markers
 function createMockTheme() {
@@ -184,10 +185,6 @@ function makeDecision(overrides: Partial<RoutingDecision> & { tier: RouterTier }
 	};
 }
 
-// Strip ANSI for structural assertions
-function stripAnsi(str: string): string {
-	return str.replace(/\x1b\[[0-9;]*m/g, "");
-}
 
 describe("/router usage format", () => {
 	const baseOpts = {
