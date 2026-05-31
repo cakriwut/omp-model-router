@@ -18,6 +18,7 @@ import {
 	openTraceFile,
 	appendTraceRecord,
 	truncatePrompt,
+	cancelPendingSave,
 } from "./index";
 import type { TraceRecord } from "./types";
 import { getLastUserText } from "../routing";
@@ -120,6 +121,8 @@ export async function onSessionEnd(
 	if (!config.calibration?.enabled || !state.calibration) {
 		return;
 	}
+
+	cancelPendingSave();
 
 	const cal = state.calibration;
 	if (cal.totalComparisons > 0) {
@@ -264,34 +267,21 @@ export function spawnClassifierForTurn(
 						writeCompletedTrace(state.calibration, verdict, ageMs);
 					}
 
-					if (state.debugEnabled) {
-						const agreed = heuristicTier === verdict.tier;
-						ctx.ui.notify(
-							`[calibration] h=${heuristicTier}, llm=${verdict.tier} ${agreed ? "✓" : "✗"} (${state.calibration.totalComparisons} comparisons, ${ageMs}ms)`,
-							"info",
-						);
-					}
-
-					clearPending(state.calibration);
-
-					updateCalibrationMatrix(state.calibration, heuristicTier, verdict.tier);
-
-					if (state.calibration.traceFilePath) {
-						writeCompletedTrace(state.calibration, verdict, ageMs);
-					}
-					
-					// Badge-style log with decision
+					// Badge-style log with decision (always shown)
 					const shortName = config.calibration?.classifierModel
 						?.split('/').pop()?.split('.').pop()?.replace(/-v\d+:\d+$/, '') || 'classifier';
+					const agreed = heuristicTier === verdict.tier;
+					const modeLabel = config.calibration?.mode === 'adaptive' ? 'adaptive' : 'telemetry';
+					console.log(`⚡ classifier → ${shortName} (async·${modeLabel}) → ${verdict.tier} ${agreed ? '✓' : '✗'}`);
+
 					if (state.debugEnabled) {
-						const agreed = heuristicTier === verdict.tier;
-						const modeLabel = config.calibration?.mode === 'adaptive' ? 'adaptive' : 'telemetry';
-						console.log(`⚡ classifier → ${shortName} (async·${modeLabel}) → ${verdict.tier} ${agreed ? '✓' : '✗'}`);
 						ctx.ui.notify(
 							`[calibration] h=${heuristicTier}, llm=${verdict.tier} ${agreed ? '✓' : '✗'} (${state.calibration.totalComparisons} comparisons, ${ageMs}ms)`,
 							"info",
 						);
 					}
+
+					clearPending(state.calibration);
 				} catch (err: unknown) {
 					// Timeout or other error
 					if (!state.calibration || state.calibration.pendingAgentId !== trackingId) {

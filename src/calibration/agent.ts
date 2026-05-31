@@ -19,8 +19,8 @@ try {
 }
 
 /**
- * In-flight classifier state for streamSimple fallback
- * Result is cached after completion so late polls can still read it
+ * In-flight classifier state for streamSimple fallback.
+ * Entries are deleted from pendingClassifiers once the result is consumed.
  */
 interface ClassifierPromise {
 	promise: Promise<{ tier: RouterTier; reasoning: string } | undefined>;
@@ -108,8 +108,9 @@ export async function pollClassifierResult(
 		return { ready: true, error: "Agent not found" };
 	}
 
-	// Return cached result if already completed
+	// If result is already cached, return and clean up
 	if (pending.result !== undefined) {
+		pendingClassifiers.delete(agentId);
 		return {
 			ready: true,
 			verdict: pending.result,
@@ -117,6 +118,7 @@ export async function pollClassifierResult(
 		};
 	}
 	if (pending.error !== undefined) {
+		pendingClassifiers.delete(agentId);
 		return { ready: true, error: pending.error };
 	}
 
@@ -133,21 +135,21 @@ export async function pollClassifierResult(
 			return { ready: false };
 		}
 
-		// Cache result for future polls, don't delete
 		if (!result) {
 			pending.error = "Classifier returned undefined";
+			pendingClassifiers.delete(agentId);
 			return { ready: true, error: pending.error };
 		}
 
-		pending.result = result;
+		pendingClassifiers.delete(agentId);
 		return {
 			ready: true,
 			verdict: result,
 			latencyMs: Date.now() - pending.startTime,
 		};
 	} catch (error) {
-		pending.error = String(error);
-		return { ready: true, error: pending.error };
+		pendingClassifiers.delete(agentId);
+		return { ready: true, error: String(error) };
 	}
 }
 

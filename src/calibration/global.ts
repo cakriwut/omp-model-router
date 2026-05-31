@@ -115,6 +115,17 @@ export function resetGlobalCalibration(): void {
 	}
 }
 
+/**
+ * Cancel any pending debounced save timer. Call on session end to prevent
+ * stale snapshot closures from staying live after calibration state is cleared.
+ */
+export function cancelPendingSave(): void {
+	if (pendingSave) {
+		clearTimeout(pendingSave);
+		pendingSave = undefined;
+	}
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 function createEmptySnapshot(version: string): GlobalCalibrationSnapshot {

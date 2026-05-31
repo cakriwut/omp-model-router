@@ -24,6 +24,7 @@ export {
 	mergeSessionIntoGlobal,
 	saveGlobalSnapshot,
 	resetGlobalCalibration,
+	cancelPendingSave,
 } from "./global";
 
 export {

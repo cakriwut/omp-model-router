@@ -152,7 +152,8 @@ export class RouterState {
 
 	recordDecision(decision: RoutingDecision): void {
 		const limit = this.currentConfig.debugHistoryLimit ?? MAX_DEBUG_HISTORY;
-		this.debugHistory = [...this.debugHistory, decision].slice(-limit);
+		if (this.debugHistory.length >= limit) this.debugHistory.shift();
+		this.debugHistory.push(decision);
 	}
 
 	getThinkingOverride(
