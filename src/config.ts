@@ -300,19 +300,37 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 		}
 	}
 
-	let classifierModel =
-		typeof raw.classifierModel === "string"
-			? raw.classifierModel.trim()
-			: undefined;
-	if (classifierModel) {
+	// Parse classifierModel: single string or array of strings
+	let classifierModel: string | string[] | undefined;
+	if (typeof raw.classifierModel === "string") {
+		// Single string (backward compat)
+		const trimmed = raw.classifierModel.trim();
 		try {
-			parseCanonicalModelRef(classifierModel);
+			parseCanonicalModelRef(trimmed);
+			classifierModel = trimmed;
 		} catch (error) {
 			warnings.push(
 				`Invalid classifierModel: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			classifierModel = undefined;
 		}
+	} else if (Array.isArray(raw.classifierModel)) {
+		// Array of strings (fallback chain)
+		const validModels: string[] = [];
+		for (const modelRef of raw.classifierModel) {
+			if (typeof modelRef === "string") {
+				const trimmed = modelRef.trim();
+				try {
+					parseCanonicalModelRef(trimmed);
+					validModels.push(trimmed);
+				} catch (error) {
+					warnings.push(
+						`Invalid classifierModel in array: ${trimmed} — ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}
+		}
+		classifierModel = validModels.length > 0 ? validModels : undefined;
 	}
 	// ── Auto-upgrade normalization ───────────────────────────────────────────
 	let autoUpgrade: AutoUpgradeConfig | undefined;

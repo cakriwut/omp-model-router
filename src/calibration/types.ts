@@ -133,8 +133,9 @@ export interface CalibrationConfig {
 	/** Turns before calibration affects routing (default: 5) */
 	warmupTurns: number;
 
-	/** Model reference for async LLM classifier (e.g. anthropic/claude-3-haiku-20240307) */
-	classifierModel?: string;
+	/** Model reference for async LLM classifier (e.g. anthropic/claude-3-haiku-20240307)
+	 * Can be a single string (backward compat) or array of strings (fallback chain) */
+	classifierModel?: string | string[];
 
 	/** Confidence threshold for confusion-matrix override (default: 0.65) */
 	overrideThreshold: number;

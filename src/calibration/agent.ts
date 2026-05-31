@@ -192,45 +192,97 @@ async function spawnViaSubagent(
 }
 
 async function spawnViaStreamSimple(
-	classifierModelRef: string,
+	classifierModelRefsInput: string | string[],
 	context: Context,
 	currentPhase: RouterPhase | undefined,
 	modelRegistry: ExtensionContext["modelRegistry"],
+	debug = false,
 ): Promise<string | undefined> {
-	try {
-		const { provider, modelId } = parseCanonicalModelRef(classifierModelRef);
-		const model = modelRegistry.find(provider, modelId);
-		if (!model) {
-			throw new Error(`model ${classifierModelRef} not in registry`);
-		}
+	// Normalize to array (backward compat: single string → array)
+	const classifierModelRefs = Array.isArray(classifierModelRefsInput)
+		? classifierModelRefsInput
+		: [classifierModelRefsInput];
 
-		const apiKey = await modelRegistry.getApiKey(model);
-		if (!apiKey) {
-			throw new Error(`no API key for ${provider}`);
-		}
-
-		const prompt = buildClassifierPrompt(context, currentPhase);
-		const classifierContext: Context = {
-			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
-		};
-
-		const agentId = `classifier-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-		const shortName = classifierModelRef.split('/').pop()?.split('.').pop()?.replace(/-v\d+:\d+$/, '') || classifierModelRef;
-		console.log(`⚡ classifier → ${shortName} (async·telemetry)`);
- 		const promise = runClassifierStream(model, classifierContext, apiKey, model.headers);
-
-		pendingClassifiers.set(agentId, {
-			promise,
-			startTime: Date.now(),
-		});
-
-		return agentId;
-	} catch (error) {
-		console.warn(
-			`[model-router] Failed to spawn streamSimple classifier: ${error}`,
+	if (debug) {
+		console.log(
+			`[model-router] Classifier fallback chain: ${classifierModelRefs.length} model(s)`,
 		);
-		throw error;
 	}
+
+	let lastError: Error | undefined;
+
+	for (let i = 0; i < classifierModelRefs.length; i++) {
+		const classifierModelRef = classifierModelRefs[i];
+
+		if (debug) {
+			console.log(
+				`[model-router] Classifier attempt ${i + 1}/${classifierModelRefs.length}: ${classifierModelRef}`,
+			);
+		}
+
+		try {
+			const { provider, modelId } = parseCanonicalModelRef(classifierModelRef);
+			const model = modelRegistry.find(provider, modelId);
+			if (!model) {
+				if (debug) {
+					console.log(`  ✗ Skipped: model not in registry`);
+				}
+				lastError = new Error(`model ${classifierModelRef} not in registry`);
+				continue;
+			}
+
+			const apiKey = await modelRegistry.getApiKey(model);
+			if (!apiKey) {
+				if (debug) {
+					console.log(`  ✗ Skipped: no API key for ${provider}`);
+				}
+				lastError = new Error(`no API key for ${provider}`);
+				continue;
+			}
+
+			const prompt = buildClassifierPrompt(context, currentPhase);
+			const classifierContext: Context = {
+				messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+			};
+
+			const agentId = `classifier-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+			const shortName =
+				classifierModelRef.split("/").pop()?.split(".").pop()?.replace(/-v\d+:\d+$/, "") ||
+				classifierModelRef;
+
+			if (debug) {
+				console.log(`  ✓ Success: spawning ${shortName} (async·telemetry)`);
+			} else {
+				console.log(`⚡ classifier → ${shortName} (async·telemetry)`);
+			}
+
+			const promise = runClassifierStream(model, classifierContext, apiKey, model.headers);
+
+			pendingClassifiers.set(agentId, {
+				promise,
+				startTime: Date.now(),
+			});
+
+			return agentId;
+		} catch (error) {
+			const errMsg = error instanceof Error ? error.message : String(error);
+			if (debug) {
+				console.log(`  ✗ Failed: ${errMsg}`);
+			}
+			lastError = error instanceof Error ? error : new Error(errMsg);
+		}
+	}
+
+	// All classifiers failed
+	if (debug) {
+		console.log(
+			`[model-router] ❌ All ${classifierModelRefs.length} classifier models failed. Last error: ${lastError?.message}`,
+		);
+	}
+	console.warn(
+		`[model-router] Failed to spawn streamSimple classifier after ${classifierModelRefs.length} attempts. Last error: ${lastError}`,
+	);
+	throw lastError || new Error("Failed to spawn any classifier from fallback chain");
 }
 
 async function runClassifierStream(

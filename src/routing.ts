@@ -497,81 +497,123 @@ export const decideRouting = (
 const SYNC_CLASSIFIER_TIMEOUT_MS = 10_000;
 
 export const runClassifier = async (
-	classifierModelRef: string,
+	classifierModelRefsInput: string | string[],
 	modelRegistry: ExtensionContext["modelRegistry"],
 	context: Context,
 	currentPhase?: RouterPhase,
 	debug = false,
 ): Promise<{ tier: RouterTier; reasoning: string } | undefined> => {
+	// Normalize to array (backward compat: single string → array)
+	const classifierModelRefs = Array.isArray(classifierModelRefsInput)
+		? classifierModelRefsInput
+		: [classifierModelRefsInput];
+
+	if (debug && classifierModelRefs.length > 1) {
+		console.log(
+			`[model-router] Sync classifier fallback chain: ${classifierModelRefs.length} model(s)`,
+		);
+	}
+
 	const classifierContext: Context = {
 		messages: [
 			{ role: "user", content: buildClassifierPrompt(context, currentPhase), timestamp: Date.now() },
 		],
 	};
 
-	try {
-		const { provider, modelId } = parseCanonicalModelRef(classifierModelRef);
-		const model = modelRegistry.find(provider, modelId);
-		if (!model) {
-			if (debug) {
-				console.warn(`[model-router] Classifier model not found: ${provider}/${modelId}`);
-			}
-			return undefined;
-		}
+	let lastError: Error | undefined;
 
-		const apiKey = await modelRegistry.getApiKey(model);
-		if (!apiKey) {
-			if (debug) {
-				console.warn(`[model-router] Classifier model API key missing: ${provider}/${modelId}`);
-			}
-			return undefined;
-		}
-		const headers = model.headers;
-		// Badge-style log: ⚡ classifier → nova-micro (sync·adaptive)
-		const shortName = modelId.split('.').pop()?.replace(/-v\d+:\d+$/, '') || modelId;
-		if (debug) {
-			console.log(`⚡ classifier → ${shortName} (sync·adaptive)`);
-		}
+	// Try each classifier in sequence until one succeeds
+	for (let i = 0; i < classifierModelRefs.length; i++) {
+		const classifierModelRef = classifierModelRefs[i];
 
-		// Race classifier stream against a hard timeout to prevent blocking
-		const ac = new AbortController();
-		const timeout = setTimeout(() => ac.abort(), SYNC_CLASSIFIER_TIMEOUT_MS);
-
-		try {
-			const stream = streamSimple(model, classifierContext, {
-				apiKey,
-				headers,
-				signal: ac.signal,
-			});
-			let fullText = "";
-			for await (const event of stream) {
-				if (
-					event.type === "text_delta" &&
-					typeof (event as { delta?: unknown }).delta === "string"
-				) {
-					fullText += (event as { delta: string }).delta;
-				}
-			}
-
-			const result = parseClassifierOutput(fullText);
-
-			// Log decision: ⚡ classifier → nova-micro (sync·adaptive) → high
-			if (debug && result) {
-				console.log(`⚡ classifier → ${shortName} (sync·adaptive) → ${result.tier}`);
-			}
-
-			return result;
-		} finally {
-			clearTimeout(timeout);
-		}
-	} catch (error) {
-		if (debug) {
-			console.warn(
-				`[model-router] Classifier failed: ${error instanceof Error ? error.message : String(error)}`,
+		if (debug && classifierModelRefs.length > 1) {
+			console.log(
+				`[model-router] Sync classifier attempt ${i + 1}/${classifierModelRefs.length}: ${classifierModelRef}`,
 			);
 		}
-		return undefined;
+
+		try {
+			const { provider, modelId } = parseCanonicalModelRef(classifierModelRef);
+			const model = modelRegistry.find(provider, modelId);
+			if (!model) {
+				if (debug) {
+					console.warn(`[model-router] Classifier model not found: ${provider}/${modelId}`);
+				}
+				lastError = new Error(`Classifier model not found: ${provider}/${modelId}`);
+				continue; // Try next model
+			}
+
+			const apiKey = await modelRegistry.getApiKey(model);
+			if (!apiKey) {
+				if (debug) {
+					console.warn(`[model-router] Classifier model API key missing: ${provider}/${modelId}`);
+				}
+				lastError = new Error(`Classifier API key missing: ${provider}/${modelId}`);
+				continue; // Try next model
+			}
+			const headers = model.headers;
+			// Badge-style log: ⚡ classifier → nova-micro (sync·adaptive)
+			const shortName = modelId.split('.').pop()?.replace(/-v\d+:\d+$/, '') || modelId;
+			if (debug) {
+				console.log(`⚡ classifier → ${shortName} (sync·adaptive)`);
+			}
+
+			// Race classifier stream against a hard timeout to prevent blocking
+			const ac = new AbortController();
+			const timeout = setTimeout(() => ac.abort(), SYNC_CLASSIFIER_TIMEOUT_MS);
+
+			try {
+				const stream = streamSimple(model, classifierContext, {
+					apiKey,
+					headers,
+					signal: ac.signal,
+				});
+				let fullText = "";
+				for await (const event of stream) {
+					if (
+						event.type === "text_delta" &&
+						typeof (event as { delta?: unknown }).delta === "string"
+					) {
+						fullText += (event as { delta: string }).delta;
+					}
+				}
+
+				const result = parseClassifierOutput(fullText);
+
+				// Log decision: ⚡ classifier → nova-micro (sync·adaptive) → high
+				if (debug && result) {
+					console.log(`⚡ classifier → ${shortName} (sync·adaptive) → ${result.tier}`);
+				}
+
+				if (result) {
+					// Success! Return immediately
+					return result;
+				} else {
+					// Parsing failed, try next model
+					lastError = new Error(`Classifier output parsing failed for ${classifierModelRef}`);
+					continue;
+				}
+			} finally {
+				clearTimeout(timeout);
+			}
+		} catch (error) {
+			if (debug) {
+				console.warn(
+					`[model-router] Classifier failed: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			lastError = error instanceof Error ? error : new Error(String(error));
+			// Continue to next classifier
+		}
 	}
+
+	// All classifiers failed
+	if (debug) {
+		console.warn(
+			`[model-router] ❌ All ${classifierModelRefs.length} sync classifier models failed. Falling back to heuristic.`,
+		);
+	}
+	return undefined; // Fall back to heuristic
 };
 // ─── Model-capacity-aware tier promotion ─────────────────────────────────────
 
