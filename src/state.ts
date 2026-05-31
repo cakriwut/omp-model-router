@@ -27,27 +27,35 @@ export interface SessionScope {
 	lastTurnTimestamp?: number;
 	currentCheckpoint?: CompressionCheckpoint;
 	isStreaming: boolean;
-	/** Authoritative usage ledger — every completed model invocation */
-	usageLedger: UsageLedgerEntry[];
+	/** Routing decision counts per tier */
+	tierCounter: TierCounter;
+	/** Cost breakdown per model */
+	modelCosts: Map<string, ModelCostEntry>;
 }
 
 /**
- * A single entry in the usage ledger.
- * Recorded once per completed model invocation (after stream finishes).
- * Unlike debugHistory (capped at 12), this is unbounded for the session lifetime.
+ * Routing decision counter — tracks how many times each tier was selected.
+ * Incremented at decision time (before stream starts).
  */
-export interface UsageLedgerEntry {
-	timestamp: number;
-	profile: string;
-	tier: RouterTier;
+export interface TierCounter {
+	high: number;
+	medium: number;
+	low: number;
+}
+
+/**
+ * Per-model cost entry — tracks actual LLM cost per model.
+ * Updated on stream completion when usage data arrives.
+ */
+export interface ModelCostEntry {
 	model: string;
+	tier: string;
+	invocations: number;
 	inputTokens: number;
 	outputTokens: number;
 	cacheReadTokens: number;
 	cacheWriteTokens: number;
 	cost: number;
-	isClassifier?: boolean;
-	isFallback?: boolean;
 }
 import type {
 	RouterConfig,
@@ -204,7 +212,8 @@ export class RouterState {
 				debugHistory: [],
 				lastDecision: undefined,
 				isStreaming: false,
-				usageLedger: [],
+				tierCounter: { high: 0, medium: 0, low: 0 },
+				modelCosts: new Map(),
 			});
 		}
 	}
@@ -297,11 +306,36 @@ export class RouterState {
 	get lastTurnTimestamp(): number | undefined { return this.scope.lastTurnTimestamp; }
 	set lastTurnTimestamp(v: number | undefined) { this.scope.lastTurnTimestamp = v; }
 
-	get usageLedger(): UsageLedgerEntry[] { return this.scope.usageLedger; }
+	get tierCounter(): TierCounter { return this.scope.tierCounter; }
+	get modelCosts(): Map<string, ModelCostEntry> { return this.scope.modelCosts; }
 
-	/** Record a completed model invocation into the session usage ledger. */
-	recordUsage(entry: UsageLedgerEntry): void {
-		this.scope.usageLedger.push(entry);
+	/** Record a routing decision (tier counter). Called at decision time. */
+	recordRoutingDecision(tier: RouterTier): void {
+		this.scope.tierCounter[tier]++;
+	}
+
+	/** Record model cost on stream completion. Called when usage data arrives. */
+	recordModelCost(model: string, tier: string, usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number }): void {
+		const existing = this.scope.modelCosts.get(model);
+		if (existing) {
+			existing.invocations++;
+			existing.inputTokens += usage.inputTokens;
+			existing.outputTokens += usage.outputTokens;
+			existing.cacheReadTokens += usage.cacheReadTokens;
+			existing.cacheWriteTokens += usage.cacheWriteTokens;
+			existing.cost += usage.cost;
+		} else {
+			this.scope.modelCosts.set(model, {
+				model,
+				tier,
+				invocations: 1,
+				inputTokens: usage.inputTokens,
+				outputTokens: usage.outputTokens,
+				cacheReadTokens: usage.cacheReadTokens,
+				cacheWriteTokens: usage.cacheWriteTokens,
+				cost: usage.cost,
+			});
+		}
 	}
 
 	recordDecision(decision: RoutingDecision): void {

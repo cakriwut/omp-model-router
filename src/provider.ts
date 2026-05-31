@@ -421,6 +421,9 @@ export const registerRouterProvider = (
 					state.lastDecision = decision;
 					actions.recordDebugDecision(decision);
 
+					// Track routing decision (tier counter)
+					state.recordRoutingDecision(decision.tier);
+
 					// Spawn async classifier for calibration telemetry (fire-and-forget)
 					spawnClassifierForTurn(state, state.currentConfig, decision.tier, context);
 
@@ -774,19 +777,13 @@ export const registerRouterProvider = (
 											(u?.cacheWrite ?? 0),
 										cost: (decision.usage?.cost ?? 0) + cost,
 									};
-									// Record into authoritative usage ledger
-									state.recordUsage({
-										timestamp: Date.now(),
-										profile: decision.profile,
-										tier: decision.tier,
-										model: decision.targetLabel,
+									// Track model cost
+									state.recordModelCost(decision.targetLabel, decision.tier, {
 										inputTokens: u?.input ?? 0,
 										outputTokens: u?.output ?? 0,
 										cacheReadTokens: u?.cacheRead ?? 0,
 										cacheWriteTokens: u?.cacheWrite ?? 0,
 										cost,
-										isClassifier: decision.isClassifier,
-										isFallback: decision.isFallback,
 									});
 								}
 								if (event.type === "error") {

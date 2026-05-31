@@ -5,7 +5,7 @@ import type {
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
-import type { RouterTier } from "./types";
+import type { RouterTier, RouterProfile } from "./types";
 import type { RouterState } from "./state";
 import {
 	patchConfigFile,
@@ -192,14 +192,11 @@ export const registerCommands = (
 			// Interactive TUI mode when available
 			if (ctx.hasUI) {
 				const profiles = profileNames(state.currentConfig);
-				const items = [
-					...profiles.map((name) => ({
-						value: name,
-						label: `router/${name}`,
-					})),
-					{ value: "＋ Create new profile", label: "＋ Create new profile" },
-					{ value: "✎ Rename a profile", label: "✎ Rename a profile" },
-					{ value: "✕ Delete a profile", label: "✕ Delete a profile" },
+				const labels = [
+					...profiles.map((name) => `router/${name}`),
+					"＋ Create new profile",
+					"✎ Rename a profile",
+					"✕ Delete a profile",
 				];
 
 				const onSave = async (updatedProfiles: Record<string, RouterProfile>) => {
@@ -208,7 +205,7 @@ export const registerCommands = (
 					ctx.ui.notify("Profile saved.", "info");
 				};
 
-				const selected = await ctx.ui.select("Select a profile or action", items);
+				const selected = await ctx.ui.select("Select a profile or action", labels);
 				if (!selected) return;
 
 				if (selected === "＋ Create new profile") {
@@ -217,9 +214,10 @@ export const registerCommands = (
 					await openRenameProfile(state.currentConfig, ctx.modelRegistry, ctx, onSave);
 				} else if (selected === "✕ Delete a profile") {
 					await openDeleteProfile(state.currentConfig, ctx, onSave);
-				} else {
-					// It's a profile name - switch to it
-					const success = await actions.switchToRouterProfile(selected, ctx);
+				} else if (selected.startsWith("router/")) {
+					// It's a profile name - extract and switch
+					const profileName = selected.slice("router/".length);
+					const success = await actions.switchToRouterProfile(profileName, ctx);
 					if (success) {
 						ctx.ui.notify(
 							`Switched to router profile: ${state.selectedProfile}`,
@@ -573,7 +571,8 @@ export const registerCommands = (
 			theme: ctx.ui.theme,
 			selectedProfile: state.selectedProfile,
 			profile,
-			usageLedger: state.usageLedger,
+			tierCounter: state.tierCounter,
+			modelCosts: state.modelCosts,
 			lastDecision: state.lastDecision,
 			accumulatedCost: state.accumulatedCost,
 			accumulatedOriginalTokens: state.accumulatedOriginalTokens,

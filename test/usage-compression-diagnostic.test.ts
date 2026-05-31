@@ -20,7 +20,8 @@ const baseInput = {
 	theme: makeTheme(),
 	selectedProfile: "default",
 	profile: baseProfile,
-	usageLedger: [],
+	tierCounter: { high: 0, medium: 0, low: 0 },
+		modelCosts: new Map(),
 	lastDecision: undefined,
 	modelRegistry: { find: () => ({ contextWindow: 200_000 }) },
 };

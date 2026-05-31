@@ -487,7 +487,8 @@ export interface UsageReportInput {
 	theme: Theme;
 	selectedProfile: string;
 	profile: RouterConfig["profiles"][string];
-	usageLedger: import("./state").UsageLedgerEntry[];
+	tierCounter: import("./state").TierCounter;
+	modelCosts: Map<string, import("./state").ModelCostEntry>;
 	lastDecision: RoutingDecision | undefined;
 	accumulatedCost?: number;
 	accumulatedOriginalTokens?: number;
@@ -516,7 +517,8 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 		theme,
 		selectedProfile,
 		profile,
-		usageLedger,
+		tierCounter,
+		modelCosts,
 		lastDecision,
 		accumulatedCost,
 		maxSessionBudget,
@@ -530,20 +532,21 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 		return theme.fg("dim", text);
 	};
 
-	// Gather per-model usage from ledger (authoritative, not capped)
-	const modelUsage: Record<string, { count: number; tier: string; cost: number; inputTokens: number; outputTokens: number }> = {};
-	const tierCounts = { high: 0, medium: 0, low: 0 };
-	for (const entry of usageLedger) {
-		if (entry.profile !== selectedProfile) continue;
-		const key = entry.model;
-		if (!modelUsage[key]) modelUsage[key] = { count: 0, tier: entry.tier, cost: 0, inputTokens: 0, outputTokens: 0 };
-		modelUsage[key].count++;
-		modelUsage[key].cost += entry.cost;
-		modelUsage[key].inputTokens += entry.inputTokens;
-		modelUsage[key].outputTokens += entry.outputTokens;
-		if (entry.tier in tierCounts) tierCounts[entry.tier as keyof typeof tierCounts]++;
-	}
+	// Tier distribution from counter (independent of cost)
+	const tierCounts = { ...tierCounter };
 	const totalDecisions = tierCounts.high + tierCounts.medium + tierCounts.low;
+
+	// Model cost breakdown from modelCosts map
+	const modelUsage: Record<string, { count: number; tier: string; cost: number; inputTokens: number; outputTokens: number }> = {};
+	for (const [key, entry] of modelCosts) {
+		modelUsage[key] = {
+			count: entry.invocations,
+			tier: entry.tier,
+			cost: entry.cost,
+			inputTokens: entry.inputTokens,
+			outputTokens: entry.outputTokens,
+		};
+	}
 
 	// Header line: profile + cost
 	// Use authoritative accumulatedCost if provided (avoids undercount from
