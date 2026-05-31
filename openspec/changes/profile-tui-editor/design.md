@@ -1,109 +1,131 @@
 ## Context
 
-The model router extension manages routing profiles stored in `~/.omp/agent/model-router.json`. Each profile is a `RouterProfile` — three `RoutedTierConfig` entries (high/medium/low), each with a primary `model` string, optional `thinking` level, and optional `fallbacks` array.
+The model router extension manages routing profiles in `~/.omp/agent/model-router.json`. Each `RouterProfile` has three `RoutedTierConfig` entries (high/medium/low), each with primary `model` string, optional `thinking` level, and optional `fallbacks` array.
 
-Currently the only mutation surface is `/router set <profile>.<tier>.<field> <value>`, which requires knowing exact model IDs. OMP's `ExtensionContext` exposes `ctx.modelRegistry` (a `ModelRegistry` instance), whose `getAvailable()` method returns all models with validated provider auth — this is the exact set the user can actually use. The `pi-tui` package (already a peer dep) exports `SelectList` and `SettingsList`, which are the same components OMP uses for its own settings TUI.
+Profile configuration today is text-based (`/router set <profile>.<tier>.model <id>`), opaque, and inaccessible. OMP's `ExtensionContext` exposes `ctx.modelRegistry.getAvailable()` — all auth-validated models — and `ctx.ui.custom()` for building reusable TUI components. The `@oh-my-pi/pi-tui` package (peer dep) exports `Input`, `SelectList`, `TabBar`, `Container` — the same primitives OMP uses.
 
-**Constraint**: The `router` virtual provider registers models named after profiles (e.g. `router/auto`). These must never appear in model picker lists — they are internal routing handles, not real models.
+**Spec reference**: `docs/PROFILE_TUI_DESIGN_v2.md` (post-review, all blockers resolved).
+
+**Virtual provider constraint**: The `router` virtual provider registers models named after profiles (e.g., `router/auto`). These must never appear in picker lists — they are internal routing handles, not real models.
 
 ## Goals / Non-Goals
 
 **Goals:**
 - Interactive create/edit/rename/delete for profiles via `/router profile` (no args)
-- Model picker shows only auth-validated, non-virtual models with cost metadata
-- Fallback selection is multi-select (checkbox style) from the same validated model list
-- Edits are drafted in memory; committed atomically on explicit save (disk write + `reloadConfig`)
-- New TUI components are self-contained and reusable
-- Zero new runtime dependencies
+- Full-screen TUI with 4 custom components (ProfileList, ProfileEditor, ModelPicker, FallbackPicker)
+- All components built on `ctx.ui.custom()` factory with strict invariants
+- Model picker shows auth-validated, non-virtual models with cost metadata
+- Fallback picker supports multi-select with stable ordering and primary-model exclusion
+- Dirty-state tracking with explicit save (S key) and discard confirmation
+- Atomic transactions: disk write + config reload happens only on explicit save
+- Cost-aware selection: all models display pricing per million tokens
 
 **Non-Goals:**
-- Editing global config keys (`budget`, `compression`, etc.) — that stays with `/router set`
-- Per-profile `historyCompression` override editing — out of scope for this change
-- Calibration config editing — out of scope
+- Editing global config keys (`budget`, `compression`, etc.) — stays with `/router set`
+- Per-profile `historyCompression` override editing
+- Calibration config editing
 - Any change to `/router profile <name>` (profile switching) — unchanged
 
 ## Decisions
 
-### D1: Extend `/router profile` (no args) rather than adding a new command
+### D1: 4 custom TUI components, not SettingsList + CheckboxList
 
-**Decision**: No-arg `/router profile` launches the TUI, replacing the current plain-text list.
+**Decision**: Build `ProfileListComponent`, `ProfileEditorComponent`, `ModelPickerComponent`, `FallbackPickerComponent` as custom components on `ctx.ui.custom()` factory, not wrappers around reusable OMP components.
 
-**Rationale**: Users already reach for `/router profile` to manage profiles. A new `/router profiles` command would fragment discoverability. The current no-arg behavior (one-line notification) is strictly inferior to the TUI and has no existing users relying on its text format.
+**Rationale**: The specification requires strict invariants (`done(value)` exactly once, `render(width)` terminal-safe, `handleInput(data)` raw terminal data, state machines like dirty_confirm) that go beyond what `SettingsList` supports. Custom components ensure:
+- Exact control over render output (line wrapping, truncation)
+- Precise key dispatch ordering (critical for UX)
+- State machines (dirty_confirm, checkbox ordering Map)
+- Component composition (submenus via ProfileEditor delegating to ModelPicker/FallbackPicker)
 
-**Alternative considered**: New `/router profiles` subcommand. Rejected — extra subcommand to document and remember, for no gain.
+**Trade-off**: ~500 lines of TUI code instead of ~150 lines using OMP components, but with full control and re-usability for future features.
 
-### D2: `SettingsList` + `ctx.ui.custom()` for the profile editor, not a chain of `ctx.ui.select()` calls
+### D2: Dirty-state confirmation machine in ProfileEditorComponent
 
-**Decision**: Use `ctx.ui.custom()` with a `SettingsList` component to show all 9 fields of a profile in one screen.
+**Decision**: When user presses Esc in ProfileEditor with unsaved changes, transition to `dirty_confirm` state and show `"Unsaved: S save · y discard · n continue"` in hint line.
 
-**Rationale**: Sequential `select()` dialogs for 9 fields would be tedious and give no overview of the profile state. `SettingsList` renders all rows simultaneously, supports submenu drilling for complex fields, and matches OMP's own settings TUI pattern exactly. The `ctx.ui.custom()` API is designed for this: it takes a factory and returns a typed promise.
+**Rationale**: Prevents accidental data loss. Users who legitimately want to discard can press `y`; users who change their mind can press `n` to continue editing. Save/discard are explicit, intentional actions.
 
-**Alternative considered**: `ctx.ui.select()` chain. Rejected — poor UX for multi-field editing.
-
-### D3: Model picker as a `SelectList` submenu inside `SettingsList`
-
-**Decision**: The `model` row's `submenu` field opens a `SelectList` of available models. Items are formatted as `"provider/id · Xk ctx · $in/$out per M"`. The primary model of the current tier is pre-selected.
-
-**Rationale**: `SettingsList.submenu` is exactly the hook for nested pickers. `SelectList` supports fuzzy filtering natively. Showing cost metadata (from `Model.cost.input` and `Model.cost.output`, in $/M tokens) lets users make informed decisions inline.
-
-**Filter**: `ctx.modelRegistry.getAvailable().filter(m => m.provider !== "router")` — excludes the virtual router provider.
-
-**Cost formatting**: `$${(cost.input).toFixed(2)}/$${(cost.output).toFixed(2)} per M`. When cost is absent, show `cost unknown`.
-
-### D4: New `CheckboxList` component for fallbacks, not additive `select()` loop
-
-**Decision**: Write a minimal `CheckboxList` TUI component (~80 lines in `src/tui/checkbox-list.ts`) as a `SettingsList` submenu for the fallbacks row.
-
-**Rationale**: Additive `select()` loops require multiple round-trips and leave the user uncertain about the accumulated state. A checkbox list shows the full model set with current selections visible at once. The component is small enough to own — it does not justify adding an npm dependency.
-
-**Interface**:
-```typescript
-export interface CheckboxItem {
-  value: string;
-  label: string;
-  description?: string;
-}
-
-export class CheckboxList implements Component {
-  onConfirm?: (selected: string[]) => void;
-  onCancel?: () => void;
-  // Space: toggle; Enter: confirm; Esc: cancel
-}
+**State machine**:
+```
+"editing" + Esc (dirty) → "dirty_confirm" hint line changes
+"dirty_confirm" + S → done(draft)  
+"dirty_confirm" + y → done(undefined)
+"dirty_confirm" + n → "editing" hint line restored
 ```
 
-**Filter**: same as model picker — `m.provider !== "router"`, minus the already-selected primary model for that tier (can't be its own fallback).
+### D3: Fallback ordering via stable Map<modelRef, order>
 
-### D5: All TUI logic in `src/tui/profile-editor.ts`; `commands.ts` only calls it
+**Decision**: Maintain fallback selection order in a `Map<string, number>` where value is 1-based order. Toggle removes; removal triggers re-compact: `Map([a:1, c:3]) → Map([a:1, b:2])`.
 
-**Decision**: Extract all interactive profile-management TUI into a new `src/tui/profile-editor.ts`. `commands.ts`'s `handleProfile` becomes a thin dispatcher that calls `openProfileEditor(...)` from that module.
+**Rationale**: Order matters for fallback retry chain. Checkboxes naturally toggle; a Map tracks both checked state and order without coupling them to list position. Re-compaction ensures gaps don't accumulate (user unchecks fallback #2, #3 becomes #2).
 
-**Rationale**: `commands.ts` is already 971 lines. The profile editor needs ~220 lines of component wiring. Co-locating them would push the file past 1200 lines with dense TUI logic mixed into command dispatch.
+**Result**: When user confirms, extract `[...map.entries()].sort((a, b) => a[1] - b[1]).map(([ref]) => ref)` to get ordered fallback list.
 
-**Exported surface**:
-```typescript
-export async function openProfileEditor(
-  profileName: string,
-  config: RouterConfig,
-  modelRegistry: ModelRegistry,
-  ctx: ExtensionCommandContext,
-  onSave: (updatedProfiles: Record<string, RouterProfile>) => void,
-): Promise<void>
+### D4: TabBar for provider scoping in ModelPicker and FallbackPicker
+
+**Decision**: Show provider tabs (ALL, AMAZON BEDROCK, ANTHROPIC, OPENAI, GOOGLE) and allow Tab key to cycle scope.
+
+**Rationale**: Users might have dozens of models across providers. Scoping reduces noise in fuzzy-filtered list. Tabs are native OMP widget (peer dep). Tab key is standard OMP keybinding for cycling options.
+
+**Fallback**: If a scope has no models, show empty list with hint `← Tab to switch provider`.
+
+### D5: Badges (★ primary, ↓ fallback-N) in fixed 12-char left column
+
+**Decision**: ModelPicker and FallbackPicker show badges in a fixed 12-character left-aligned column: `★ H.primary`, `↓ H.fb-1`, `[1]` (checked), `[ ]` (unchecked), or blank.
+
+**Rationale**: Badges give visual context without cluttering the model name. Fixed column ensures cursor and badges never overlap. Examples:
+```
+★ H.primary ❯ claude-opus-4-7
+↓ H.fb-1      claude-opus-4-6
+              claude-sonnet-4-6
 ```
 
-### D6: Save = `patchConfigFile` + `reloadConfig` + `ensureValidActiveRouterProfile`
+### D6: Hint-line standard: " · " separator, uppercase modifiers, exit last
 
-**Decision**: On save, call `patchConfigFile({ profiles: updatedProfiles })` then `actions.reloadConfig(ctx, { preserveDebug: true })` then `actions.ensureValidActiveRouterProfile(ctx)`.
+**Decision**: All hint lines use ` · ` (space-dot-space) as separator. Modifier keys (CTRL, SHIFT, TAB) and special keys (ENTER, ESC, SPACE) are uppercase; single letters lowercase. ESC always last.
 
-**Rationale**: This is exactly the pattern used by `handleSet` for profile mutations today. Reusing the same path means no special-casing in `reloadConfig` and the router provider re-registers correctly after a profile add/rename/delete.
+**Rationale**: Consistent, readable, matches OMP conventions. Examples:
+```
+ENTER activate · ctrl+e edit · ctrl+n new · ESC
+Unsaved: S save · y discard · n continue
+```
 
-**For delete/rename**: `patchConfigFile` receives the full updated `profiles` map (with key removed or renamed), so the patch is always a full `profiles` replacement — no partial key surgery on the JSON.
+### D7: Line wrapping via `truncateToWidth(replaceTabs(line), width)`
+
+**Decision**: All render() methods wrap each line with `truncateToWidth(replaceTabs(line), width)`.
+
+**Rationale**: Terminal safety. Tabs are unprintable; truncation prevents buffer overflow. Both functions come from `@oh-my-pi/pi-tui`.
+
+### D8: Atomic save: draft is done(draft) from ProfileEditor, not from command layer
+
+**Decision**: ProfileEditorComponent's render and key dispatch accumulate draft changes. On save (`S` key), component calls `done(updatedProfile)`. Command layer (`commands.ts`) receives the draft and handles `patchConfigFile + reloadConfig + notify`.
+
+**Rationale**: Clean separation: component owns state machine and UI; command layer owns persistence. If persistence fails, command layer can show error; component is already closed. No circular dependencies.
 
 ## Risks / Trade-offs
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| `ctx.ui.custom()` unavailable in non-interactive mode (print/RPC) | Low | Guard with `if (!ctx.hasUI)` before launching TUI; fall back to existing text behavior |
-| `SettingsList` submenu API changes in a future `pi-tui` version | Low | We depend on a peer dep version range (`^13`); pin the submenu shape in a unit test |
-| User saves a profile with a model that later loses auth | Acceptable | Config stores model IDs as strings; router already handles missing-model gracefully at routing time |
-| Deleting the currently active profile mid-session | Low | `ensureValidActiveRouterProfile` already handles this case — it falls back to the first available profile |
-| `CheckboxList` scroll behavior on large model lists (50+ models) | Low | Inherit the same scroll/visible-range logic from `SelectList` |
+| `ctx.ui.custom()` unavailable in non-interactive mode | Low | Guard with `if (!ctx.hasUI)` before launching TUI; fall back to text behavior |
+| Custom components more complex than reusing OMP components | Medium | Well-specified in `docs/PROFILE_TUI_DESIGN_v2.md`; strict testing; patterns re-used across all 4 components |
+| Fallback ordering Map breaks if user edits config manually | Low | Config is always user-editable; router gracefully handles any fallback order at runtime |
+| Dirty-state confirmation adds friction for quick edits | Low | Esc is not the save key; users expect confirmation when canceling |
+| 80-column layout too tight on narrow terminals | Low | 60-column narrow-mode layout provided; mobile/SSH users can truncate model names and hint lines |
+| Submenu delegation (ProfileEditor → ModelPicker) complicates testing | Medium | Each component is independently testable with mock factory + done callback |
+
+## Implementation Checklist
+
+- [ ] All 4 components implement Component interface with (tui, theme, keybindings, done) factory signature
+- [ ] All render() methods apply truncateToWidth(replaceTabs(...), width)
+- [ ] All handleInput() methods follow key dispatch order specified in PROFILE_TUI_DESIGN_v2.md
+- [ ] All components guarantee done(value) called exactly once; no exit path bypasses done()
+- [ ] ProfileEditorComponent dirty_confirm state machine tested
+- [ ] FallbackPickerComponent ordering Map re-compaction tested
+- [ ] ModelPicker and FallbackPicker badge placement tested
+- [ ] Hint line format consistent across all screens (` · ` separator, uppercase modifiers, ESC last)
+- [ ] Edge states handled (no profiles, no matches, single profile, missing fallbacks)
+- [ ] Theme uses getSelectListTheme() (no custom theme); accent/muted/default/warning colors correct
+- [ ] Command integration guards ctx.hasUI before launching TUI
+- [ ] `bun test` passes all 334+ tests
+- [ ] Manual TUI smoke tests: create/edit/rename/delete/activate profiles

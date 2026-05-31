@@ -1,114 +1,35 @@
-import { describe, test, expect, mock } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import type { Context } from "@oh-my-pi/pi-ai";
+import {
+	estimateContextTokens,
+	shouldCompress,
+	DEFAULT_CONTEXT_THRESHOLD,
+	DEFAULT_TIME_THRESHOLD_SECONDS,
+	type HistoryCompressionConfig,
+} from "../src/context-compression";
 
 /**
  * Integration test: Verify that compression trigger correctly excludes TOON history
  * when deciding whether to compress.
- * 
- * This test imports the actual `shouldTriggerCompression` function and verifies
+ *
+ * This test imports the actual compression trigger logic and verifies
  * that it doesn't trigger on TOON-reconstructed sessions.
  */
 
-// We need to export these functions from provider.ts for testing
-// For now, we'll copy the implementation here to test the logic
-
-function detectTOONHistoryEnd(context: Context): number {
-	if (context.messages.length === 0) return 0;
-	
-	// Check if first message is user role with TOON marker
-	const firstMsg = context.messages[0];
-	if (firstMsg.role !== "user") return 0;
-	
-	const content = typeof firstMsg.content === "string" 
-		? firstMsg.content 
-		: Array.isArray(firstMsg.content) 
-		? firstMsg.content.find(b => b.type === "text")?.text ?? ""
-		: "";
-	
-	if (!content.startsWith("[HISTORY:")) return 0;
-	
-	// TOON history block is always followed by an assistant acknowledgment
-	// So skip the first 2 messages: [user: TOON block, assistant: ack]
-	return Math.min(2, context.messages.length);
-}
-
-function estimateMessageTokens(msg: any): number {
-	const content = msg.content;
-	let textContent = "";
-	
-	if (typeof content === "string") {
-		textContent = content;
-	} else if (Array.isArray(content)) {
-		for (const block of content) {
-			if (block.type === "text") {
-				textContent += block.text || "";
-			}
-		}
-	}
-	
-	// Heuristic: ~4 chars per token (conservative for Claude models)
-	return Math.ceil(textContent.length / 4);
-}
-
-function estimateContextTokens(context: Context): number {
-	let totalTokens = 0;
-	
-	// Exclude TOON-compressed history from estimation (already compressed)
-	const startIdx = detectTOONHistoryEnd(context);
-	
-	// 1. Count tokens from messages with usage stats
-	for (let i = startIdx; i < context.messages.length; i++) {
-		const msg = context.messages[i];
-		if (msg.usage) {
-			totalTokens += (msg.usage.input ?? 0) + (msg.usage.output ?? 0);
-		} else {
-			// 2. For messages without usage, estimate from content
-			totalTokens += estimateMessageTokens(msg);
-		}
-	}
-	
-	// 3. Add system prompt tokens (rough estimate: 1 token ≈ 4 chars)
-	if (context.system) {
-		const systemStr = Array.isArray(context.system)
-			? context.system.map((s) => (typeof s === "string" ? s : s.text ?? "")).join("")
-			: context.system;
-		totalTokens += Math.ceil(systemStr.length / 4);
-	}
-	
-	return totalTokens;
-}
-
-function shouldTriggerCompression(
-	context: Context,
-	contextWindow: number,
-	contextThreshold: number,
-	lastTurnTimestamp: number | undefined,
-	timeThreshold: number,
-): "context_size" | "cache_expiry" | null {
-	const now = Date.now();
-
-	// Trigger 1: Context size approaching window limit
-	const contextTokens = estimateContextTokens(context);
-	if (contextTokens >= contextThreshold * contextWindow) {
-		return "context_size";
-	}
-
-	// Trigger 2: Cache expiry (time gap detection)
-	if (lastTurnTimestamp !== undefined) {
-		const timeSinceLastTurn = (now - lastTurnTimestamp) / 1000; // seconds
-		if (timeSinceLastTurn >= timeThreshold) {
-			return "cache_expiry";
-		}
-	}
-
-	return null;
-}
-
 describe("Compression trigger integration with TOON history", () => {
 	const contextWindow = 200_000; // Bedrock Nova Pro
-	const contextThreshold = 0.8; // 80%
-	const timeThreshold = 300; // 5 minutes
+	const contextThreshold = DEFAULT_CONTEXT_THRESHOLD;
+	const timeThreshold = DEFAULT_TIME_THRESHOLD_SECONDS;
 
+	const baseConfig: HistoryCompressionConfig = {
+		enabled: true,
+		keepLastN: 4,
+		progressive: {
+			enabled: true,
+			contextThreshold,
+			timeThreshold,
+		},
+	};
 	test("First message in TOON-reconstructed session should NOT trigger compression", () => {
 		// Simulate session reconstruction with TOON history
 		const context: Context = {
@@ -143,13 +64,14 @@ messages[9]{role,content}:
 		};
 
 		const lastTurnTimestamp = undefined; // First turn
-		const triggerReason = shouldTriggerCompression(
+		const triggerReason = shouldCompress({
 			context,
+			config: baseConfig,
 			contextWindow,
-			contextThreshold,
+			targetProvider: "bedrock",
+			targetModelId: "nova-pro",
 			lastTurnTimestamp,
-			timeThreshold,
-		);
+		});
 
 		// Should NOT trigger — only "hi" + system prompt counted, well below threshold
 		expect(triggerReason).toBeNull();
@@ -171,13 +93,14 @@ messages[9]{role,content}:
 		};
 
 		const lastTurnTimestamp = undefined;
-		const triggerReason = shouldTriggerCompression(
+		const triggerReason = shouldCompress({
 			context,
+			config: baseConfig,
 			contextWindow,
-			contextThreshold,
+			targetProvider: "bedrock",
+			targetModelId: "nova-pro",
 			lastTurnTimestamp,
-			timeThreshold,
-		);
+		});
 
 		// Should trigger context_size
 		expect(triggerReason).toBe("context_size");
@@ -217,13 +140,14 @@ messages[9]{role,content}:
 		// But if we scale up to 400 messages × 500 tokens = 200K tokens, above threshold
 		expect(estimatedTokens).toBeLessThan(contextWindow * contextThreshold);
 		
-		const triggerReason = shouldTriggerCompression(
+		const triggerReason = shouldCompress({
 			context,
+			config: baseConfig,
 			contextWindow,
-			contextThreshold,
+			targetProvider: "bedrock",
+			targetModelId: "nova-pro",
 			lastTurnTimestamp,
-			timeThreshold,
-		);
+		});
 
 		// Should NOT trigger yet (50K < 160K threshold)
 		expect(triggerReason).toBeNull();
@@ -270,13 +194,14 @@ messages[9]{role,content}:
 		console.log(`Estimated tokens: ${estimatedTokens} (threshold: ${contextWindow * contextThreshold})`);
 
 		const lastTurnTimestamp = undefined;
-		const triggerReason = shouldTriggerCompression(
+		const triggerReason = shouldCompress({
 			context,
+			config: baseConfig,
 			contextWindow,
-			contextThreshold,
+			targetProvider: "bedrock",
+			targetModelId: "nova-pro",
 			lastTurnTimestamp,
-			timeThreshold,
-		);
+		});
 
 		// Bug: Before fix, this would trigger compression
 		// Fix: After fix, should NOT trigger (only "hi" + system prompt counted)

@@ -278,6 +278,186 @@ export function isModelExcludedFromCompression(
 }
 
 /**
+ * Returns true if compression is enabled AND the target model is not excluded.
+ * Used as the gate for both progressive and static/dynamic compression modes.
+ */
+export function canCompressForModel(
+	config: HistoryCompressionConfig,
+	targetProvider: string,
+	targetModelId: string,
+): boolean {
+	if (!config.enabled) return false;
+	return !isModelExcludedFromCompression(config, targetProvider, targetModelId);
+}
+
+// ─── Token estimation ─────────────────────────────────────────────────────────
+
+/** Default 80% context-window threshold for context_size trigger. */
+export const DEFAULT_CONTEXT_THRESHOLD = 0.8;
+/** Default 5-minute idle threshold (seconds) for cache_expiry trigger. */
+export const DEFAULT_TIME_THRESHOLD_SECONDS = 300;
+
+/**
+ * Detect if the first user message in context is a TOON-compressed history block.
+ * Returns the index of the first message *after* the TOON history, or 0 if none.
+ */
+function detectTOONHistoryEnd(context: Context): number {
+	if (context.messages.length === 0) return 0;
+	const firstMsg = context.messages[0];
+	if (firstMsg.role !== "user") return 0;
+	const content =
+		typeof firstMsg.content === "string"
+			? firstMsg.content
+			: Array.isArray(firstMsg.content)
+				? (firstMsg.content.find((b: any) => b.type === "text") as any)?.text ?? ""
+				: "";
+	if (!content.startsWith("[HISTORY:")) return 0;
+	// TOON history block is always followed by an assistant acknowledgment.
+	return Math.min(2, context.messages.length);
+}
+
+/**
+ * Estimate tokens for a single message without usage stats.
+ */
+function estimateMessageTokens(msg: Message): number {
+	let textContent = "";
+	if (typeof msg.content === "string") {
+		textContent = msg.content;
+	} else if (Array.isArray(msg.content)) {
+		for (const block of msg.content as any[]) {
+			if (block.type === "text") {
+				textContent += block.text ?? "";
+			} else if (block.type === "tool_result") {
+				const resultContent =
+					typeof block.content === "string"
+						? block.content
+						: Array.isArray(block.content)
+							? block.content
+									.map((c: any) => (typeof c === "string" ? c : c.text ?? ""))
+									.join("")
+							: "";
+				textContent += resultContent;
+			} else if (block.type === "tool_use") {
+				textContent += JSON.stringify(block.input ?? {});
+			}
+		}
+	}
+	// ~4 chars per token (conservative for Claude models).
+	return Math.ceil(textContent.length / 4);
+}
+
+/**
+ * Estimate total tokens in a context using actual usage stats when available,
+ * falling back to a content-based heuristic for messages without usage data.
+ * Excludes TOON-compressed history blocks (already compressed).
+ */
+export function estimateContextTokens(context: Context): number {
+	let totalTokens = 0;
+	const startIdx = detectTOONHistoryEnd(context);
+	for (let i = startIdx; i < context.messages.length; i++) {
+		const msg = context.messages[i] as any;
+		if (msg.usage) {
+			totalTokens += (msg.usage.input ?? 0) + (msg.usage.output ?? 0);
+		} else {
+			totalTokens += estimateMessageTokens(msg);
+		}
+	}
+	const sys = (context as any).system;
+	if (sys) {
+		const systemStr = Array.isArray(sys)
+			? sys.map((s: any) => (typeof s === "string" ? s : s.text ?? "")).join("")
+			: sys;
+		totalTokens += Math.ceil(systemStr.length / 4);
+	}
+	return totalTokens;
+}
+
+// ─── Compression trigger ──────────────────────────────────────────────────────
+
+export type CompressionTriggerReason = "context_size" | "cache_expiry";
+
+export interface CompressionTriggerInput {
+	context: Context;
+	config: HistoryCompressionConfig;
+	contextWindow: number;
+	targetProvider: string;
+	targetModelId: string;
+	lastTurnTimestamp: number | undefined;
+	/** Override clock for tests. */
+	now?: number;
+}
+
+/**
+ * Decide whether progressive TOON compression should fire on this turn.
+ *
+ * Returns the trigger reason, or `null` if no compression is warranted.
+ * Triggers (in order):
+ *   1. `context_size` — context tokens >= contextThreshold * contextWindow (default 80%).
+ *   2. `cache_expiry` — time since last turn >= timeThreshold (default 5 min).
+ *
+ * Returns `null` (no trigger) when:
+ *   - compression is disabled,
+ *   - the target model is on the exclude list,
+ *   - progressive mode is disabled.
+ */
+export function shouldCompress(
+	input: CompressionTriggerInput,
+): CompressionTriggerReason | null {
+	const {
+		context,
+		config,
+		contextWindow,
+		targetProvider,
+		targetModelId,
+		lastTurnTimestamp,
+	} = input;
+
+	if (!config.enabled) return null;
+	if (isModelExcludedFromCompression(config, targetProvider, targetModelId)) {
+		return null;
+	}
+	if (!config.progressive?.enabled) return null;
+
+	const contextThreshold =
+		config.progressive.contextThreshold ?? DEFAULT_CONTEXT_THRESHOLD;
+	const timeThresholdSeconds =
+		config.progressive.timeThreshold ?? DEFAULT_TIME_THRESHOLD_SECONDS;
+
+	const contextTokens = estimateContextTokens(context);
+	if (contextTokens >= contextThreshold * contextWindow) {
+		return "context_size";
+	}
+
+	if (lastTurnTimestamp !== undefined) {
+		const now = input.now ?? Date.now();
+		const secondsSinceLastTurn = (now - lastTurnTimestamp) / 1000;
+		if (secondsSinceLastTurn >= timeThresholdSeconds) {
+			return "cache_expiry";
+		}
+	}
+
+	return null;
+}
+
+/**
+ * Convenience wrapper: compress when {@link shouldCompress} fires, otherwise
+ * return the context unchanged. The richer flow in `provider.ts` calls
+ * `shouldCompress` + `compressHistory` directly so it can also manage
+ * checkpoint reuse and stats accumulation.
+ */
+export function compressIfNeeded(
+	input: CompressionTriggerInput,
+	turnNumber?: number,
+): { context: Context; stats: CompressionStats | undefined; reason: CompressionTriggerReason | null } {
+	const reason = shouldCompress(input);
+	if (!reason) {
+		return { context: input.context, stats: undefined, reason: null };
+	}
+	const result = compressHistory(input.context, input.config, turnNumber);
+	return { context: result.context, stats: result.stats, reason };
+}
+
+/**
  * Compress old conversation history into a TOON block prepended as a user
  * message. Returns the context unchanged if compression is not warranted.
  *

@@ -19,105 +19,17 @@ import {
 	hasImageAttachment,
 } from "./routing";
 import type { RouterState } from "./state";
-import { resolveCompressionConfig, compressHistory, isModelExcludedFromCompression } from "./context-compression";
+import {
+	resolveCompressionConfig,
+	compressHistory,
+	estimateContextTokens,
+	canCompressForModel,
+	shouldCompress,
+	DEFAULT_CONTEXT_THRESHOLD,
+	DEFAULT_TIME_THRESHOLD_SECONDS,
+} from "./context-compression";
 import { spawnClassifierForTurn } from "./calibration/hooks";
 
-/**
- * Estimate tokens consumed by a context (rough heuristic: ~1 token per 4 characters).
- * This is a conservative approximation used for tracking compression savings.
- */
-/**
- * Estimate total tokens in context using actual usage stats when available,
- * falling back to a content-based heuristic for messages without usage data.
- * 
- * This approach is far more accurate than JSON.stringify(), which inflates
- * token counts by 3-10× due to structure overhead.
- */
-/**
- * Detect if the first user message in context is a TOON-compressed history block.
- * Returns the index of the first message *after* the TOON history, or 0 if no TOON history.
- */
-function detectTOONHistoryEnd(context: Context): number {
-	if (context.messages.length === 0) return 0;
-	
-	// Check if first message is user role with TOON marker
-	const firstMsg = context.messages[0];
-	if (firstMsg.role !== "user") return 0;
-	
-	const content = typeof firstMsg.content === "string" 
-		? firstMsg.content 
-		: Array.isArray(firstMsg.content) 
-		? firstMsg.content.find(b => b.type === "text")?.text ?? ""
-		: "";
-	
-	if (!content.startsWith("[HISTORY:")) return 0;
-	
-	// TOON history block is always followed by an assistant acknowledgment
-	// So skip the first 2 messages: [user: TOON block, assistant: ack]
-	return Math.min(2, context.messages.length);
-}
-
-export function estimateContextTokens(context: Context): number {
-	let totalTokens = 0;
-	
-	// Exclude TOON-compressed history from estimation (already compressed)
-	const startIdx = detectTOONHistoryEnd(context);
-	
-	// 1. Count tokens from messages with usage stats
-	for (let i = startIdx; i < context.messages.length; i++) {
-		const msg = context.messages[i];
-		if (msg.usage) {
-			totalTokens += (msg.usage.input ?? 0) + (msg.usage.output ?? 0);
-		} else {
-			// 2. For messages without usage, estimate from content
-			totalTokens += estimateMessageTokens(msg);
-		}
-	}
-	
-	// 3. Add system prompt tokens (rough estimate: 1 token ≈ 4 chars)
-	if (context.system) {
-		const systemStr = Array.isArray(context.system)
-			? context.system.map((s) => (typeof s === "string" ? s : s.text ?? "")).join("")
-			: context.system;
-		totalTokens += Math.ceil(systemStr.length / 4);
-	}
-	
-	return totalTokens;
-}
-
-/**
- * Estimate tokens for a single message without usage stats.
- * Extracts actual text content and applies a char→token ratio.
- */
-function estimateMessageTokens(msg: Message): number {
-	let textContent = "";
-	
-	if (typeof msg.content === "string") {
-		textContent = msg.content;
-	} else if (Array.isArray(msg.content)) {
-		for (const block of msg.content) {
-			if (block.type === "text") {
-				textContent += block.text ?? "";
-			} else if (block.type === "tool_result") {
-				// Tool results often contain large payloads
-				const resultContent = typeof block.content === "string"
-					? block.content
-					: Array.isArray(block.content)
-					? block.content.map((c) => (typeof c === "string" ? c : c.text ?? "")).join("")
-					: "";
-				textContent += resultContent;
-			} else if (block.type === "tool_use") {
-				// Tool calls are small (function name + args)
-				textContent += JSON.stringify(block.input ?? {});
-			}
-			// Image blocks contribute ~1-2K tokens regardless of size (vision models)
-			// Not counted here since we can't accurately estimate without model-specific data
-		}
-	}
-	
-	// Heuristic: ~4 chars per token (conservative for Claude models)
-	return Math.ceil(textContent.length / 4);
-}
 
 export const createErrorMessage = (
 	model: Model<Api>,
@@ -254,39 +166,6 @@ const supportsReasoning = (
 	return false;
 };
 
-/**
- * Determine if progressive TOON compression should trigger.
- * Returns trigger reason or null if no trigger.
- *
- * Triggers:
- * 1. Context size >= contextThreshold * contextWindow
- * 2. Time since last turn >= timeThreshold (cache expiry)
- */
-const shouldTriggerCompression = (
-	context: Context,
-	contextWindow: number,
-	contextThreshold: number,
-	lastTurnTimestamp: number | undefined,
-	timeThreshold: number,
-): "context_size" | "cache_expiry" | null => {
-	const now = Date.now();
-
-	// Trigger 1: Context size approaching window limit
-	const contextTokens = estimateContextTokens(context);
-	if (contextTokens >= contextThreshold * contextWindow) {
-		return "context_size";
-	}
-
-	// Trigger 2: Cache expiry (time gap detection)
-	if (lastTurnTimestamp !== undefined) {
-		const timeSinceLastTurn = (now - lastTurnTimestamp) / 1000; // seconds
-		if (timeSinceLastTurn >= timeThreshold) {
-			return "cache_expiry";
-		}
-	}
-
-	return null;
-};
 
 export const registerRouterProvider = (
 	pi: ExtensionAPI,
@@ -509,20 +388,24 @@ export const registerRouterProvider = (
 						const turnNumber = effectiveContext.messages.length;
 						const now = Date.now();
 						
-						if (compressionCfg?.enabled && !isModelExcludedFromCompression(compressionCfg, targetProvider, targetModelId)) {
+						if (compressionCfg && canCompressForModel(compressionCfg, targetProvider, targetModelId)) {
 							// Progressive TOON mode: compress on triggers only
 							if (compressionCfg.progressive?.enabled) {
-								const contextThreshold = compressionCfg.progressive.contextThreshold ?? 0.8;
-								const timeThresholdSeconds = compressionCfg.progressive.timeThreshold ?? 300;
-								
+								const contextThreshold =
+									compressionCfg.progressive.contextThreshold ?? DEFAULT_CONTEXT_THRESHOLD;
+								const timeThresholdSeconds =
+									compressionCfg.progressive.timeThreshold ?? DEFAULT_TIME_THRESHOLD_SECONDS;
+
 								const contextTokens = estimateContextTokens(effectiveContext);
-								const triggerReason = shouldTriggerCompression(
-									effectiveContext,
-									targetLimit,
-									contextThreshold,
-									state.lastTurnTimestamp,
-									timeThresholdSeconds,
-								);
+								const triggerReason = shouldCompress({
+									context: effectiveContext,
+									config: compressionCfg,
+									contextWindow: targetLimit,
+									targetProvider,
+									targetModelId,
+									lastTurnTimestamp: state.lastTurnTimestamp,
+									now,
+								});
 								
 								
 								if (state.currentConfig.debug && triggerReason) {

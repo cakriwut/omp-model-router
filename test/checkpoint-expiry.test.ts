@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import type { RouterState } from "../src/state";
 import type { RouterConfig, CompressionCheckpoint } from "../src/types";
-import { estimateContextTokens } from "../src/provider";
+import { estimateContextTokens } from "../src/context-compression";
 import type { Context } from "@oh-my-pi/pi-ai";
 
 describe("Checkpoint Expiry Logic", () => {
