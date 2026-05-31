@@ -112,7 +112,12 @@ The calibration system allows you to train and use an LLM classifier for routing
 - **`telemetry` mode** (default): Classifier runs in the background for data collection only. Heuristic routing decisions are used.
 - **`adaptive` mode**: Classifier controls routing decisions. The LLM evaluates each prompt and overrides heuristic classification (unless a tier is pinned, context-triggered, or rule-matched).
 
-When `calibration.enabled` is `true` and `calibration.mode` is `"adaptive"`, the `classifierModel` (e.g., `anthropic/claude-3-haiku-20240307`) is used for real routing decisions instead of the heuristic. The telemetry classifier still runs in the background to track accuracy.
+When `calibration.enabled` is `true` and `calibration.mode` is `"adaptive"`, the `classifierModel` (e.g., `anthropic/claude-3-haiku-20240307`) is used for real routing decisions instead of the heuristic.
+
+**New in v0.7.0**: The confusion matrix now closes the feedback loop:
+- Sync classifier verdicts are recorded into the matrix immediately
+- When sync classifier fails (model not found, API error), the matrix-based calibration (`applyCalibratedTier`) is used as a fallback
+- Async classifier spawn is **skipped** in adaptive mode when sync classifier runs (50% cost savings)
 
 **Use cases:**
 - Start with `telemetry` to collect data and tune the heuristic
@@ -126,6 +131,7 @@ If the classifier decision isn't being used (check decision reasoning with `debu
 2. Check API key is configured for the model's provider
 3. Look for `[model-router] Classifier failed: ...` in console logs (requires `debug: true`)
 4. Decision reasoning will show `"Classifier unavailable, using heuristic: ..."` when classifier fails
+5. If matrix has sufficient data (>= `warmupTurns`), matrix-based calibration will be applied as fallback
 
 ## Development
 

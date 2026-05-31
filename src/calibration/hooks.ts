@@ -207,93 +207,73 @@ export function spawnClassifierForTurn(
 				return;
 			}
 
-			// Now poll for result with a reasonable timeout
-			const startPoll = Date.now();
-			const maxPollTime = 60000; // 60s
-			const pollInterval = 1000; // 1s
+			// Wait for result with 60s timeout using Promise.race
+			const maxWaitTime = 60000; // 60s
+			const timeoutPromise = new Promise<never>((_, reject) =>
+				setTimeout(() => reject(new Error("timeout")), maxWaitTime)
+			);
 
-			const poll = async (): Promise<void> => {
-				if (!state.calibration || state.calibration.pendingAgentId !== trackingId) {
-					return; // Calibration reset or cleared
-				}
+			const handleResult = async () => {
+				try {
+					// Poll with a reasonable interval until ready
+					let result: Awaited<ReturnType<typeof pollClassifierResult>>;
+					do {
+						result = await pollClassifierResult(agentId, 1000);
+					} while (!result.ready && state.calibration?.pendingAgentId === trackingId);
 
-				const elapsed = Date.now() - startPoll;
-				if (elapsed > maxPollTime) {
-					// Timeout
+					if (!state.calibration || state.calibration.pendingAgentId !== trackingId) {
+						return; // Calibration reset or cleared
+					}
+
+					// Result ready
+					abandonClassifier(agentId);
 					const ageMs = state.calibration.pendingSpawnTime
 						? Date.now() - state.calibration.pendingSpawnTime
 						: 0;
-					abandonClassifier(agentId);
-					state.calibration.llmCallsFailed++;
-					writePendingAsFailed(state.calibration, "timeout", ageMs);
-					clearPending(state.calibration);
+
+					if (result.error) {
+						state.calibration.llmCallsFailed++;
+						writePendingAsFailed(
+							state.calibration,
+							`error:${result.error.slice(0, 60)}`,
+							ageMs,
+						);
+						clearPending(state.calibration);
+						if (state.debugEnabled) {
+							ctx.ui.notify(
+								`[calibration] Classifier failed: ${result.error}`,
+								"warning",
+							);
+						}
+						return;
+					}
+
+					if (!result.verdict || !state.calibration.pendingHeuristicTier) {
+						state.calibration.llmCallsFailed++;
+						writePendingAsFailed(state.calibration, "no-verdict-or-tier", ageMs);
+						clearPending(state.calibration);
+						return;
+					}
+
+					const heuristicTier = state.calibration.pendingHeuristicTier;
+					const verdict = result.verdict;
+
+					updateCalibrationMatrix(state.calibration, heuristicTier, verdict.tier);
+
+					if (state.calibration.traceFilePath) {
+						writeCompletedTrace(state.calibration, verdict, ageMs);
+					}
+
 					if (state.debugEnabled) {
+						const agreed = heuristicTier === verdict.tier;
 						ctx.ui.notify(
-							`[calibration] Classifier timed out after ${ageMs}ms`,
-							"warning",
+							`[calibration] h=${heuristicTier}, llm=${verdict.tier} ${agreed ? "✓" : "✗"} (${state.calibration.totalComparisons} comparisons, ${ageMs}ms)`,
+							"info",
 						);
 					}
-					return;
-				}
 
-				const result = await pollClassifierResult(agentId, 0);
-				if (!result.ready) {
-					// Not ready yet, poll again after delay
-					setTimeout(poll, pollInterval);
-					return;
-				}
-
-				// Result ready
-				abandonClassifier(agentId);
-				const ageMs = state.calibration.pendingSpawnTime
-					? Date.now() - state.calibration.pendingSpawnTime
-					: 0;
-
-				if (result.error) {
-					state.calibration.llmCallsFailed++;
-					writePendingAsFailed(
-						state.calibration,
-						`error:${result.error.slice(0, 60)}`,
-						ageMs,
-					);
 					clearPending(state.calibration);
-					if (state.debugEnabled) {
-						ctx.ui.notify(
-							`[calibration] Classifier failed: ${result.error}`,
-							"warning",
-						);
-					}
-					return;
-				}
 
-				if (!result.verdict || !state.calibration.pendingHeuristicTier) {
-					state.calibration.llmCallsFailed++;
-					writePendingAsFailed(state.calibration, "no-verdict-or-tier", ageMs);
-					clearPending(state.calibration);
-					return;
-				}
-
-				const heuristicTier = state.calibration.pendingHeuristicTier;
-				const verdict = result.verdict;
-
-				updateCalibrationMatrix(state.calibration, heuristicTier, verdict.tier);
-
-				if (state.calibration.traceFilePath) {
-					writeCompletedTrace(state.calibration, verdict, ageMs);
-				}
-
-				if (state.debugEnabled) {
-					const agreed = heuristicTier === verdict.tier;
-					ctx.ui.notify(
-						`[calibration] h=${heuristicTier}, llm=${verdict.tier} ${agreed ? "✓" : "✗"} (${state.calibration.totalComparisons} comparisons, ${ageMs}ms)`,
-						"info",
-					);
-				}
-
-				clearPending(state.calibration);
-
-				// Update UI status
-				if (state.lastExtensionContext) {
 					// Update UI status
 					if (state.lastExtensionContext) {
 						const {updateStatus: updateStatusFn} = await import("../ui");
@@ -311,11 +291,39 @@ export function spawnClassifierForTurn(
 							state.isStreaming,
 						);
 					}
+				} catch (err: unknown) {
+					// Timeout or other error
+					if (!state.calibration || state.calibration.pendingAgentId !== trackingId) {
+						return;
+					}
+					
+					const ageMs = state.calibration.pendingSpawnTime
+						? Date.now() - state.calibration.pendingSpawnTime
+						: 0;
+					abandonClassifier(agentId);
+					state.calibration.llmCallsFailed++;
+					
+					const reason = err instanceof Error && err.message === "timeout" 
+						? "timeout" 
+						: `error:${String(err).slice(0, 40)}`;
+					writePendingAsFailed(state.calibration, reason, ageMs);
+					clearPending(state.calibration);
+					
+					if (state.debugEnabled) {
+						ctx.ui.notify(
+							reason === "timeout"
+								? `[calibration] Classifier timed out after ${ageMs}ms`
+								: `[calibration] Classifier error: ${String(err).slice(0, 60)}`,
+							"warning",
+						);
+					}
 				}
 			};
 
-			// Start polling
-			poll();
+			// Start the race
+			Promise.race([handleResult(), timeoutPromise]).catch(() => {
+				// Timeout already handled in handleResult catch block
+			});
 		})
 		.catch((err) => {
 			if (!state.calibration || state.calibration.pendingAgentId !== trackingId) {
