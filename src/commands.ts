@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { RouterTier, RouterProfile } from "./types";
-import type { RouterState } from "./state";
+import type { RouterState, ModelCostEntry } from "./state";
 import {
 	patchConfigFile,
 	profileNames,
@@ -518,6 +518,58 @@ export const registerCommands = (
 			return;
 		}
 
+		// ── Build model cost data from session messages (authoritative) ────────
+		const sessionModelCosts = new Map<string, ModelCostEntry>();
+		let sessionTotalCost = 0;
+		try {
+			const branch = ctx.sessionManager.getBranch() as any[];
+			for (const entry of branch) {
+				if (entry.type !== "message") continue;
+				const msg = entry.message ?? entry;
+				if (msg.role !== "assistant" || !msg.usage) continue;
+				const u = msg.usage;
+				const cost = u.cost?.total ?? 0;
+				const model = msg.provider && msg.model
+					? `${msg.provider}/${msg.model}`
+					: msg.model ?? "unknown";
+				sessionTotalCost += cost;
+
+				const existing = sessionModelCosts.get(model);
+				if (existing) {
+					existing.invocations++;
+					existing.inputTokens += u.input ?? 0;
+					existing.outputTokens += u.output ?? 0;
+					existing.cacheReadTokens += u.cacheRead ?? 0;
+					existing.cacheWriteTokens += u.cacheWrite ?? 0;
+					existing.cost += cost;
+				} else {
+					sessionModelCosts.set(model, {
+						model,
+						tier: "", // resolved below
+						invocations: 1,
+						inputTokens: u.input ?? 0,
+						outputTokens: u.output ?? 0,
+						cacheReadTokens: u.cacheRead ?? 0,
+						cacheWriteTokens: u.cacheWrite ?? 0,
+						cost,
+					});
+				}
+			}
+
+			// Resolve tier for each model by matching against profile config
+			for (const [modelRef, entry] of sessionModelCosts) {
+				for (const tier of ROUTER_TIERS) {
+					const tierConfig = profile[tier];
+					if (tierConfig.model === modelRef || tierConfig.fallbacks?.includes(modelRef)) {
+						entry.tier = tier;
+						break;
+					}
+				}
+			}
+		} catch {
+			// Fall back to router's own tracking if session read fails
+		}
+
 		// ── Resolve effective compression config + live diagnostic ─────────
 		const compressionCfg = resolveCompressionConfig(
 			state.currentConfig.historyCompression,
@@ -567,19 +619,14 @@ export const registerCommands = (
 			}
 		}
 
-		// Debug: trace scope state at command time
-		if (state.debugEnabled) {
-			console.log(`[router usage] activeSessionId=${state.activeSessionId} cost=${state.accumulatedCost} tierCounter=${JSON.stringify(state.tierCounter)} modelCosts.size=${state.modelCosts.size}`);
-		}
-
 		const report = renderUsageReport({
 			theme: ctx.ui.theme,
 			selectedProfile: state.selectedProfile,
 			profile,
 			tierCounter: state.tierCounter,
-			modelCosts: state.modelCosts,
+			modelCosts: sessionModelCosts.size > 0 ? sessionModelCosts : state.modelCosts,
 			lastDecision: state.lastDecision,
-			accumulatedCost: state.accumulatedCost,
+			accumulatedCost: sessionTotalCost > 0 ? sessionTotalCost : state.accumulatedCost,
 			accumulatedOriginalTokens: state.accumulatedOriginalTokens,
 			accumulatedCompressedTokens: state.accumulatedCompressedTokens,
 			accumulatedTokensSaved: state.accumulatedTokensSaved,
