@@ -12,39 +12,28 @@
 
 import type { Context, Message } from "@oh-my-pi/pi-ai";
 import type { RouterTier, RouterPhase } from "../types";
+import {
+	extractText,
+	getLastUserText,
+	getRecentUserText,
+} from "../utils/messages.js";
+
+export { getLastUserText, getRecentUserText };
+
+const TEXT_ONLY: { includeThinking: false; includeToolCalls: false } = {
+	includeThinking: false,
+	includeToolCalls: false,
+};
+
+function extractTextOnly(msg: Message): string {
+	return extractText(msg, TEXT_ONLY);
+}
 
 /** Max chars per message in the classifier context */
 const MAX_MSG_CHARS = 300;
 /** Max total chars for the history section */
 const MAX_HISTORY_CHARS = 1500;
 
-// ─── Text extraction (user-only, no tool content) ─────────────────────────────
-
-/**
- * Extract text-only content from a message, excluding:
- * - toolCall blocks
- * - toolResult content
- * - thinking blocks
- * - image blocks
- */
-function extractTextOnly(msg: Message): string {
-	if (typeof msg.content === "string") return msg.content;
-	if (!Array.isArray(msg.content)) return "";
-	return msg.content
-		.filter((b: any) => b.type === "text")
-		.map((b: any) => b.text ?? "")
-		.join("\n");
-}
-
-/** Extract last user message text from context */
-export function getLastUserText(context: Context): string {
-	for (let i = context.messages.length - 1; i >= 0; i--) {
-		if (context.messages[i].role === "user") {
-			return extractTextOnly(context.messages[i]);
-		}
-	}
-	return "";
-}
 
 /**
  * Build a lean conversation summary for the classifier.
@@ -89,17 +78,6 @@ export function getConversationSummary(context: Context, maxTurns = 6): string {
 	return entries.join("\n");
 }
 
-/** @deprecated Use getConversationSummary instead. Kept for backward compat. */
-export function getRecentUserText(context: Context, count: number): string {
-	const userMsgs: string[] = [];
-	for (let i = context.messages.length - 1; i >= 0 && userMsgs.length < count; i--) {
-		if (context.messages[i].role === "user") {
-			const text = extractTextOnly(context.messages[i]).slice(0, MAX_MSG_CHARS);
-			if (text) userMsgs.unshift(text);
-		}
-	}
-	return userMsgs.join("\n---\n");
-}
 
 /** Build classifier prompt (shared between sync and async paths) */
 export function buildClassifierPrompt(
