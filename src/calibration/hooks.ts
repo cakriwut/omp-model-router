@@ -273,8 +273,6 @@ export function spawnClassifierForTurn(
 					}
 
 					clearPending(state.calibration);
-					const heuristicTier = state.calibration.pendingHeuristicTier;
-					const verdict = result.verdict;
 
 					updateCalibrationMatrix(state.calibration, heuristicTier, verdict.tier);
 
