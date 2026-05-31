@@ -41,13 +41,37 @@ git tag "v$NEW_VERSION"
 echo "✓ Tagged v$NEW_VERSION"
 echo
 
-# 4. Publish to npm
-echo "▸ Publishing to npm..."
-if ! npm publish; then
-  echo "❌ npm publish failed"
-  echo "To retry manually:"
-  echo "  git push && git push --tags && npm publish"
-  exit 1
+# 4. Publish to npm (using cakriwut token from Doppler)
+echo "▸ Publishing to npm as cakriwut..."
+if command -v doppler &>/dev/null; then
+  # Use cakriwut token from Doppler
+  CAKRIWUT_TOKEN=$(doppler secrets get NPM_TOKEN_CAKRIWUT --project dev-console-personal --config dev --plain 2>/dev/null || echo "")
+  if [ -n "$CAKRIWUT_TOKEN" ]; then
+    echo "  Using NPM_TOKEN_CAKRIWUT from Doppler"
+    if ! NPM_TOKEN="$CAKRIWUT_TOKEN" npm publish; then
+      echo "❌ npm publish failed"
+      echo "To retry manually:"
+      echo "  NPM_TOKEN=\$(doppler secrets get NPM_TOKEN_CAKRIWUT --project dev-console-personal --config dev --plain) npm publish"
+      echo "  git push && git push --tags"
+      exit 1
+    fi
+  else
+    echo "⚠️  NPM_TOKEN_CAKRIWUT not found in Doppler, using current NPM_TOKEN"
+    if ! npm publish; then
+      echo "❌ npm publish failed"
+      echo "To retry manually:"
+      echo "  git push && git push --tags && npm publish"
+      exit 1
+    fi
+  fi
+else
+  echo "⚠️  Doppler not found, using current NPM_TOKEN from environment"
+  if ! npm publish; then
+    echo "❌ npm publish failed"
+    echo "To retry manually:"
+    echo "  git push && git push --tags && npm publish"
+    exit 1
+  fi
 fi
 echo "✓ Published @cakriwut/omp-model-router@$NEW_VERSION to npm"
 echo
