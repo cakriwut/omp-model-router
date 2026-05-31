@@ -1,4 +1,4 @@
-import type { Component, Tui } from "@oh-my-pi/pi-tui";
+import type { Component, TUI } from "@oh-my-pi/pi-tui";
 import { Input, SelectList, TabBar, fuzzyFilter, replaceTabs, truncateToWidth, matchesKey } from "@oh-my-pi/pi-tui";
 import type { KeybindingsManager, Theme } from "@oh-my-pi/pi-coding-agent";
 import { getSelectListTheme } from "@oh-my-pi/pi-coding-agent";
@@ -17,7 +17,7 @@ export interface SelectItem {
  * Returns sorted array of selected model refs on confirm, undefined on cancel.
  */
 export class FallbackPickerComponent implements Component {
-	#tui: Tui;
+	#tui: TUI;
 	#theme: Theme;
 	#keybindings: KeybindingsManager;
 	#done: (result: string[] | undefined) => void;
@@ -40,7 +40,7 @@ export class FallbackPickerComponent implements Component {
 	#selected: Map<string, number> = new Map();
 
 	constructor(
-		tui: Tui,
+		tui: TUI,
 		theme: Theme,
 		keybindings: KeybindingsManager,
 		done: (result: string[] | undefined) => void,
@@ -77,20 +77,18 @@ export class FallbackPickerComponent implements Component {
 			tabs,
 			{
 				label: (text) => text,
-				activeTab: (text) => this.#theme.fg("accent")(text),
-				inactiveTab: (text) => this.#theme.fg("muted")(text),
-				hint: (text) => this.#theme.fg("muted")(text),
-			}
+				activeTab: (text) => this.#theme.fg("accent", text),
+				inactiveTab: (text) => this.#theme.fg("muted", text),
+				hint: (text) => this.#theme.fg("muted", text),
+			},
+			0
 		);
 		
 		// Initialize search input
 		this.#searchInput = new Input();
 		
 		// Initialize select list with item formatting
-		this.#selectList = new SelectList([], {
-			theme: selectListTheme,
-			hideCursor: false,
-		});
+		this.#selectList = new SelectList([], 8, selectListTheme);
 		
 		// Apply initial filter
 		this.#applyFilters();
@@ -138,10 +136,7 @@ export class FallbackPickerComponent implements Component {
 				description: model.description,
 			}));
 			
-			this.#selectList = new SelectList(items, {
-				theme: getSelectListTheme(),
-				hideCursor: false,
-			});
+			this.#selectList = new SelectList(items, 8, getSelectListTheme());
 			
 			// Set cursor position
 			if (this.#selectedIndex < items.length) {
@@ -226,8 +221,8 @@ export class FallbackPickerComponent implements Component {
 	#formatModelLine(model: SelectItem): string {
 		const order = this.#selected.get(model.value);
 		const checkbox = order
-			? this.#theme.fg("accent")(this.#theme.bold(`[${order}]`))
-			: this.#theme.fg("muted")("[ ]");
+			? this.#theme.fg("accent", `[${order}]`)
+			: this.#theme.fg("muted", "[ ]");
 		
 		return `${checkbox} ${model.value} · ${model.description || ""}`;
 	}
@@ -237,7 +232,7 @@ export class FallbackPickerComponent implements Component {
 			return "Selected: (none)";
 		}
 		
-		const sorted = [...this.#selected.entries()]
+		const sorted = Array.from(this.#selected.entries())
 			.sort((a, b) => a[1] - b[1])
 			.map(([ref]) => this.#getShortName(ref));
 		
@@ -296,14 +291,18 @@ export class FallbackPickerComponent implements Component {
 	}
 
 	#recompact(): void {
-		const entries = [...this.#selected.entries()].sort((a, b) => a[1] - b[1]);
+		const entries = Array.from(this.#selected.entries()).sort((a, b) => a[1] - b[1]);
 		this.#selected.clear();
 		entries.forEach(([ref], i) => this.#selected.set(ref, i + 1));
 	}
 
 	#getResult(): string[] {
-		return [...this.#selected.entries()]
+		return Array.from(this.#selected.entries())
 			.sort((a, b) => a[1] - b[1])
 			.map(([ref]) => ref);
+	}
+
+	invalidate(): void {
+		// No cached rendering — render() is idempotent
 	}
 }

@@ -1,14 +1,13 @@
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import type { KeybindingsManager, Theme, ModelRegistry } from "@oh-my-pi/pi-coding-agent";
-import { Effort } from "@oh-my-pi/pi-ai";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { RouterProfile, RouterTier } from "../types";
 import { ModelPickerComponent } from "./model-picker";
 import { FallbackPickerComponent } from "./fallback-picker";
 
 const TIERS: readonly RouterTier[] = ["high", "medium", "low"] as const;
-const THINKING_CYCLE: readonly ThinkingLevel[] = [Effort.Low, Effort.Medium, Effort.High] as const;
+const THINKING_CYCLE: readonly ThinkingLevel[] = ["low" as const, "medium" as const, "high" as const];
 type FieldKind = "model" | "thinking" | "fallbacks";
 const FIELDS: readonly FieldKind[] = ["model", "thinking", "fallbacks"] as const;
 
@@ -71,6 +70,10 @@ export class ProfileEditorComponent implements Component {
 		this.#originalJson = JSON.stringify(profile);
 		this.#modelRegistry = modelRegistry;
 		this.#draft = structuredClone(profile);
+	}
+
+	invalidate(): void {
+		// No cached state to invalidate; all rendering is derived from #draft.
 	}
 
 	// ─── Render ────────────────────────────────────────────────────────────
@@ -372,4 +375,133 @@ export function createProfileEditorFactory(
 			profile,
 			modelRegistry,
 		);
+}
+
+// ─── CRUD Helper Functions ────────────────────────────────────────────────────
+
+import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { RouterConfig } from "../types";
+import { patchConfigFile, profileNames } from "../config";
+
+/**
+ * Open the profile editor for a specific profile.
+ */
+export async function openProfileEditor(
+	profileName: string,
+	config: RouterConfig,
+	modelRegistry: ModelRegistry,
+	ctx: ExtensionContext,
+	onSave: () => Promise<void>,
+): Promise<void> {
+	const profile = config.profiles[profileName];
+	if (!profile) {
+		ctx.ui.notify(`Profile "${profileName}" not found.`, "error");
+		return;
+	}
+
+	const result = await ctx.ui.custom<RouterProfile | undefined>(
+		createProfileEditorFactory(profileName, profile, modelRegistry),
+		{ overlay: false },
+	);
+
+	if (result) {
+		await patchConfigFile({ profiles: { ...config.profiles, [profileName]: result } });
+		await onSave();
+	}
+}
+
+/**
+ * Create a new profile by prompting for a name, then opening the editor pre-filled with active profile.
+ */
+export async function openCreateProfile(
+	config: RouterConfig,
+	modelRegistry: ModelRegistry,
+	ctx: ExtensionContext,
+	onSave: () => Promise<void>,
+): Promise<void> {
+	const name = await ctx.ui.input("Enter new profile name:");
+	if (!name) return;
+
+	const existing = profileNames(config);
+	if (existing.includes(name)) {
+		ctx.ui.notify(`Profile "${name}" already exists.`, "error");
+		return;
+	}
+
+	// Pre-fill with copy of current active profile (or first available)
+	const activeProfileName = config.defaultProfile ?? existing[0] ?? "auto";
+	const activeProfile = config.profiles[activeProfileName];
+	if (!activeProfile) {
+		ctx.ui.notify("No profile available to copy from.", "error");
+		return;
+	}
+
+	const result = await ctx.ui.custom<RouterProfile | undefined>(
+		createProfileEditorFactory(name, structuredClone(activeProfile), modelRegistry),
+		{ overlay: false },
+	);
+
+	if (result) {
+		await patchConfigFile({ profiles: { ...config.profiles, [name]: result } });
+		await onSave();
+	}
+}
+
+/**
+ * Rename a profile by prompting for the source profile and new name.
+ */
+export async function openRenameProfile(
+	config: RouterConfig,
+	_modelRegistry: ModelRegistry,
+	ctx: ExtensionContext,
+	onSave: () => Promise<void>,
+): Promise<void> {
+	const profiles = profileNames(config);
+	const source = await ctx.ui.select("Select profile to rename:", profiles);
+	if (!source) return;
+
+	const newName = await ctx.ui.input("Enter new name:", source);
+	if (!newName || newName === source) return;
+
+	if (profiles.includes(newName)) {
+		ctx.ui.notify(`Profile "${newName}" already exists.`, "error");
+		return;
+	}
+
+	// Rename by removing old key and adding new key
+	const updatedProfiles = { ...config.profiles };
+	updatedProfiles[newName] = updatedProfiles[source];
+	delete updatedProfiles[source];
+
+	await patchConfigFile({ profiles: updatedProfiles });
+	await onSave();
+	ctx.ui.notify(`Renamed "${source}" to "${newName}".`, "info");
+}
+
+/**
+ * Delete a profile by prompting for selection and confirmation.
+ */
+export async function openDeleteProfile(
+	config: RouterConfig,
+	ctx: ExtensionContext,
+	onSave: () => Promise<void>,
+): Promise<void> {
+	const profiles = profileNames(config);
+	if (profiles.length <= 1) {
+		ctx.ui.notify("Cannot delete the last profile.", "error");
+		return;
+	}
+
+	const target = await ctx.ui.select("Select profile to delete:", profiles);
+	if (!target) return;
+
+	const confirmed = await ctx.ui.confirm(`Delete profile "${target}"?`);
+	if (!confirmed) return;
+
+	const updatedProfiles = { ...config.profiles };
+	delete updatedProfiles[target];
+
+	await patchConfigFile({ profiles: updatedProfiles });
+	await onSave();
+	ctx.ui.notify(`Deleted profile "${target}".`, "info");
 }

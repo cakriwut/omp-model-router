@@ -191,38 +191,72 @@ export const registerCommands = (
 		if (!profileName) {
 			// Interactive TUI mode when available
 			if (ctx.hasUI) {
-				const profiles = profileNames(state.currentConfig);
-				const labels = [
-					...profiles.map((name) => `router/${name}`),
-					"＋ Create new profile",
-					"✎ Rename a profile",
-					"✕ Delete a profile",
-				];
+				// Import ProfileListComponent and type
+				const { ProfileListComponent } = await import("./tui/profile-list");
+				type ProfileListResult = import("./tui/profile-list").ProfileListResult;
 
-				const onSave = async (updatedProfiles: Record<string, RouterProfile>) => {
+				// Build profile entries
+				const profiles = profileNames(state.currentConfig).map((name) => ({
+					name,
+					profile: state.currentConfig.profiles[name],
+				}));
+
+				// Launch ProfileListComponent
+				const result = await ctx.ui.custom<ProfileListResult | undefined>(
+					(tui, theme, keybindings, done) => {
+						return new ProfileListComponent(
+							tui,
+							theme,
+							keybindings,
+							done,
+							profiles,
+							state.selectedProfile,
+						);
+					},
+					{ overlay: false },
+				);
+
+				// Handle result
+				if (!result) return;
+
+				const onSave = async () => {
 					await actions.reloadConfig(ctx, { preserveDebug: true });
 					await actions.ensureValidActiveRouterProfile(ctx);
 					ctx.ui.notify("Profile saved.", "info");
 				};
 
-				const selected = await ctx.ui.select("Select a profile or action", labels);
-				if (!selected) return;
-
-				if (selected === "＋ Create new profile") {
-					await openCreateProfile(state.currentConfig, ctx.modelRegistry, ctx, onSave);
-				} else if (selected === "✎ Rename a profile") {
-					await openRenameProfile(state.currentConfig, ctx.modelRegistry, ctx, onSave);
-				} else if (selected === "✕ Delete a profile") {
-					await openDeleteProfile(state.currentConfig, ctx, onSave);
-				} else if (selected.startsWith("router/")) {
-					// It's a profile name - extract and switch
-					const profileName = selected.slice("router/".length);
-					const success = await actions.switchToRouterProfile(profileName, ctx);
-					if (success) {
-						ctx.ui.notify(
-							`Switched to router profile: ${state.selectedProfile}`,
-							"info",
+				switch (result.action) {
+					case "activate": {
+						const success = await actions.switchToRouterProfile(result.profile, ctx);
+						if (success) {
+							ctx.ui.notify(
+								`Switched to router profile: ${state.selectedProfile}`,
+								"info",
+							);
+						}
+						break;
+					}
+					case "edit": {
+						await openProfileEditor(
+							result.profile,
+							state.currentConfig,
+							ctx.modelRegistry,
+							ctx,
+							onSave,
 						);
+						break;
+					}
+					case "create": {
+						await openCreateProfile(state.currentConfig, ctx.modelRegistry, ctx, onSave);
+						break;
+					}
+					case "rename": {
+						await openRenameProfile(state.currentConfig, ctx.modelRegistry, ctx, onSave);
+						break;
+					}
+					case "delete": {
+						await openDeleteProfile(state.currentConfig, ctx, onSave);
+						break;
 					}
 				}
 			} else {
