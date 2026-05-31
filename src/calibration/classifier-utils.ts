@@ -12,6 +12,7 @@
 
 import type { Context, Message } from "@oh-my-pi/pi-ai";
 import type { RouterTier, RouterPhase } from "../types";
+import { isRouterTier } from "../config";
 import {
 	extractText,
 	getLastUserText,
@@ -126,8 +127,4 @@ export function parseClassifierOutput(
 			? reasoningLine.split(":")[1].trim()
 			: "Classifier decision.",
 	};
-}
-
-function isRouterTier(value: string): value is RouterTier {
-	return value === "low" || value === "medium" || value === "high";
 }
