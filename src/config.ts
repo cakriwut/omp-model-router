@@ -145,6 +145,46 @@ export const parseCanonicalModelRef = (
 	return { provider, modelId };
 };
 
+/**
+ * Validate a classifierModel value: accepts a single canonical ref string or an array of them.
+ * Filters out invalid entries from arrays (warning each), drops the field entirely when
+ * nothing valid remains.
+ */
+const validateClassifierModel = (
+	value: unknown,
+	warnings: string[],
+): string | string[] | undefined => {
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		try {
+			parseCanonicalModelRef(trimmed);
+			return trimmed;
+		} catch (error) {
+			warnings.push(
+				`Invalid classifierModel: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return undefined;
+		}
+	}
+	if (Array.isArray(value)) {
+		const valid: string[] = [];
+		for (const entry of value) {
+			if (typeof entry !== "string") continue;
+			const trimmed = entry.trim();
+			try {
+				parseCanonicalModelRef(trimmed);
+				valid.push(trimmed);
+			} catch (error) {
+				warnings.push(
+					`Invalid classifierModel in array: ${trimmed} — ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+		return valid.length > 0 ? valid : undefined;
+	}
+	return undefined;
+};
+
 export const normalizeTierConfig = (
 	value: unknown,
 	fallback: RoutedTierConfig,
@@ -300,38 +340,7 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 		}
 	}
 
-	// Parse classifierModel: single string or array of strings
-	let classifierModel: string | string[] | undefined;
-	if (typeof raw.classifierModel === "string") {
-		// Single string (backward compat)
-		const trimmed = raw.classifierModel.trim();
-		try {
-			parseCanonicalModelRef(trimmed);
-			classifierModel = trimmed;
-		} catch (error) {
-			warnings.push(
-				`Invalid classifierModel: ${error instanceof Error ? error.message : String(error)}`,
-			);
-			classifierModel = undefined;
-		}
-	} else if (Array.isArray(raw.classifierModel)) {
-		// Array of strings (fallback chain)
-		const validModels: string[] = [];
-		for (const modelRef of raw.classifierModel) {
-			if (typeof modelRef === "string") {
-				const trimmed = modelRef.trim();
-				try {
-					parseCanonicalModelRef(trimmed);
-					validModels.push(trimmed);
-				} catch (error) {
-					warnings.push(
-						`Invalid classifierModel in array: ${trimmed} — ${error instanceof Error ? error.message : String(error)}`,
-					);
-				}
-			}
-		}
-		classifierModel = validModels.length > 0 ? validModels : undefined;
-	}
+	const classifierModel = validateClassifierModel(raw.classifierModel, warnings);
 	// ── Auto-upgrade normalization ───────────────────────────────────────────
 	let autoUpgrade: AutoUpgradeConfig | undefined;
 	if (isObjectRecord(raw.autoUpgrade) && raw.autoUpgrade.enabled === true) {
@@ -354,7 +363,7 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 			enabled: c.enabled === true,
 			mode,
 			warmupTurns: typeof c.warmupTurns === "number" ? c.warmupTurns : 5,
-			classifierModel: typeof c.classifierModel === "string" ? c.classifierModel : undefined,
+			classifierModel: validateClassifierModel(c.classifierModel, warnings),
 			overrideThreshold: typeof c.overrideThreshold === "number" ? c.overrideThreshold : 0.65,
 			traceEnabled: c.traceEnabled === true,
 			useGlobalPrior: c.useGlobalPrior !== false,

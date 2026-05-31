@@ -1,6 +1,6 @@
-import { streamSimple, type Context } from "@oh-my-pi/pi-ai";
+import { streamSimple, type Context, type Message } from "@oh-my-pi/pi-ai";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { parseCanonicalModelRef } from "./config";
+import { parseCanonicalModelRef, isRouterTier } from "./config";
 import { buildClassifierPrompt, parseClassifierOutput } from "./calibration/classifier-utils";
 import type {
 	RouterTier,
@@ -10,7 +10,6 @@ import type {
 	RoutingRule,
 	RouterThinkingByTier,
 } from "./types";
-import { parseCanonicalModelRef, isRouterTier } from "./config";
 
 // ─── Text extraction utilities ────────────────────────────────────────────────
 
@@ -700,7 +699,7 @@ export interface RoutingConfig {
 	thinkingOverrides?: RouterThinkingByTier;
 	phaseBias: number;
 	rules?: RoutingRule[];
-	classifierModel?: string;
+	classifierModel?: string | string[];
 	debug?: boolean;
 	calibrationConfig?: import("./calibration/types").CalibrationConfig;
 }

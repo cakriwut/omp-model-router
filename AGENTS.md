@@ -97,7 +97,11 @@ Config file: `~/.omp/agent/model-router.json`
     "enabled": true,
     "mode": "adaptive",
     "warmupTurns": 5,
-    "classifierModel": "anthropic/claude-3-haiku-20240307",
+    "classifierModel": [
+      "anthropic/claude-3-haiku-20240307",
+      "openai/gpt-4.1-nano",
+      "amazon-bedrock/amazon.nova-micro-v1:0"
+    ],
     "overrideThreshold": 0.65,
     "traceEnabled": false,
     "useGlobalPrior": true,
@@ -118,6 +122,27 @@ When `calibration.enabled` is `true` and `calibration.mode` is `"adaptive"`, the
 - Sync classifier verdicts are recorded into the matrix immediately
 - When sync classifier fails (model not found, API error), the matrix-based calibration (`applyCalibratedTier`) is used as a fallback
 - Async classifier spawn is **skipped** in adaptive mode when sync classifier runs (50% cost savings)
+
+### Classifier Fallback Chain (v0.7.3+)
+
+`classifierModel` accepts either a single string (backward compat) or an array of refs. Entries are tried in order; if one fails (not in registry, no API key, stream error, parse failure), the next is attempted. If all classifiers in the chain fail, the router falls back to the heuristic — no hard error.
+
+```json
+"classifierModel": [
+  "anthropic/claude-3-haiku-20240307",
+  "openai/gpt-4.1-nano",
+  "amazon-bedrock/amazon.nova-micro-v1:0"
+]
+```
+
+With `debug: true`, each attempt logs:
+
+```
+[model-router] Sync classifier attempt 1/3: anthropic/claude-3-haiku-20240307
+[model-router] Classifier failed: Rate limited
+[model-router] Sync classifier attempt 2/3: openai/gpt-4.1-nano
+⚡ classifier → gpt-4.1-nano (sync·adaptive) → high
+```
 
 **Use cases:**
 - Start with `telemetry` to collect data and tune the heuristic

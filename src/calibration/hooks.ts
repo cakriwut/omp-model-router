@@ -295,7 +295,9 @@ export function spawnClassifierForTurn(
 				}
 
 				// Badge-style log with decision (always shown)
-				const shortName = config.calibration?.classifierModel
+				const classifierRef = config.calibration?.classifierModel;
+				const refForLabel = Array.isArray(classifierRef) ? classifierRef[0] : classifierRef;
+				const shortName = refForLabel
 					?.split('/').pop()?.split('.').pop()?.replace(/-v\d+:\d+$/, '') || 'classifier';
 				const agreed = heuristicTier === verdict.tier;
 				const modeLabel = config.calibration?.mode === 'adaptive' ? 'adaptive' : 'telemetry';

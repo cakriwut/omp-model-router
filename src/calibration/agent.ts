@@ -42,19 +42,26 @@ const pendingClassifiers = new Map<string, ClassifierPromise>();
  * @returns Agent ID or undefined on spawn failure
  */
 export async function spawnClassifierAgent(
-	classifierModelRef: string,
+	classifierModelRef: string | string[],
 	context: Context,
 	currentPhase: RouterPhase | undefined,
 	modelRegistry: ExtensionContext["modelRegistry"],
 ): Promise<string | undefined> {
+	// Normalize to array for consistent handling
+	const classifierRefs = Array.isArray(classifierModelRef)
+		? classifierModelRef
+		: [classifierModelRef];
+
+	// If pi-subagents available, try using first model (no fallback support for subagents)
 	if (piSubagentsAvailable && Agent) {
 		return await spawnViaSubagent(
-			classifierModelRef,
+			classifierRefs[0],
 			context,
 			currentPhase,
 		);
 	}
 
+	// streamSimple path supports full fallback chain
 	return await spawnViaStreamSimple(
 		classifierModelRef,
 		context,

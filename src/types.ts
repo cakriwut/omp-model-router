@@ -139,7 +139,7 @@ export interface RouterConfig {
 	debugVerbose?: boolean;
 	/** Maximum number of routing decisions to keep in debugHistory. Default: 12. */
 	debugHistoryLimit?: number;
-	classifierModel?: string;
+	classifierModel?: string | string[];
 	phaseBias?: number;
 	largeContextThreshold?: number;
 	maxSessionBudget?: number;
