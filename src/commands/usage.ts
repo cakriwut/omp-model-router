@@ -13,7 +13,22 @@ export const handleUsage = (
 		return;
 	}
 
-	// ── Build model cost data from session messages (authoritative) ────────
+	// ── Data source: prefer in-memory scope (includes sub-agent rollup) ──────
+	// In-memory wins when populated by any routing in this process run.
+	// JSONL rescan fires only for resumed sessions (fresh process, no turns yet).
+	// Requires: Thread C (parent attribution) + Thread B (complete field rollup).
+	const useInMemory = state.modelCosts.size > 0 || state.accumulatedCost > 0;
+
+	let reportModelCosts: Map<string, ModelCostEntry>;
+	let reportTierCounter: { high: number; medium: number; low: number };
+	let reportTotalCost: number;
+
+	if (useInMemory) {
+		reportModelCosts  = state.modelCosts;
+		reportTierCounter = state.tierCounter;
+		reportTotalCost   = state.accumulatedCost;
+	} else {
+	// Fallback: JSONL rescan for resumed sessions where scope is empty
 	const sessionModelCosts = new Map<string, ModelCostEntry>();
 	let sessionTotalCost = 0;
 	try {
@@ -111,7 +126,20 @@ export const handleUsage = (
 			}
 		}
 	} catch {
-		// Fall back to router's own tracking if session read fails
+		// If JSONL read fails, reportModelCosts remains empty
+	}
+
+	// Derive tier counts from scanned model costs
+	const sessionTierCounter = { high: 0, medium: 0, low: 0 };
+	for (const entry of sessionModelCosts.values()) {
+		if (entry.tier === "high" || entry.tier === "medium" || entry.tier === "low") {
+			sessionTierCounter[entry.tier] += entry.invocations;
+		}
+	}
+
+	reportModelCosts  = sessionModelCosts;
+	reportTierCounter = sessionTierCounter;
+	reportTotalCost   = sessionTotalCost;
 	}
 
 	// ── Resolve effective compression config + live diagnostic ─────────
@@ -165,22 +193,16 @@ export const handleUsage = (
 		}
 	}
 
-	// Derive tier counts from session model costs (authoritative)
-	const sessionTierCounter = { high: 0, medium: 0, low: 0 };
-	for (const entry of sessionModelCosts.values()) {
-		if (entry.tier === "high" || entry.tier === "medium" || entry.tier === "low") {
-			sessionTierCounter[entry.tier] += entry.invocations;
-		}
-	}
+	// (tier derivation is inside the else branch above)
 
 	const report = renderUsageReport({
 		theme: ctx.ui.theme,
 		selectedProfile: state.selectedProfile,
 		profile,
-		tierCounter: sessionModelCosts.size > 0 ? sessionTierCounter : state.tierCounter,
-		modelCosts: sessionModelCosts.size > 0 ? sessionModelCosts : state.modelCosts,
+		tierCounter: reportTierCounter,
+		modelCosts: reportModelCosts,
 		lastDecision: state.lastDecision,
-		accumulatedCost: sessionTotalCost > 0 ? sessionTotalCost : state.accumulatedCost,
+		accumulatedCost: reportTotalCost,
 		accumulatedOriginalTokens: state.accumulatedOriginalTokens,
 		accumulatedCompressedTokens: state.accumulatedCompressedTokens,
 		accumulatedTokensSaved: state.accumulatedTokensSaved,
