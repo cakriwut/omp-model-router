@@ -10,7 +10,9 @@ import {
 } from "@oh-my-pi/pi-tui";
 import type { ModelRegistry, Theme } from "@oh-my-pi/pi-coding-agent";
 import type { RouterConfig, RouterProfile, RouterTier } from "../types";
+import type { CalibrationConfig } from "../calibration/types";
 import { ProfileEditorComponent } from "./profile-editor";
+import { ClassifierSettingsComponent } from "./classifier-settings";
 
 export type ProfileListResult =
 	| { action: "activate"; profile: string }
@@ -29,6 +31,7 @@ export interface ProfileListInlineOptions {
 	config: RouterConfig;
 	modelRegistry: ModelRegistry;
 	onSave: (profileName: string, profile: RouterProfile) => void;
+	onCalibrationSave?: (calibration: CalibrationConfig) => void;
 }
 
 const NARROW_THRESHOLD = 80;
@@ -107,7 +110,7 @@ export class ProfileListComponent implements Component {
 
 	// Inline sub-view support
 	#inlineOptions: ProfileListInlineOptions | undefined;
-	#subView: ProfileEditorComponent | undefined;
+	#subView: Component | undefined;
 
 	constructor(
 		tui: unknown,
@@ -169,6 +172,10 @@ export class ProfileListComponent implements Component {
 		if (matchesKey(data, "ctrl+r")) {
 			const profile = this.#highlighted();
 			if (profile) this.#done({ action: "rename", profile });
+			return;
+		}
+		if (matchesKey(data, "ctrl+l")) {
+			this.#handleClassifierSettings();
 			return;
 		}
 
@@ -303,6 +310,26 @@ export class ProfileListComponent implements Component {
 		this.#done({ action: "edit", profile: profileName });
 	}
 
+	#handleClassifierSettings(): void {
+		if (!this.#inlineOptions) return;
+
+		const done = (result: CalibrationConfig | undefined): void => {
+			this.#subView = undefined;
+			if (result && this.#inlineOptions?.onCalibrationSave) {
+				this.#inlineOptions.onCalibrationSave(result);
+			}
+		};
+
+		this.#subView = new ClassifierSettingsComponent(
+			this.#tui as TUI,
+			this.#theme,
+			this.#keybindings,
+			done,
+			this.#inlineOptions.config.calibration,
+			this.#inlineOptions.modelRegistry,
+		);
+	}
+
 	// ─── Internals ─────────────────────────────────────────────────────────
 
 	#highlighted(): string | undefined {
@@ -399,10 +426,10 @@ export class ProfileListComponent implements Component {
 
 		if (narrow) {
 			// Narrow: drop delete, rename, and browse.
-			parts.push("ENTER", "ctrl+e edit", "ctrl+n new", "ESC");
+			parts.push("ENTER", "ctrl+e edit", "ctrl+l classifier", "ESC");
 		} else {
 			// Full width.
-			parts.push("ENTER activate", "ctrl+e edit", "ctrl+n new");
+			parts.push("ENTER activate", "ctrl+e edit", "ctrl+l classifier", "ctrl+n new");
 			if (this.#profiles.length > 1) parts.push("ctrl+d delete");
 			parts.push("↑↓ browse", "ESC");
 		}

@@ -91,6 +91,10 @@ export const handleProfile = (
 							patchConfigFile({ profiles: { ...state.currentConfig.profiles, [savedProfileName]: profile } });
 							onReload().then(() => ctx.ui.notify("Profile saved.", "info"));
 						},
+						onCalibrationSave: (calibration) => {
+							patchConfigFile({ calibration });
+							onReload().then(() => ctx.ui.notify("Classifier settings saved.", "info"));
+						},
 					},
 				);
 				tui.requestRender();
