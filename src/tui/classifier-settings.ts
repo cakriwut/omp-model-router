@@ -421,7 +421,7 @@ export class ClassifierSettingsComponent implements Component {
 		this.#state = "input";
 		this.#inlineField = field;
 		this.#inlineInput = new Input();
-		this.#inlineInput.setText(initial);
+		this.#inlineInput.setValue(initial);
 	}
 
 	#applyInlineValue(value: string): void {

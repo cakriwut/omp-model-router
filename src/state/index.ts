@@ -42,17 +42,27 @@ export interface SessionScope {
 	lastDecision: RoutingDecision | undefined;
 	lastTurnTimestamp?: number;
 	currentCheckpoint?: CompressionCheckpoint;
+	frozenCompressionBlock?: { messages: Message[]; stats: CompressionStats };
 	isStreaming: boolean;
 	/** Routing decision counts per tier */
 	tierCounter: TierCounter;
 	/** Cost breakdown per model */
 	modelCosts: Map<string, ModelCostEntry>;
-	/**
-	 * Session-scoped, memory-only pin. Decays after `config.pinTimeout` ms.
-	 * Independent of sibling/parent sessions — sub-agent pins do not bleed.
-	 * Set via `setScopedPin`; cleared via `clearScopedPin` or on expiry.
-	 */
 	scopedPin?: ScopedPin;
+	/** Signature of the last prompt the classifier scored (cache key). */
+	lastClassifierKey: string | undefined;
+	/** Verdict the classifier returned for lastClassifierKey. */
+	lastClassifierVerdict: { tier: RouterTier; reasoning: string } | undefined;
+	/** Turns elapsed since classifier last ran (0 = ran this turn). */
+	classifierTurnsSinceRun: number;
+	/**
+	 * Monotonic count of user messages seen in this session.
+	 * Used as part of the classifier cache key — survives TOON compression
+	 * (which can shrink context.messages, making a live message-count non-monotonic).
+	 */
+	userMessagesSeen: number;
+	/** Session entry id of the last user message we counted — prevents double-counting in tool loops. */
+	lastUserEntryId: string | undefined;
 }
 
 /**
@@ -116,17 +126,7 @@ export class RouterState {
 	/** Whether RTK integration is active (config enabled + binary available). */
 	rtkActive = false;
 	
-	// ─── Frozen TOON compression cache ────────────────────────────────────
-	// When freezeAfter is configured, stores the frozen TOON block to reuse
-	frozenCompressionBlock?: { messages: Message[]; stats: CompressionStats };
 
-	// ─── Classifier prompt cache (Phase 1: prompt-equality, TTL-gated) ────
-	/** Signature of the last prompt the classifier scored. */
-	lastClassifierKey: string | undefined;
-	/** Verdict the classifier returned for `lastClassifierKey`. */
-	lastClassifierVerdict: { tier: RouterTier; reasoning: string } | undefined;
-	/** Turns elapsed since the classifier last ran (0 = it just ran this turn). */
-	classifierTurnsSinceRun = 0;
 
 	// ─── Calibration (session-level, ephemeral) ─────────────────────────
 	calibration: SessionCalibration | undefined;
@@ -235,6 +235,14 @@ export class RouterState {
 				modelCosts: isSibling
 					? new Map(previousScope.modelCosts)
 					: new Map(),
+				// Classifier cache — never carry forward (each session gets a fresh cache)
+				lastClassifierKey: undefined,
+				lastClassifierVerdict: undefined,
+				classifierTurnsSinceRun: 0,
+				// Monotonic user-message counter — carry forward for siblings
+				// (sibling sessions share the same user message stream)
+				userMessagesSeen: isSibling ? previousScope.userMessagesSeen : 0,
+				lastUserEntryId: isSibling ? previousScope.lastUserEntryId : undefined,
 			});
 			if (this.currentConfig.debug && !this.parentAttributionLogged.has(sessionId)) {
 				this.parentAttributionLogged.add(sessionId);
@@ -420,6 +428,8 @@ export class RouterState {
 
 	get currentCheckpoint(): CompressionCheckpoint | undefined { return this.scope.currentCheckpoint; }
 	set currentCheckpoint(v: CompressionCheckpoint | undefined) { this.scope.currentCheckpoint = v; }
+	get frozenCompressionBlock(): SessionScope["frozenCompressionBlock"] { return this.scope.frozenCompressionBlock; }
+	set frozenCompressionBlock(v: SessionScope["frozenCompressionBlock"]) { this.scope.frozenCompressionBlock = v; }
 
 	get lastTurnTimestamp(): number | undefined { return this.scope.lastTurnTimestamp; }
 	set lastTurnTimestamp(v: number | undefined) { this.scope.lastTurnTimestamp = v; }

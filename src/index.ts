@@ -318,6 +318,25 @@ const routerExtension = (pi: ExtensionAPI) => {
 			state.activateSession(sessionId, resolvedParent, source);
 		}
 
+		// Increment userMessagesSeen when a new user-role message arrives.
+		// Checked via session entry id (survives TOON compression; message count can decrease).
+		try {
+			const branch = ctx.sessionManager.getBranch();
+			// Walk from the end; find the most recent user-role message entry
+			for (let i = branch.length - 1; i >= 0; i--) {
+				const e = branch[i];
+				if (e.type === "message" && (e as any).message?.role === "user") {
+					if (e.id !== state.scope.lastUserEntryId) {
+						state.scope.userMessagesSeen += 1;
+						state.scope.lastUserEntryId = e.id;
+					}
+					break;
+				}
+			}
+		} catch {
+			// If branch is unavailable, skip — userMessagesSeen stays at previous value
+		}
+
 		if (state.updateBannerShown) {
 			state.updateBannerShown = false;
 		}

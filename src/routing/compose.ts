@@ -191,9 +191,10 @@ export const resolveRouting = async (
 					decision.isContextTriggered = true;
 					// Cache bust: routing context changed, force classifier re-eval on next eligible turn.
 					if (input.state) {
-						input.state.lastClassifierKey = undefined;
-						input.state.lastClassifierVerdict = undefined;
-						input.state.classifierTurnsSinceRun = 0;
+						const s = input.state.scope;
+						s.lastClassifierKey = undefined;
+						s.lastClassifierVerdict = undefined;
+						s.classifierTurnsSinceRun = 0;
 					}
 				}
 			}
@@ -212,10 +213,10 @@ export const resolveRouting = async (
 	) {
 		// ── Compute classifier signature (Phase 1 cache key) ──────────────
 		const lastUserText = getLastUserText(input.context) ?? "";
-		let userMsgIndex = 0;
-		for (const m of input.context.messages) {
-			if (m.role === "user") userMsgIndex++;
-		}
+		// Monotonic user-message counter on scope — incremented by turn_start,
+		// never rolls back under TOON compression (unlike counting role==="user" in messages).
+		const scope = input.state?.scope;
+		const userMsgIndex = scope?.userMessagesSeen ?? 0;
 		// Phase 2: tool-mix bucket extends the cache key
 		const { counts: toolCounts } = extractRecentToolCalls(input.context);
 		const bucket = getBucket(toolCounts);
@@ -224,15 +225,15 @@ export const resolveRouting = async (
 		// ── Cache gate ──────────────────────────────────────────────────────
 		const ttlTurns = input.state?.currentConfig.classifierCache?.ttlTurns ?? 20;
 		const cacheHit =
-			input.state !== undefined &&
-			input.state.lastClassifierKey === sig &&
-			input.state.lastClassifierVerdict !== undefined &&
-			input.state.classifierTurnsSinceRun < ttlTurns;
+			scope !== undefined &&
+			scope.lastClassifierKey === sig &&
+			scope.lastClassifierVerdict !== undefined &&
+			scope.classifierTurnsSinceRun < ttlTurns;
 
-		if (cacheHit && input.state) {
-			verdict = input.state.lastClassifierVerdict;
-			input.state.classifierTurnsSinceRun += 1;
-			syncClassifierRan = false;
+		if (cacheHit && scope) {
+			verdict = scope.lastClassifierVerdict;
+			scope.classifierTurnsSinceRun += 1;
+			syncClassifierRan = true; // suppress redundant async spawn in adaptive mode
 		} else {
 			const { runClassifier } = await import("./index.js");
 			verdict = await runClassifier(
@@ -244,10 +245,10 @@ export const resolveRouting = async (
 				toolCounts,
 			);
 			syncClassifierRan = true;
-			if (verdict && input.state) {
-				input.state.lastClassifierKey = sig;
-				input.state.lastClassifierVerdict = verdict;
-				input.state.classifierTurnsSinceRun = 0;
+			if (verdict && scope) {
+				scope.lastClassifierKey = sig;
+				scope.lastClassifierVerdict = verdict;
+				scope.classifierTurnsSinceRun = 0;
 			}
 		}
 

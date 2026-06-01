@@ -1,14 +1,13 @@
 import {
 	type Component,
 	Input,
-	type KeybindingsManager,
 	type TUI,
 	matchesKey,
 	padding,
 	replaceTabs,
 	truncateToWidth,
 } from "@oh-my-pi/pi-tui";
-import type { ModelRegistry, Theme } from "@oh-my-pi/pi-coding-agent";
+import type { ModelRegistry, Theme, KeybindingsManager } from "@oh-my-pi/pi-coding-agent";
 import type { RouterConfig, RouterProfile, RouterTier } from "../types";
 import type { CalibrationConfig } from "../calibration/types";
 import { ProfileEditorComponent } from "./profile-editor";
@@ -140,7 +139,7 @@ export class ProfileListComponent implements Component {
 	handleInput(data: string): void {
 		// If a sub-view (ProfileEditor) is active, delegate input to it.
 		if (this.#subView) {
-			this.#subView.handleInput(data);
+			this.#subView.handleInput?.(data);
 			return;
 		}
 

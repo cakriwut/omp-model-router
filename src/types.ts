@@ -223,6 +223,12 @@ export interface RouterConfig {
 		/** Force the classifier to re-run after this many turns even if the prompt is unchanged. Default: 20. */
 		ttlTurns?: number;
 	};
+	/**
+	 * Stream idle timeout in milliseconds. If no event arrives from the delegated
+	 * model stream for this duration, the request is aborted and fallback is triggered.
+	 * Set to 0 to disable. Default: 120000 (120s).
+	 */
+	streamIdleTimeoutMs?: number;
 }
 
 export interface RoutingDecisionUsage {

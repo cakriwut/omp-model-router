@@ -33,6 +33,136 @@ import {
 	computeEmbargoDuration,
 } from "./embargo";
 
+/**
+ * Stream idle timeout per provider, aligned with pi-ai's own watchdog values.
+ * OpenAI uses 45s inter-event idle (DEFAULT_OPENAI_STREAM_IDLE_TIMEOUT_MS).
+ * Anthropic uses 45s first-event only — we apply the same 45s for inter-event.
+ * Codex uses 300s websocket idle.
+ * All others default to 45s (the pi-ai standard for healthy streaming).
+ */
+const STREAM_IDLE_TIMEOUT_BY_PROVIDER: Record<string, number> = {
+	"openai": 45_000,
+	"anthropic": 45_000,
+	"amazon-bedrock": 45_000,
+	"google": 45_000,
+	"github-copilot": 45_000,
+};
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 45_000;
+
+/** Resolve stream idle timeout: config override > provider-specific > default (45s). */
+function resolveStreamIdleTimeout(configOverride: number | undefined, provider: string): number {
+	if (configOverride !== undefined) return configOverride;
+	return STREAM_IDLE_TIMEOUT_BY_PROVIDER[provider] ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+}
+
+/** Probe timeout: how long to wait for the probe call to respond. */
+const PROBE_TIMEOUT_MS = 15_000;
+
+/** Max probe retries with exponential backoff before declaring provider dead. */
+const PROBE_MAX_RETRIES = 2;
+
+/**
+ * Wraps an async iterable with an inter-event idle timeout.
+ * If no event arrives within `timeoutMs` after the previous event (or stream start),
+ * the iterator throws a StreamIdleTimeoutError so the fallback chain can trigger.
+ */
+export class StreamIdleTimeoutError extends Error {
+	constructor(timeoutMs: number) {
+		super(`Stream idle timeout: no event received for ${Math.ceil(timeoutMs / 1000)}s`);
+		this.name = "StreamIdleTimeoutError";
+	}
+}
+
+export async function* withIdleTimeout<T>(
+	iterable: AsyncIterable<T>,
+	timeoutMs: number,
+): AsyncGenerator<T> {
+	const iterator = iterable[Symbol.asyncIterator]();
+	try {
+		while (true) {
+			const { promise: timeoutPromise, resolve: resolveTimeout } =
+				Promise.withResolvers<{ kind: "timeout" }>();
+			const timer = setTimeout(() => resolveTimeout({ kind: "timeout" }), timeoutMs);
+
+			const nextPromise = iterator.next().then(
+				(result) => ({ kind: "next" as const, result }),
+				(error) => ({ kind: "error" as const, error }),
+			);
+
+			try {
+				const outcome = await Promise.race([nextPromise, timeoutPromise]);
+				if (outcome.kind === "timeout") {
+					// Try to clean up the underlying iterator
+					void iterator.return?.()?.catch?.(() => {});
+					throw new StreamIdleTimeoutError(timeoutMs);
+				}
+				if (outcome.kind === "error") {
+					throw outcome.error;
+				}
+				if (outcome.result.done) {
+					return;
+				}
+				yield outcome.result.value;
+			} finally {
+				clearTimeout(timer);
+			}
+		}
+	} finally {
+		void iterator.return?.()?.catch?.(() => {});
+	}
+}
+
+/**
+ * Probe a provider to check if it's alive after a stream idle timeout.
+ * Sends a minimal request ("hi", max 1 token) and checks if it responds.
+ *
+ * Strategy:
+ * - If probe succeeds → provider is alive, the stall was request-specific
+ *   (e.g. overloaded on that particular request, or thinking too long).
+ *   The caller should retry the original request with backoff.
+ * - If probe fails/times out → provider is truly down or rate-limited.
+ *   The caller should trigger fallback to next model.
+ *
+ * @returns true if provider responded (alive), false if probe failed
+ */
+async function probeProvider(
+	targetModel: Model<Api>,
+	apiKey: string,
+	debug: boolean,
+): Promise<boolean> {
+	const probeContext = {
+		messages: [{ role: "user" as const, content: "hi" }],
+	} as Context;
+	try {
+		const ac = new AbortController();
+		const timeout = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
+		const probeStream = streamSimple(targetModel, probeContext, {
+			apiKey,
+			headers: targetModel.headers,
+			maxTokens: 1,
+			signal: ac.signal,
+		});
+		// Wait for any event — if we get one, the provider is alive
+		for await (const event of probeStream) {
+			clearTimeout(timeout);
+			if (event.type === "error") {
+				if (debug) console.log(`[model-router] probe failed: ${(event as any).error?.errorMessage || "error event"}`);
+				return false;
+			}
+			// Any non-error event means the provider is alive
+			if (debug) console.log(`[model-router] probe success: provider alive (got ${event.type})`);
+			return true;
+		}
+		// Stream ended without events — unusual but treat as alive
+		clearTimeout(timeout);
+		return true;
+	} catch (err) {
+		if (debug) {
+			console.log(`[model-router] probe failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+		return false;
+	}
+}
 
 export const createErrorMessage = (
 	model: Model<Api>,
@@ -528,7 +658,16 @@ export const registerRouterProvider = (
 							...(delegatedReasoning ? { reasoning: delegatedReasoning } : {}),
 						});
 
-						for await (const event of delegatedStream) {
+						// Wrap stream with idle timeout to detect stalled providers
+						const idleTimeoutMs = resolveStreamIdleTimeout(
+							state.currentConfig.streamIdleTimeoutMs,
+							targetProvider,
+						);
+						const eventSource = idleTimeoutMs > 0
+							? withIdleTimeout(delegatedStream, idleTimeoutMs)
+							: delegatedStream;
+
+						for await (const event of eventSource) {
 							if (event.type === "done") {
 								const u = event.message.usage;
 								const cost = u?.cost?.total ?? 0;
@@ -583,6 +722,100 @@ export const registerRouterProvider = (
 						if (state.currentConfig.debug) {
 							console.log(`  ✗ Failed: ${errMsg}`);
 						}
+
+						// ── Stream idle timeout: probe provider before giving up ──────
+						if (err instanceof StreamIdleTimeoutError && apiKey) {
+							let probeRetry = 0;
+							while (probeRetry < PROBE_MAX_RETRIES) {
+								probeRetry++;
+								const backoffMs = 5_000 * 2 ** (probeRetry - 1); // 5s, 10s
+								if (state.currentConfig.debug) {
+									console.log(
+										`[model-router] stream stalled on ${modelRef} — probing provider (attempt ${probeRetry}/${PROBE_MAX_RETRIES}, backoff ${backoffMs / 1000}s)`,
+									);
+								}
+								await new Promise((r) => setTimeout(r, backoffMs));
+								const alive = await probeProvider(targetModel, apiKey, state.currentConfig.debug ?? false);
+								if (!alive) {
+									if (state.currentConfig.debug) {
+										console.log(`[model-router] probe failed — provider ${modelRef} is down, triggering fallback`);
+									}
+									break; // Provider is dead → fall through to embargo + next model
+								}
+								// Provider alive — retry the original stream
+								if (state.currentConfig.debug) {
+									console.log(`[model-router] probe succeeded — retrying ${modelRef}`);
+								}
+								// Re-derive values for retry (original try-scoped vars not accessible)
+								const retryIdleMs = resolveStreamIdleTimeout(
+									state.currentConfig.streamIdleTimeoutMs,
+									targetProvider,
+								);
+								const retryContext = sanitizeContext(context);
+								try {
+									const retryStream = streamSimple(targetModel, retryContext, {
+										...options,
+										apiKey,
+										headers: targetModel.headers,
+									});
+									const retrySource = retryIdleMs > 0
+										? withIdleTimeout(retryStream, retryIdleMs)
+										: retryStream;
+									for await (const event of retrySource) {
+										if (event.type === "done") {
+											const u = event.message.usage;
+											const cost = u?.cost?.total ?? 0;
+											state.accumulatedCost += cost;
+											state.accumulatedCacheReadTokens += u?.cacheRead ?? 0;
+											decision.usage = {
+												inputTokens: (decision.usage?.inputTokens ?? 0) + (u?.input ?? 0),
+												outputTokens: (decision.usage?.outputTokens ?? 0) + (u?.output ?? 0),
+												cacheReadTokens: (decision.usage?.cacheReadTokens ?? 0) + (u?.cacheRead ?? 0),
+												cacheWriteTokens: (decision.usage?.cacheWriteTokens ?? 0) + (u?.cacheWrite ?? 0),
+												cost: (decision.usage?.cost ?? 0) + cost,
+											};
+											state.recordModelCost(decision.targetLabel, decision.tier, {
+												inputTokens: u?.input ?? 0,
+												outputTokens: u?.output ?? 0,
+												cacheReadTokens: u?.cacheRead ?? 0,
+												cacheWriteTokens: u?.cacheWrite ?? 0,
+												cost,
+											});
+										}
+										if (event.type === "error") {
+											const errEvent = event as { error?: { errorMessage?: string; errorStatus?: number } };
+											const retryErrMsg = errEvent.error?.errorMessage || "Model failed.";
+											throw new StatusAwareError(
+												retryErrMsg,
+												errEvent.error?.errorStatus,
+												parseRetryAfterMs(retryErrMsg),
+											);
+										}
+										stream.push(event);
+									}
+									if (state.currentConfig.debug) {
+										console.log(`  ✓ Success with ${modelRef} (after probe-retry)`);
+									}
+									success = true;
+									break;
+								} catch (retryErr) {
+									if (retryErr instanceof StreamIdleTimeoutError) {
+										// Same stall on retry — continue probing
+										if (state.currentConfig.debug) {
+											console.log(`[model-router] retry also stalled — will probe again`);
+										}
+										continue;
+									}
+									// Different error — treat as model failure, fall through
+									if (state.currentConfig.debug) {
+										console.log(`[model-router] retry failed: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`);
+									}
+									break;
+								}
+							}
+							if (success) break; // Exit the model loop entirely
+						}
+
 						// Embargo model on retryable errors
 						if (embargoEnabled) {
 							const errStatus = err instanceof StatusAwareError ? err.status : undefined;

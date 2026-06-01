@@ -73,6 +73,7 @@ const mockPi = {} as any;
 describe("Classifier prompt cache (Phase 1)", () => {
 	test("T5.1: cache fields are stored on MISS, turned into HIT on second call with same sig", async () => {
 		const state = new RouterState(mockPi);
+		state.activateSession("test-session");
 		state.currentConfig = {
 			...state.currentConfig,
 			classifierCache: { ttlTurns: 20 },
@@ -82,9 +83,11 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		const registry = makeRegistry();
 
 		// Manually inject a cached verdict (simulates what runClassifier would store)
-		state.lastClassifierKey = "run the tests|1|fresh";
-		state.lastClassifierVerdict = { tier: "medium", reasoning: "Test stub verdict" };
-		state.classifierTurnsSinceRun = 0;
+		state.scope.lastClassifierKey = "run the tests|1|fresh";
+		state.scope.lastClassifierVerdict = { tier: "medium", reasoning: "Test stub verdict" };
+		state.scope.classifierTurnsSinceRun = 0;
+		// Simulate that userMessagesSeen has already been incremented to 1
+		state.scope.userMessagesSeen = 1;
 
 		// Build input with no pin, no context trigger — should reach cache block
 		const input: RoutingInput = {
@@ -101,11 +104,12 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		expect(decision.reasoning).toContain("Classifier (cached):");
 		expect(decision.tier).toBe("medium");
 		// Counter should increment
-		expect(state.classifierTurnsSinceRun).toBe(1);
+		expect(state.scope.classifierTurnsSinceRun).toBe(1);
 	});
 
 	test("T5.2: TTL expiry — forces re-run when turnsSinceRun reaches ttlTurns", async () => {
 		const state = new RouterState(mockPi);
+		state.activateSession("test-session");
 		state.currentConfig = {
 			...state.currentConfig,
 			classifierCache: { ttlTurns: 3 },
@@ -115,9 +119,10 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		const registry = makeRegistry();
 
 		// Pre-load cache at TTL boundary — exactly ttlTurns means MISS (uses <, not <=)
-		state.lastClassifierKey = "run the tests|1|fresh";
-		state.lastClassifierVerdict = { tier: "medium", reasoning: "cached" };
-		state.classifierTurnsSinceRun = 3; // exactly at ttlTurns → MISS
+		state.scope.lastClassifierKey = "run the tests|1|fresh";
+		state.scope.lastClassifierVerdict = { tier: "medium", reasoning: "cached" };
+		state.scope.classifierTurnsSinceRun = 3; // exactly at ttlTurns → MISS
+		state.scope.userMessagesSeen = 1;
 
 		const input: RoutingInput = {
 			context: ctx,
@@ -130,27 +135,25 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		// Without a real classifier, it will fail and fall to heuristic
 		const decision = await resolveRouting(input, baseRoutingConfig);
 
-		// Cache was NOT used (ttlTurns boundary) — state.classifierTurnsSinceRun
-		// would be reset to 0 if classifier succeeded, or stays if it failed.
-		// The key check: we don't see "Classifier (cached):" in reasoning.
-		// (Classifier call will fail → heuristic reasoning expected)
+		// Cache was NOT used (ttlTurns boundary) — we don't see "Classifier (cached):" in reasoning.
 		expect(decision.reasoning).not.toContain("Classifier (cached):");
 	});
 
 	test("T5.3: New user message busts cache (different lastUserText)", async () => {
 		const state = new RouterState(mockPi);
+		state.activateSession("test-session");
 		state.currentConfig = {
 			...state.currentConfig,
 			classifierCache: { ttlTurns: 20 },
 		} as RouterConfig;
 
-		const ctx1 = makeContext(["run the tests"]);
 		const registry = makeRegistry();
 
 		// Pre-load cache for "run the tests|1"
-		state.lastClassifierKey = "run the tests|1|fresh";
-		state.lastClassifierVerdict = { tier: "medium", reasoning: "cached verdict" };
-		state.classifierTurnsSinceRun = 0;
+		state.scope.lastClassifierKey = "run the tests|1|fresh";
+		state.scope.lastClassifierVerdict = { tier: "medium", reasoning: "cached verdict" };
+		state.scope.classifierTurnsSinceRun = 0;
+		state.scope.userMessagesSeen = 1;
 
 		// Now use a DIFFERENT user message
 		const ctx2 = makeContext(["deploy to production"]);
@@ -168,21 +171,24 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		expect(decision.reasoning).not.toContain("Classifier (cached):");
 	});
 
-	test("T5.4: userMsgIndex disambiguation — same text repeated = different sig = MISS", async () => {
+	test("T5.4: userMsgIndex disambiguation — same text, second turn = different sig = MISS", async () => {
 		const state = new RouterState(mockPi);
+		state.activateSession("test-session");
 		state.currentConfig = {
 			...state.currentConfig,
 			classifierCache: { ttlTurns: 20 },
 		} as RouterConfig;
 
-		// Two user messages with same text — userMsgIndex = 2, not 1
-		const ctx = makeContext(["run tests", "run tests"]);
+		// Context has one user message "run tests"
+		const ctx = makeContext(["run tests"]);
 		const registry = makeRegistry();
 
-		// Pre-load cache for the first occurrence: "run tests|1"
-		state.lastClassifierKey = "run tests|1|fresh";
-		state.lastClassifierVerdict = { tier: "low", reasoning: "first occurrence" };
-		state.classifierTurnsSinceRun = 0;
+		// Pre-load cache for the first occurrence: sig = "run tests|1|fresh"
+		state.scope.lastClassifierKey = "run tests|1|fresh";
+		state.scope.lastClassifierVerdict = { tier: "low", reasoning: "first occurrence" };
+		state.scope.classifierTurnsSinceRun = 0;
+		// Simulate second turn: userMessagesSeen = 2 (turn_start fired for a repeated "run tests")
+		state.scope.userMessagesSeen = 2;
 
 		const input: RoutingInput = {
 			context: ctx,
@@ -194,12 +200,13 @@ describe("Classifier prompt cache (Phase 1)", () => {
 
 		const decision = await resolveRouting(input, baseRoutingConfig);
 
-		// userMsgIndex is now 2, so sig = "run tests|2" != "run tests|1" → MISS
+		// userMsgIndex is 2, so sig = "run tests|2|fresh" != "run tests|1|fresh" → MISS
 		expect(decision.reasoning).not.toContain("Classifier (cached):");
 	});
 
 	test("T5.5: classifier returns undefined — cache fields NOT updated (not poisoned)", async () => {
 		const state = new RouterState(mockPi);
+		state.activateSession("test-session");
 		state.currentConfig = {
 			...state.currentConfig,
 			classifierCache: { ttlTurns: 20 },
@@ -209,7 +216,7 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		const registry = makeRegistry();
 
 		// No pre-loaded cache — fresh state
-		expect(state.lastClassifierKey).toBeUndefined();
+		expect(state.scope.lastClassifierKey).toBeUndefined();
 
 		const input: RoutingInput = {
 			context: ctx,
@@ -223,12 +230,13 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		await resolveRouting(input, baseRoutingConfig);
 
 		// Cache should NOT be poisoned with undefined
-		expect(state.lastClassifierKey).toBeUndefined();
-		expect(state.lastClassifierVerdict).toBeUndefined();
+		expect(state.scope.lastClassifierKey).toBeUndefined();
+		expect(state.scope.lastClassifierVerdict).toBeUndefined();
 	});
 
-	test("T5.6: syncClassifierRan is false on cache HIT, true on MISS", async () => {
+	test("T5.6: syncClassifierRan is true on cache HIT (suppresses async spawn in adaptive mode)", async () => {
 		const state = new RouterState(mockPi);
+		state.activateSession("test-session");
 		state.currentConfig = {
 			...state.currentConfig,
 			classifierCache: { ttlTurns: 20 },
@@ -238,9 +246,10 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		const registry = makeRegistry();
 
 		// Pre-populate cache — HIT scenario
-		state.lastClassifierKey = "analyze the code|1|fresh";
-		state.lastClassifierVerdict = { tier: "high", reasoning: "complex analysis" };
-		state.classifierTurnsSinceRun = 0;
+		state.scope.lastClassifierKey = "analyze the code|1|fresh";
+		state.scope.lastClassifierVerdict = { tier: "high", reasoning: "complex analysis" };
+		state.scope.classifierTurnsSinceRun = 0;
+		state.scope.userMessagesSeen = 1;
 
 		const input: RoutingInput = {
 			context: ctx,
@@ -252,12 +261,13 @@ describe("Classifier prompt cache (Phase 1)", () => {
 
 		const decision = await resolveRouting(input, baseRoutingConfig);
 
-		// On HIT, syncClassifierRan should be false
-		expect((decision as any).syncClassifierRan).toBe(false);
+		// On HIT, syncClassifierRan is true — suppresses redundant async spawn in adaptive mode
+		expect((decision as any).syncClassifierRan).toBe(true);
 	});
 
 	test("T5.7: pinned tier bypasses cache entirely — cache fields remain untouched", async () => {
 		const state = new RouterState(mockPi);
+		state.activateSession("test-session");
 		state.currentConfig = {
 			...state.currentConfig,
 			classifierCache: { ttlTurns: 20 },
@@ -278,12 +288,13 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		await resolveRouting(input, baseRoutingConfig);
 
 		// Cache never touched
-		expect(state.lastClassifierKey).toBeUndefined();
-		expect(state.lastClassifierVerdict).toBeUndefined();
+		expect(state.scope.lastClassifierKey).toBeUndefined();
+		expect(state.scope.lastClassifierVerdict).toBeUndefined();
 	});
 
 	test("T5.8: context capacity promotion clears cache fields", async () => {
 		const state = new RouterState(mockPi);
+		state.activateSession("test-session");
 		state.currentConfig = {
 			...state.currentConfig,
 			classifierCache: { ttlTurns: 20 },
@@ -294,9 +305,10 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		const ctx = makeContext(["summarize this file"]);
 
 		// Pre-populate cache
-		state.lastClassifierKey = "summarize this file|1|fresh";
-		state.lastClassifierVerdict = { tier: "low", reasoning: "pre-cached" };
-		state.classifierTurnsSinceRun = 0;
+		state.scope.lastClassifierKey = "summarize this file|1|fresh";
+		state.scope.lastClassifierVerdict = { tier: "low", reasoning: "pre-cached" };
+		state.scope.classifierTurnsSinceRun = 0;
+		state.scope.userMessagesSeen = 1;
 
 		// Build a registry where low/medium models have tiny context windows
 		// so promotion from low → medium → high fires
@@ -331,9 +343,9 @@ describe("Classifier prompt cache (Phase 1)", () => {
 
 		// If context promotion fired, cache should be cleared
 		if (decision.isContextTriggered) {
-			expect(state.lastClassifierKey).toBeUndefined();
-			expect(state.lastClassifierVerdict).toBeUndefined();
-			expect(state.classifierTurnsSinceRun).toBe(0);
+			expect(state.scope.lastClassifierKey).toBeUndefined();
+			expect(state.scope.lastClassifierVerdict).toBeUndefined();
+			expect(state.scope.classifierTurnsSinceRun).toBe(0);
 		} else {
 			// If heuristic resolved to "high" already (e.g. message is planning-heavy),
 			// promotion wouldn't fire. Verify the decision is still valid.

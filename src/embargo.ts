@@ -16,6 +16,7 @@ const RETRYABLE_TEXT_PATTERNS = [
 	/too many requests/i,
 	/capacity/i,
 	/service.unavailable/i,
+	/stream idle timeout/i,
 ];
 
 /**
