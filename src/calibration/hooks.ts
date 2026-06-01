@@ -166,6 +166,7 @@ export function spawnClassifierForTurn(
 	cal.pendingHeuristicReasoning = decision?.reasoning ?? "";
 	cal.pendingRuleMatched = decision?.isRuleMatched ?? false;
 	cal.pendingPrompt = truncatePrompt(userPrompt, 500);
+	cal.pendingToolResultCount = context.messages.filter((m) => m.role === "toolResult").length;
 	cal.pendingTurnIndex = cal.turnsProcessed;
 	cal.pendingSpawnTime = Date.now();
 
@@ -377,7 +378,7 @@ function writeCompletedTrace(
 		prompt: cal.pendingPrompt ?? "",
 		promptFeatures: {
 			wordCount: (cal.pendingPrompt ?? "").split(/\s+/).filter(Boolean).length,
-			toolResultCount: 0,
+			toolResultCount: cal.pendingToolResultCount ?? 0,
 			hasImages: false,
 			matchedKeywords: [],
 		},
@@ -420,7 +421,7 @@ function writePendingAsFailed(
 		prompt: cal.pendingPrompt ?? "",
 		promptFeatures: {
 			wordCount: (cal.pendingPrompt ?? "").split(/\s+/).filter(Boolean).length,
-			toolResultCount: 0,
+			toolResultCount: cal.pendingToolResultCount ?? 0,
 			hasImages: false,
 			matchedKeywords: [],
 		},
@@ -452,6 +453,7 @@ function clearPending(cal: import("./types").SessionCalibration): void {
 	cal.pendingHeuristicReasoning = undefined;
 	cal.pendingRuleMatched = undefined;
 	cal.pendingPrompt = undefined;
+	cal.pendingToolResultCount = undefined;
 	cal.pendingTurnIndex = undefined;
 	cal.pendingSpawnTime = undefined;
 }

@@ -84,10 +84,17 @@ export function getConversationSummary(context: Context, maxTurns = 6): string {
 export function buildClassifierPrompt(
 	context: Context,
 	currentPhase?: RouterPhase,
+	toolCounts?: Record<string, number>,
 ): string {
 	const promptText = getLastUserText(context);
 	const historyText = getConversationSummary(context, 6);
-	
+
+	// Phase 2: tool-activity summary line (≤20 tokens, sorted by count desc)
+	let activityLine = "";
+	if (toolCounts && Object.keys(toolCounts).length > 0) {
+		const entries = Object.entries(toolCounts).sort((a, b) => b[1] - a[1]);
+		activityLine = `Recent agent activity (last 12 tool calls): ${entries.map(([n, c]) => `${n}×${c}`).join(" ")}\n\n`;
+	}
 	return `You are a model router classifier. Categorize the user's latest request into one tier: "high", "medium", or "low".
 
 Tiers:
@@ -98,7 +105,7 @@ Tiers:
 ${currentPhase ? `Current phase: ${currentPhase}\n` : ""}Conversation (user messages and assistant replies only, no tool output):
 ${historyText}
 
-Latest user message:
+${activityLine}Latest user message:
 ${promptText}
 
 Return exactly two lines:

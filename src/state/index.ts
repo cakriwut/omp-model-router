@@ -120,6 +120,14 @@ export class RouterState {
 	// When freezeAfter is configured, stores the frozen TOON block to reuse
 	frozenCompressionBlock?: { messages: Message[]; stats: CompressionStats };
 
+	// ─── Classifier prompt cache (Phase 1: prompt-equality, TTL-gated) ────
+	/** Signature of the last prompt the classifier scored. */
+	lastClassifierKey: string | undefined;
+	/** Verdict the classifier returned for `lastClassifierKey`. */
+	lastClassifierVerdict: { tier: RouterTier; reasoning: string } | undefined;
+	/** Turns elapsed since the classifier last ran (0 = it just ran this turn). */
+	classifierTurnsSinceRun = 0;
+
 	// ─── Calibration (session-level, ephemeral) ─────────────────────────
 	calibration: SessionCalibration | undefined;
 	// ─── Auto-upgrade failure tracking (transient, not persisted) ───────
@@ -190,29 +198,51 @@ export class RouterState {
 		parentSessionId?: string,
 		source: "header" | "fallback" | "none" = "none",
 	): void {
+		const previousSessionId = this.activeSessionId;
 		this.activeSessionId = sessionId;
 		const existing = this.sessionScopes.get(sessionId);
 		if (!existing) {
+			// ── Sibling carry-forward: when a new session ID appears that shares
+			// the same parent as the previously-active scope (e.g. OMP issues a
+			// new session ID for a system-reminder retry within the same sub-agent),
+			// carry forward accumulated cost/counters so budget enforcement isn't
+			// inadvertently bypassed by the ID rotation.
+			const previousScope = previousSessionId
+				? this.sessionScopes.get(previousSessionId)
+				: undefined;
+			const isSibling =
+				previousScope &&
+				parentSessionId !== undefined &&
+				previousScope.parentSessionId === parentSessionId;
+
 			this.sessionScopes.set(sessionId, {
 				sessionId,
 				parentSessionId,
-				accumulatedCost: 0,
-				accumulatedOriginalTokens: 0,
-				accumulatedCompressedTokens: 0,
-				accumulatedTokensSaved: 0,
-				accumulatedCacheReadTokens: 0,
-				compressionRequestCount: 0,
-				compressionTotalOriginalChars: 0,
-				compressionTotalCompressedChars: 0,
-				debugHistory: [],
-				lastDecision: undefined,
+				accumulatedCost: isSibling ? previousScope.accumulatedCost : 0,
+				accumulatedOriginalTokens: isSibling ? previousScope.accumulatedOriginalTokens : 0,
+				accumulatedCompressedTokens: isSibling ? previousScope.accumulatedCompressedTokens : 0,
+				accumulatedTokensSaved: isSibling ? previousScope.accumulatedTokensSaved : 0,
+				accumulatedCacheReadTokens: isSibling ? previousScope.accumulatedCacheReadTokens : 0,
+				compressionRequestCount: isSibling ? previousScope.compressionRequestCount : 0,
+				compressionTotalOriginalChars: isSibling ? previousScope.compressionTotalOriginalChars : 0,
+				compressionTotalCompressedChars: isSibling ? previousScope.compressionTotalCompressedChars : 0,
+				debugHistory: isSibling ? previousScope.debugHistory : [],
+				lastDecision: isSibling ? previousScope.lastDecision : undefined,
 				isStreaming: false,
-				tierCounter: { high: 0, medium: 0, low: 0 },
-				modelCosts: new Map(),
+				tierCounter: isSibling
+					? { ...previousScope.tierCounter }
+					: { high: 0, medium: 0, low: 0 },
+				modelCosts: isSibling
+					? new Map(previousScope.modelCosts)
+					: new Map(),
 			});
 			if (this.currentConfig.debug && !this.parentAttributionLogged.has(sessionId)) {
 				this.parentAttributionLogged.add(sessionId);
-				if (parentSessionId !== undefined && source === "header") {
+				if (isSibling) {
+					console.log(
+						`[model-router] sibling carry-forward: ${previousSessionId} → ${sessionId} (cost=$${previousScope.accumulatedCost.toFixed(4)})`,
+					);
+				} else if (parentSessionId !== undefined && source === "header") {
 					console.log(
 						`[model-router] parent attribution: child=${sessionId} source=header parent=${parentSessionId}`,
 					);

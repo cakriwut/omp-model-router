@@ -218,6 +218,11 @@ export interface RouterConfig {
 	 * Default: 600 000 ms (10 minutes).
 	 */
 	pinTimeout?: number;
+	/** Classifier prompt-equality cache (Phase 1). */
+	classifierCache?: {
+		/** Force the classifier to re-run after this many turns even if the prompt is unchanged. Default: 20. */
+		ttlTurns?: number;
+	};
 }
 
 export interface RoutingDecisionUsage {

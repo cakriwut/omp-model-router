@@ -53,6 +53,7 @@ export const FALLBACK_CONFIG: RouterConfig = {
 		minCooldownMs: 5_000,
 		maxCooldownMs: 3_600_000,
 	},
+	classifierCache: { ttlTurns: 20 },
 };
 
 export const THINKING_LEVELS = [

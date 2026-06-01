@@ -37,6 +37,8 @@ export interface SessionCalibration {
 
 	/** Captured user prompt at spawn time (truncated 500 chars) */
 	pendingPrompt?: string;
+	/** Count of toolResult messages in context at spawn time */
+	pendingToolResultCount?: number;
 	pendingTurnIndex?: number;
 
 	/** Spawn timestamp for latency measurement */

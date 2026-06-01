@@ -274,6 +274,7 @@ export const registerRouterProvider = (
 							lastExtensionContext: state.lastExtensionContext,
 							calibration: state.calibration,
 							scope: state.scope,
+							state: state,
 						},
 						{
 							profileName: model.id,

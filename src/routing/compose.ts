@@ -15,6 +15,8 @@ import type {
 } from "../types";
 import type { SessionCalibration, CalibrationConfig } from "../calibration/types";
 import type { SessionScope } from "../state";
+import type { RouterState } from "../state";
+import { getLastUserText, extractRecentToolCalls, getBucket } from "../utils/messages.js";
 import { updateCalibrationMatrix, applyCalibratedTier } from "../calibration/session";
 import { setScopedPin } from "./pin";
 import { hasImageAttachment } from "./text";
@@ -103,6 +105,11 @@ export interface RoutingInput {
 	 * Optional for backward compat; when absent, scoped pin creation is skipped.
 	 */
 	scope?: SessionScope;
+	/**
+	 * Router state — used for the classifier prompt cache (Phase 1).
+	 * Optional for backward compat; when absent, cache is bypassed.
+	 */
+	state?: RouterState;
 }
 
 export interface RoutingConfig {
@@ -182,43 +189,82 @@ export const resolveRouting = async (
 						false,
 					);
 					decision.isContextTriggered = true;
+					// Cache bust: routing context changed, force classifier re-eval on next eligible turn.
+					if (input.state) {
+						input.state.lastClassifierKey = undefined;
+						input.state.lastClassifierVerdict = undefined;
+						input.state.classifierTurnsSinceRun = 0;
+					}
 				}
 			}
 		} catch {
 			// ignore — fall through with existing decision
 		}
 	}
-	// 3. Classifier override — only when not pinned, context-triggered, or rule-matched
+	// 3. Classifier override — gated by prompt-equality cache (Phase 1)
 	let syncClassifierRan = false;
-	let syncClassifierVerdict: { tier: RouterTier; reasoning: string } | undefined;
+	let verdict: { tier: RouterTier; reasoning: string } | undefined;
 	if (
 		config.classifierModel &&
 		!input.pinnedTier &&
 		!decision.isContextTriggered &&
 		!decision.isRuleMatched
 	) {
-		const { runClassifier } = await import("./index.js");
-		syncClassifierVerdict = await runClassifier(
-			config.classifierModel,
-			input.modelRegistry,
-			input.context,
-			decision.phase, // Use current heuristic decision's phase, not previous
-			config.debug,
-		);
-		syncClassifierRan = true;
-		
-		if (syncClassifierVerdict) {
-			// Record sync classifier verdict into matrix
-			if (input.calibration && config.calibrationConfig?.enabled) {
-				updateCalibrationMatrix(input.calibration, decision.tier, syncClassifierVerdict.tier);
+		// ── Compute classifier signature (Phase 1 cache key) ──────────────
+		const lastUserText = getLastUserText(input.context) ?? "";
+		let userMsgIndex = 0;
+		for (const m of input.context.messages) {
+			if (m.role === "user") userMsgIndex++;
+		}
+		// Phase 2: tool-mix bucket extends the cache key
+		const { counts: toolCounts } = extractRecentToolCalls(input.context);
+		const bucket = getBucket(toolCounts);
+		const sig = `${lastUserText}|${userMsgIndex}|${bucket}`;
+
+		// ── Cache gate ──────────────────────────────────────────────────────
+		const ttlTurns = input.state?.currentConfig.classifierCache?.ttlTurns ?? 20;
+		const cacheHit =
+			input.state !== undefined &&
+			input.state.lastClassifierKey === sig &&
+			input.state.lastClassifierVerdict !== undefined &&
+			input.state.classifierTurnsSinceRun < ttlTurns;
+
+		if (cacheHit && input.state) {
+			verdict = input.state.lastClassifierVerdict;
+			input.state.classifierTurnsSinceRun += 1;
+			syncClassifierRan = false;
+		} else {
+			const { runClassifier } = await import("./index.js");
+			verdict = await runClassifier(
+				config.classifierModel,
+				input.modelRegistry,
+				input.context,
+				decision.phase,
+				config.debug,
+				toolCounts,
+			);
+			syncClassifierRan = true;
+			if (verdict && input.state) {
+				input.state.lastClassifierKey = sig;
+				input.state.lastClassifierVerdict = verdict;
+				input.state.classifierTurnsSinceRun = 0;
 			}
-			
+		}
+
+		if (verdict) {
+			// Record verdict into calibration matrix — always, hit or miss
+			if (input.calibration && config.calibrationConfig?.enabled) {
+				updateCalibrationMatrix(input.calibration, decision.tier, verdict.tier);
+			}
+
 			decision = buildRoutingDecision(
 				config.profileName,
 				config.profile,
-				syncClassifierVerdict.tier,
-				phaseForTier(syncClassifierVerdict.tier),
-				`Classifier: ${syncClassifierVerdict.reasoning}`,
+				verdict.tier,
+				phaseForTier(verdict.tier),
+				cacheHit
+					? `Classifier (cached): ${verdict.reasoning}`
+					: `Classifier: ${verdict.reasoning}`,
 				config.thinkingOverrides,
 				true,
 			);
@@ -228,12 +274,12 @@ export const resolveRouting = async (
 				decision.reasoning = `Budget exceeded. Downgraded classifier decision to medium. (Original: ${decision.reasoning})`;
 				decision.isBudgetForced = true;
 			}
-			// P2 pin for classifier override
-			if (input.scope && config.pinConfig) {
+			// P2 pin for classifier override (only on fresh classifier run, not cache hit)
+			if (!cacheHit && input.scope && config.pinConfig) {
 				setScopedPin(input.scope, decision.tier, "classifier", config.pinConfig);
 			}
 		} else {
-			// Classifier failed — try matrix calibration as fallback
+			// Classifier failed (MISS path only) — try matrix calibration as fallback
 			if (input.calibration && config.calibrationConfig?.enabled) {
 				const calibratedTier = applyCalibratedTier(
 					decision.tier,
@@ -252,8 +298,6 @@ export const resolveRouting = async (
 					);
 				}
 			}
-			
-			// Mark decision to indicate classifier fallback
 			decision.reasoning = `Classifier unavailable, using heuristic: ${decision.reasoning}`;
 		}
 	}
