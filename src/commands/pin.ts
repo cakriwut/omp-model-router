@@ -30,7 +30,13 @@ export const handlePin = (
 		if (pin) {
 			const remaining = timeout - (Date.now() - pin.setAt);
 			const ttl = remaining > 0 ? ` (expires in ${formatTTL(remaining)})` : " (expired)";
-			pinLine = `Scoped pin: ${pin.tier} [source: ${pin.source}]${ttl}`;
+			const pressureThreshold = state.currentConfig.pinPressureThreshold ?? 3;
+			const pressureCount = pin.overridePressureCount ?? 0;
+			const pressureSuffix =
+				pin.source !== "user" && pressureCount > 0
+					? ` [pressure: ${pressureCount}/${pressureThreshold}]`
+					: "";
+			pinLine = `Scoped pin: ${pin.tier} [source: ${pin.source}]${pressureSuffix}${ttl}`;
 		} else {
 			const floor = state.currentConfig.defaultPin ?? "auto";
 			pinLine = `Scoped pin: none (floor: ${floor})`;

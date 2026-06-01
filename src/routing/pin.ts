@@ -16,6 +16,8 @@ import type { SessionScope } from "../state";
 
 /** Default pin timeout in milliseconds (10 minutes). */
 export const DEFAULT_PIN_TIMEOUT_MS = 600_000;
+/** Default consecutive-disagreement threshold before a system pin pressure-lapses. */
+export const DEFAULT_PIN_PRESSURE_THRESHOLD = 3;
 
 /**
  * Resolve the effective pin tier for the current routing decision.
@@ -106,6 +108,7 @@ export function setScopedPin(
 		tier,
 		setAt: Date.now(),
 		source,
+		overridePressureCount: 0,
 	};
 }
 
@@ -121,4 +124,61 @@ export function setScopedPin(
 export function clearScopedPin(scope: SessionScope): void {
 	scope.scopedPin = undefined;
 	scope.lastDecision = undefined;
+}
+
+/**
+ * Increment (or reset) the override-pressure counter on a system pin.
+ *
+ * Called each turn a system pin is active, with the tier the heuristic
+ * *would have chosen* had no pin been set (the "shadow tier").
+ *
+ * Behaviour:
+ *   - If `shadowTier === pin.tier`: the heuristic agrees → counter resets to 0.
+ *   - If `shadowTier !== pin.tier`: the heuristic disagrees → counter increments.
+ *   - When counter reaches `threshold` (and threshold > 0): the pin lapses.
+ *     `scope.scopedPin` and `scope.lastDecision` are cleared, and `true` is
+ *     returned so the caller can re-route freely and bust the classifier cache.
+ *   - User pins (`source === "user"`) are **immune** — this function is a no-op
+ *     for them and always returns `false`.
+ *
+ * @param scope       Active session scope (pin mutated in place on disagreement).
+ * @param shadowTier  What the heuristic would have chosen without the pin.
+ * @param threshold   Consecutive disagreements needed to lapse (0 = disabled).
+ * @param debug       When true, logs lapse events to console.
+ * @returns           `true` if the pin just lapsed (caller should re-route); `false` otherwise.
+ */
+export function incrementPinPressure(
+	scope: SessionScope,
+	shadowTier: RouterTier,
+	threshold: number,
+	debug = false,
+): boolean {
+	const pin = scope.scopedPin;
+	// No pin, or user pin → immune.
+	if (!pin || pin.source === "user") return false;
+	// Pressure lapse disabled.
+	if (threshold <= 0) return false;
+
+	if (shadowTier === pin.tier) {
+		// Heuristic agrees — reset streak.
+		pin.overridePressureCount = 0;
+		return false;
+	}
+
+	// Heuristic disagrees — increment streak.
+	pin.overridePressureCount = (pin.overridePressureCount ?? 0) + 1;
+
+	if (pin.overridePressureCount >= threshold) {
+		if (debug) {
+			console.log(
+				`[model-router] pin pressure lapse: tier=${pin.tier} source=${pin.source} ` +
+				`pressure=${pin.overridePressureCount}/${threshold} shadow=${shadowTier} → routing freely`,
+			);
+		}
+		scope.scopedPin = undefined;
+		scope.lastDecision = undefined;
+		return true;
+	}
+
+	return false;
 }

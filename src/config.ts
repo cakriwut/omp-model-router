@@ -22,6 +22,7 @@ export const FALLBACK_CONFIG: RouterConfig = {
 	enableRtk: false,  // RTK integration disabled by default (opt-in)
 	defaultPin: "auto" as const,
 	pinTimeout: 600_000,
+	pinPressureThreshold: 3,
 	profiles: {
 		auto: {
 			high: { model: "anthropic/claude-sonnet-4-5", thinking: "high" as ThinkingLevel },

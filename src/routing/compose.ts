@@ -18,7 +18,7 @@ import type { SessionScope } from "../state";
 import type { RouterState } from "../state";
 import { getLastUserText, extractRecentToolCalls, getBucket } from "../utils/messages.js";
 import { updateCalibrationMatrix, applyCalibratedTier } from "../calibration/session";
-import { setScopedPin } from "./pin";
+import { setScopedPin, incrementPinPressure, DEFAULT_PIN_PRESSURE_THRESHOLD } from "./pin";
 import { hasImageAttachment } from "./text";
 import { decideRouting, buildRoutingDecision, phaseForTier } from "./heuristic";
 
@@ -121,8 +121,8 @@ export interface RoutingConfig {
 	classifierModel?: string | string[];
 	debug?: boolean;
 	calibrationConfig?: CalibrationConfig;
-	/** Subset of RouterConfig needed for scoped-pin operations (timeout, floor). */
-	pinConfig?: { pinTimeout?: number; defaultPin?: RouterTier | "auto" };
+	/** Subset of RouterConfig needed for scoped-pin operations (timeout, floor, pressure threshold). */
+	pinConfig?: { pinTimeout?: number; defaultPin?: RouterTier | "auto"; pinPressureThreshold?: number };
 }
 
 /**
@@ -148,6 +148,48 @@ export const resolveRouting = async (
 		config.rules,
 		input.isBudgetExceeded,
 	);
+
+	// ── Pressure lapse: if a system pin is active, check whether the heuristic
+	//    shadow (what the heuristic would choose without the pin) has disagreed
+	//    for N consecutive turns. If so, lapse the pin early and re-route freely.
+	if (input.pinnedTier && input.scope && config.pinConfig) {
+		const pin = input.scope.scopedPin;
+		if (pin && pin.source !== "user") {
+			// Compute shadow tier: what the heuristic would say with no pin.
+			const shadowDecision = decideRouting(
+				input.context,
+				config.profileName,
+				config.profile,
+				input.previousDecision,
+				undefined, // no pin
+				config.thinkingOverrides,
+				config.phaseBias,
+				config.rules,
+				input.isBudgetExceeded,
+			);
+			const threshold =
+				config.pinConfig.pinPressureThreshold ??
+				DEFAULT_PIN_PRESSURE_THRESHOLD;
+			const lapsed = incrementPinPressure(
+				input.scope,
+				shadowDecision.tier,
+				threshold,
+				config.debug,
+			);
+			if (lapsed) {
+				// Bust classifier cache — routing context has changed.
+				if (input.state) {
+					input.state.lastClassifierKey = undefined;
+					input.state.lastClassifierVerdict = undefined;
+					input.state.classifierTurnsSinceRun = 0;
+				}
+				// Re-route freely (no pin) using the shadow decision already computed.
+				decision = shadowDecision;
+				// Clear pinnedTier for all downstream steps (context trigger, classifier, image).
+				input = { ...input, pinnedTier: undefined };
+			}
+		}
+	}
 
 	// ── P2 pin for Rule J and rule-match (heuristic-created sticky decisions) ───────
 	if (input.scope && !input.pinnedTier && config.pinConfig) {

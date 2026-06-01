@@ -18,6 +18,13 @@ export interface ScopedPin {
 	setAt: number;
 	/** Who created the pin — determines priority and conflict resolution. */
 	source: ScopedPinSource;
+	/**
+	 * Number of consecutive turns where the heuristic shadow disagreed with this pin tier.
+	 * Incremented each turn the shadow tier differs; reset to 0 on agreement.
+	 * Only tracked for system pins (source !== "user"); user pins are immune.
+	 * When this reaches `config.pinPressureThreshold` the pin lapses early.
+	 */
+	overridePressureCount?: number;
 }
 export type RouterPhase = "planning" | "implementation" | "lightweight";
 export type RouterPinByProfile = Partial<Record<string, RouterTier>>;
@@ -218,6 +225,15 @@ export interface RouterConfig {
 	 * Default: 600 000 ms (10 minutes).
 	 */
 	pinTimeout?: number;
+	/**
+	 * Number of consecutive turns where the heuristic shadow must disagree with
+	 * an active system pin before the pin lapses early (pressure lapse).
+	 * Only applies to pins created by system sources (heuristic, classifier, rule,
+	 * auto-upgrade). User pins (`/router pin <tier>`) are always immune.
+	 * Set to `0` to disable pressure lapse entirely.
+	 * Default: 3.
+	 */
+	pinPressureThreshold?: number;
 	/** Classifier prompt-equality cache (Phase 1). */
 	classifierCache?: {
 		/** Force the classifier to re-run after this many turns even if the prompt is unchanged. Default: 20. */

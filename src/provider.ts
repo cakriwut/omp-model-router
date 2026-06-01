@@ -415,7 +415,7 @@ export const registerRouterProvider = (
 							classifierModel: effectiveClassifierModel,
 							debug: state.currentConfig.debug,
 							calibrationConfig: state.currentConfig.calibration,
-							pinConfig: { pinTimeout: state.currentConfig.pinTimeout, defaultPin: state.currentConfig.defaultPin },
+							pinConfig: { pinTimeout: state.currentConfig.pinTimeout, defaultPin: state.currentConfig.defaultPin, pinPressureThreshold: state.currentConfig.pinPressureThreshold },
 						},
 						);
 
