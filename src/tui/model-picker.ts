@@ -110,14 +110,21 @@ function collectModels(registry: ModelRegistry | undefined): ModelItem[] {
 	return out;
 }
 
-function ctxKLabel(contextWindow: number): string {
-	return `${Math.floor(contextWindow / 1000)}k`;
+function ctxLabel(contextWindow: number): string {
+	const k = Math.floor(contextWindow / 1000);
+	if (k >= 1000 && k % 1000 === 0) return `${k / 1000}M`;
+	if (k >= 1000) return `${(k / 1000).toFixed(1)}M`;
+	return `${k}k`;
 }
 
 function costLabel(input: number | undefined, output: number | undefined): string {
 	if (input == null || output == null) return "cost unknown";
 	const fmt = (n: number): string => (Number.isInteger(n) ? `${n}` : n.toFixed(2));
 	return `$${fmt(input)}/$${fmt(output)}`;
+}
+
+function modelMeta(contextWindow: number, costInput: number | undefined, costOutput: number | undefined): string {
+	return `${ctxLabel(contextWindow)} ctx ${costLabel(costInput, costOutput)}`;
 }
 
 /**
@@ -346,7 +353,7 @@ export class ModelPickerComponent implements Component {
 
 			const cursor = isSelected ? t.fg("accent", "❯ ") : "  ";
 			const primary = `${item.provider}/${item.id}`;
-			const meta = `${ctxKLabel(item.contextWindow)} ctx · ${costLabel(item.costInput, item.costOutput)} per M`;
+			const meta = modelMeta(item.contextWindow, item.costInput, item.costOutput);
 			const body = isSelected
 				? `${t.fg("accent", primary)} ${t.fg("muted", `· ${meta}`)}`
 				: `${primary} ${t.fg("muted", `· ${meta}`)}`;
@@ -362,7 +369,7 @@ export class ModelPickerComponent implements Component {
 	#renderFooterDetail(): string {
 		const item = this.#highlighted();
 		if (!item) return this.#theme.fg("muted", "  (no model selected)");
-		const meta = `${item.name} · ${item.provider} · ${ctxKLabel(item.contextWindow)} ctx · ${costLabel(item.costInput, item.costOutput)} per M tokens`;
+		const meta = `${item.name} · ${item.provider} · ${modelMeta(item.contextWindow, item.costInput, item.costOutput)}`;
 		return `  ${this.#theme.fg("muted", meta)}`;
 	}
 
@@ -374,7 +381,7 @@ export class ModelPickerComponent implements Component {
 		const items: SelectItem[] = this.#models.map((m) => ({
 			value: `${m.provider}/${m.id}`,
 			label: `${m.provider}/${m.id}`,
-			description: `${ctxKLabel(m.contextWindow)} ctx · ${costLabel(m.costInput, m.costOutput)} per M`,
+			description: modelMeta(m.contextWindow, m.costInput, m.costOutput),
 		}));
 		return new SelectList(items, 8, buildSelectListTheme(this.#theme));
 	}
