@@ -158,7 +158,7 @@ export class ModelPickerComponent implements Component {
 		this.#currentFallbacks = options.currentFallbacks ?? [];
 		this.#models = options.models ?? collectModels(options.modelRegistry);
 
-		this.#tabBar = new TabBar("", TABS, {
+		this.#tabBar = new TabBar("Provider", TABS, {
 			label: (text) => theme.fg("muted", text),
 			activeTab: (text) => theme.fg("accent", text),
 			inactiveTab: (text) => theme.fg("muted", text),
