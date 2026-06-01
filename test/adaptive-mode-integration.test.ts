@@ -70,29 +70,17 @@ describe("Adaptive mode classifier integration", () => {
 		expect(decision.isClassifier).toBeFalsy();
 	});
 
-	test("user pin: classifier is skipped entirely, reasoning reflects pin only", async () => {
+	test("adaptive mode: when classifier is skipped (pinned), reasoning should NOT mention classifier", async () => {
 		const context: Context = {
 			messages: [
 				{ role: "user", content: "investigate model router adaptive mode issue", timestamp: Date.now() },
 			],
 		};
 
-		// Scope with a user-sourced scoped pin
-		const scope: any = {
-			scopedPin: { tier: "medium", setAt: Date.now(), source: "user", overridePressureCount: 0 },
-			lastDecision: undefined,
-			userMessagesSeen: 1,
-			lastUserEntryId: undefined,
-			lastClassifierKey: undefined,
-			lastClassifierVerdict: undefined,
-			classifierTurnsSinceRun: 0,
-		};
-
 		const input: RoutingInput = {
 			context,
 			previousDecision: undefined,
 			pinnedTier: "medium",
-			scope,
 			isBudgetExceeded: false,
 			modelRegistry: createFailingModelRegistry(1.0),
 		};
@@ -107,55 +95,9 @@ describe("Adaptive mode classifier integration", () => {
 
 		const decision = await resolveRouting(input, config);
 
-		// User pin holds — decision stays medium
 		expect(decision.tier).toBe("medium");
 		expect(decision.reasoning).toMatch(/Pinned to medium tier/);
-		// Classifier was blocked — no classifier-related reasoning
-		expect(decision.reasoning).not.toMatch(/Classifier/);
-		expect(decision.reasoning).not.toMatch(/unavailable/);
-	});
-
-	test("system pin: classifier runs, pin holds while below pressure threshold", async () => {
-		const context: Context = {
-			messages: [
-				{ role: "user", content: "investigate model router adaptive mode issue", timestamp: Date.now() },
-			],
-		};
-
-		// Scope with a classifier-sourced scoped pin (system pin)
-		const scope: any = {
-			scopedPin: { tier: "medium", setAt: Date.now(), source: "classifier", overridePressureCount: 0 },
-			lastDecision: undefined,
-			userMessagesSeen: 1,
-			lastUserEntryId: undefined,
-			lastClassifierKey: undefined,
-			lastClassifierVerdict: undefined,
-			classifierTurnsSinceRun: 0,
-		};
-
-		const input: RoutingInput = {
-			context,
-			previousDecision: undefined,
-			pinnedTier: "medium",
-			scope,
-			isBudgetExceeded: false,
-			modelRegistry: createFailingModelRegistry(1.0),
-			// No pinConfig → no pressure lapse path fires
-		};
-
-		const config: RoutingConfig = {
-			profileName: "auto",
-			profile: mockProfile,
-			phaseBias: 0.5,
-			classifierModel: "amazon-bedrock/us.amazon.nova-micro-v1:0",
-			debug: true,
-		};
-
-		const decision = await resolveRouting(input, config);
-
-		// System pin holds — decision stays medium
-		expect(decision.tier).toBe("medium");
-		expect(decision.reasoning).toMatch(/Pinned to medium tier/);
+		expect(decision.reasoning).not.toMatch(/Classifier unavailable/);
 	});
 
 	test("adaptive mode: rule-matched decisions should NOT attempt classifier", async () => {

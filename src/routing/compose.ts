@@ -136,7 +136,7 @@ export const resolveRouting = async (
 	input: RoutingInput,
 	config: RoutingConfig,
 ): Promise<RoutingDecision> => {
-	// 1. Heuristic decision (honours active pin)
+	// 1. Heuristic decision
 	let decision = decideRouting(
 		input.context,
 		config.profileName,
@@ -149,33 +149,64 @@ export const resolveRouting = async (
 		input.isBudgetExceeded,
 	);
 
-	// ── Determine active pin shape once ──────────────────────────────────────
-	const activePin = input.pinnedTier ? input.scope?.scopedPin : undefined;
-	const isUserPin  = activePin?.source === "user";
-	const isSystemPin = !!input.pinnedTier && !!activePin && !isUserPin;
+	// ── Pressure lapse: if a system pin is active, check whether the heuristic
+	//    shadow (what the heuristic would choose without the pin) has disagreed
+	//    for N consecutive turns. If so, lapse the pin early and re-route freely.
+	if (input.pinnedTier && input.scope && config.pinConfig) {
+		const pin = input.scope.scopedPin;
+		if (pin && pin.source !== "user") {
+			// Compute shadow tier: what the heuristic would say with no pin.
+			const shadowDecision = decideRouting(
+				input.context,
+				config.profileName,
+				config.profile,
+				input.previousDecision,
+				undefined, // no pin
+				config.thinkingOverrides,
+				config.phaseBias,
+				config.rules,
+				input.isBudgetExceeded,
+			);
+			const threshold =
+				config.pinConfig.pinPressureThreshold ??
+				DEFAULT_PIN_PRESSURE_THRESHOLD;
+			const lapsed = incrementPinPressure(
+				input.scope,
+				shadowDecision.tier,
+				threshold,
+				config.debug,
+			);
+			if (lapsed) {
+				// Bust classifier cache — routing context has changed.
+				if (input.state) {
+					input.state.lastClassifierKey = undefined;
+					input.state.lastClassifierVerdict = undefined;
+					input.state.classifierTurnsSinceRun = 0;
+				}
+				// Re-route freely (no pin) using the shadow decision already computed.
+				decision = shadowDecision;
+				// Clear pinnedTier for all downstream steps (context trigger, classifier, image).
+				input = { ...input, pinnedTier: undefined };
+			}
+		}
+	}
 
-	// ── Pressure lapse: heuristic shadow (always computed for system pins) ───
-	//    Computed here so we have it available as a fallback pressure signal
-	//    when the classifier is unavailable or skipped by cache.
-	let shadowTierForPressure: RouterTier | undefined;
-	if (isSystemPin && input.scope && config.pinConfig) {
-		const shadowDecision = decideRouting(
-			input.context,
-			config.profileName,
-			config.profile,
-			input.previousDecision,
-			undefined, // no pin
-			config.thinkingOverrides,
-			config.phaseBias,
-			config.rules,
-			input.isBudgetExceeded,
-		);
-		shadowTierForPressure = shadowDecision.tier;
+	// ── P2 pin for Rule J and rule-match (heuristic-created sticky decisions) ───────
+	if (input.scope && !input.pinnedTier && config.pinConfig) {
+		const isRuleJ = decision.reasoning.includes("planning-phase bias");
+		const isRuleMatch = decision.isRuleMatched === true;
+		if (isRuleJ) {
+			setScopedPin(input.scope, decision.tier, "heuristic", config.pinConfig);
+		} else if (isRuleMatch) {
+			setScopedPin(input.scope, decision.tier, "rule", config.pinConfig);
+		}
 	}
 
 	// 2. Context trigger — promote tier to the cheapest one whose model can
-	//    actually fit the current context. Runs before classifier so the
-	//    classifier sees the correct (promoted) phase.
+	//    actually fit the current context. Static thresholds are wrong because
+	//    each tier's model has its own contextWindow (e.g. Haiku 200k vs
+	//    Sonnet 200k vs Nova Micro 128k). We require headroom = max(maxTokens, 8k)
+	//    so the response has room to generate.
 	if (decision.tier !== "high" && input.lastExtensionContext) {
 		try {
 			const usage = await input.lastExtensionContext.getContextUsage();
@@ -213,36 +244,27 @@ export const resolveRouting = async (
 			// ignore — fall through with existing decision
 		}
 	}
-
-	// 3. Classifier — runs unless:
-	//    (a) no classifierModel configured,
-	//    (b) context-triggered (already promoted by capacity),
-	//    (c) rule-matched (hard rule takes precedence),
-	//    (d) user pin is active (user explicitly chose — respect it).
-	//
-	//    System pins do NOT block the classifier. Instead the classifier
-	//    verdict is used as the pressure signal: if the classifier disagrees
-	//    with the pin for N consecutive turns the pin lapses and the
-	//    classifier verdict becomes the routing decision. While the pin
-	//    holds, the classifier verdict is recorded into the calibration
-	//    matrix but does not change the decision.
+	// 3. Classifier override — gated by prompt-equality cache (Phase 1)
 	let syncClassifierRan = false;
 	let verdict: { tier: RouterTier; reasoning: string } | undefined;
 	if (
 		config.classifierModel &&
-		!isUserPin &&
+		!input.pinnedTier &&
 		!decision.isContextTriggered &&
 		!decision.isRuleMatched
 	) {
-		// ── Compute classifier cache signature ─────────────────────────────
+		// ── Compute classifier signature (Phase 1 cache key) ──────────────
 		const lastUserText = getLastUserText(input.context) ?? "";
+		// Monotonic user-message counter on scope — incremented by turn_start,
+		// never rolls back under TOON compression (unlike counting role==="user" in messages).
 		const scope = input.state?.scope;
 		const userMsgIndex = scope?.userMessagesSeen ?? 0;
+		// Phase 2: tool-mix bucket extends the cache key
 		const { counts: toolCounts } = extractRecentToolCalls(input.context);
 		const bucket = getBucket(toolCounts);
 		const sig = `${lastUserText}|${userMsgIndex}|${bucket}`;
 
-		// ── Cache gate ─────────────────────────────────────────────────────
+		// ── Cache gate ──────────────────────────────────────────────────────
 		const ttlTurns = input.state?.currentConfig.classifierCache?.ttlTurns ?? 20;
 		const cacheHit =
 			scope !== undefined &&
@@ -253,7 +275,7 @@ export const resolveRouting = async (
 		if (cacheHit && scope) {
 			verdict = scope.lastClassifierVerdict;
 			scope.classifierTurnsSinceRun += 1;
-			syncClassifierRan = true;
+			syncClassifierRan = true; // suppress redundant async spawn in adaptive mode
 		} else {
 			const { runClassifier } = await import("./index.js");
 			verdict = await runClassifier(
@@ -272,162 +294,54 @@ export const resolveRouting = async (
 			}
 		}
 
-		if (isSystemPin && input.scope && config.pinConfig) {
-			// ── System pin active: classifier feeds pressure lapse ─────────
-			// Use classifier verdict as the pressure signal (preferred over
-			// heuristic shadow when classifier is available), falling back to
-			// heuristic shadow when the classifier returned nothing.
-			const pressureTier = verdict?.tier ?? shadowTierForPressure;
-			let lapsed = false;
-			if (pressureTier !== undefined) {
-				const threshold =
-					config.pinConfig.pinPressureThreshold ??
-					DEFAULT_PIN_PRESSURE_THRESHOLD;
-				lapsed = incrementPinPressure(
-					input.scope,
-					pressureTier,
-					threshold,
-					config.debug,
-				);
+		if (verdict) {
+			// Record verdict into calibration matrix — always, hit or miss
+			if (input.calibration && config.calibrationConfig?.enabled) {
+				updateCalibrationMatrix(input.calibration, decision.tier, verdict.tier);
 			}
 
-			if (lapsed) {
-				// Pin lapsed — bust classifier cache and route freely.
-				if (input.state) {
-					input.state.lastClassifierKey = undefined;
-					input.state.lastClassifierVerdict = undefined;
-					input.state.classifierTurnsSinceRun = 0;
-				}
-				// Prefer classifier verdict as the free decision; fall back to
-				// heuristic shadow if classifier was unavailable.
-				if (verdict) {
+			decision = buildRoutingDecision(
+				config.profileName,
+				config.profile,
+				verdict.tier,
+				phaseForTier(verdict.tier),
+				cacheHit
+					? `Classifier (cached): ${verdict.reasoning}`
+					: `Classifier: ${verdict.reasoning}`,
+				config.thinkingOverrides,
+				true,
+			);
+			if (input.isBudgetExceeded && decision.tier === "high") {
+				decision.tier = "medium";
+				decision.phase = "implementation";
+				decision.reasoning = `Budget exceeded. Downgraded classifier decision to medium. (Original: ${decision.reasoning})`;
+				decision.isBudgetForced = true;
+			}
+			// P2 pin for classifier override (only on fresh classifier run, not cache hit)
+			if (!cacheHit && input.scope && config.pinConfig) {
+				setScopedPin(input.scope, decision.tier, "classifier", config.pinConfig);
+			}
+		} else {
+			// Classifier failed (MISS path only) — try matrix calibration as fallback
+			if (input.calibration && config.calibrationConfig?.enabled) {
+				const calibratedTier = applyCalibratedTier(
+					decision.tier,
+					input.calibration,
+					config.calibrationConfig,
+				);
+				if (calibratedTier !== decision.tier) {
 					decision = buildRoutingDecision(
 						config.profileName,
 						config.profile,
-						verdict.tier,
-						phaseForTier(verdict.tier),
-						`Pin lapsed (classifier pressure): ${verdict.reasoning}`,
+						calibratedTier,
+						phaseForTier(calibratedTier),
+						`Calibrated: heuristic ${decision.tier} → ${calibratedTier} (matrix-based override)`,
 						config.thinkingOverrides,
-						true,
-					);
-				} else if (shadowTierForPressure !== undefined) {
-					// No classifier — use heuristic shadow (pre-computed above)
-					decision = decideRouting(
-						input.context,
-						config.profileName,
-						config.profile,
-						input.previousDecision,
-						undefined,
-						config.thinkingOverrides,
-						config.phaseBias,
-						config.rules,
-						input.isBudgetExceeded,
+						false,
 					);
 				}
-				// Clear pinnedTier for all downstream steps.
-				input = { ...input, pinnedTier: undefined };
-			} else {
-				// Pin still holds — record calibration matrix but keep pinned decision.
-				if (verdict && input.calibration && config.calibrationConfig?.enabled) {
-					updateCalibrationMatrix(input.calibration, decision.tier, verdict.tier);
-				}
-				// decision stays as the pinned heuristic output — do not override.
 			}
-		} else if (!input.pinnedTier) {
-			// ── No pin: apply classifier verdict as routing override ────────
-			if (verdict) {
-				// Record verdict into calibration matrix
-				if (input.calibration && config.calibrationConfig?.enabled) {
-					updateCalibrationMatrix(input.calibration, decision.tier, verdict.tier);
-				}
-
-				decision = buildRoutingDecision(
-					config.profileName,
-					config.profile,
-					verdict.tier,
-					phaseForTier(verdict.tier),
-					cacheHit
-						? `Classifier (cached): ${verdict.reasoning}`
-						: `Classifier: ${verdict.reasoning}`,
-					config.thinkingOverrides,
-					true,
-				);
-				if (input.isBudgetExceeded && decision.tier === "high") {
-					decision.tier = "medium";
-					decision.phase = "implementation";
-					decision.reasoning = `Budget exceeded. Downgraded classifier decision to medium. (Original: ${decision.reasoning})`;
-					decision.isBudgetForced = true;
-				}
-				// P2 pin for classifier override (only on fresh run, not cache hit)
-				if (!cacheHit && input.scope && config.pinConfig) {
-					setScopedPin(input.scope, decision.tier, "classifier", config.pinConfig);
-				}
-			} else {
-				// Classifier failed (MISS path only) — try matrix calibration as fallback
-				if (input.calibration && config.calibrationConfig?.enabled) {
-					const calibratedTier = applyCalibratedTier(
-						decision.tier,
-						input.calibration,
-						config.calibrationConfig,
-					);
-					if (calibratedTier !== decision.tier) {
-						decision = buildRoutingDecision(
-							config.profileName,
-							config.profile,
-							calibratedTier,
-							phaseForTier(calibratedTier),
-							`Calibrated: heuristic ${decision.tier} → ${calibratedTier} (matrix-based override)`,
-							config.thinkingOverrides,
-							false,
-						);
-					}
-				}
-				decision.reasoning = `Classifier unavailable, using heuristic: ${decision.reasoning}`;
-			}
-		}
-		// isUserPin branch falls through here — classifier was not run (blocked above)
-	} else if (isSystemPin && input.scope && config.pinConfig && shadowTierForPressure !== undefined) {
-		// ── System pin active, no classifier configured: heuristic shadow ──
-		// drives pressure lapse (original behaviour preserved as fallback).
-		const threshold =
-			config.pinConfig.pinPressureThreshold ??
-			DEFAULT_PIN_PRESSURE_THRESHOLD;
-		const lapsed = incrementPinPressure(
-			input.scope,
-			shadowTierForPressure,
-			threshold,
-			config.debug,
-		);
-		if (lapsed) {
-			if (input.state) {
-				input.state.lastClassifierKey = undefined;
-				input.state.lastClassifierVerdict = undefined;
-				input.state.classifierTurnsSinceRun = 0;
-			}
-			// Re-route freely using shadow (no classifier available)
-			decision = decideRouting(
-				input.context,
-				config.profileName,
-				config.profile,
-				input.previousDecision,
-				undefined,
-				config.thinkingOverrides,
-				config.phaseBias,
-				config.rules,
-				input.isBudgetExceeded,
-			);
-			input = { ...input, pinnedTier: undefined };
-		}
-	}
-
-	// ── P2 pin for Rule J and rule-match (heuristic-created sticky decisions) ──
-	if (input.scope && !input.pinnedTier && config.pinConfig) {
-		const isRuleJ = decision.reasoning.includes("planning-phase bias");
-		const isRuleMatch = decision.isRuleMatched === true;
-		if (isRuleJ) {
-			setScopedPin(input.scope, decision.tier, "heuristic", config.pinConfig);
-		} else if (isRuleMatch) {
-			setScopedPin(input.scope, decision.tier, "rule", config.pinConfig);
+			decision.reasoning = `Classifier unavailable, using heuristic: ${decision.reasoning}`;
 		}
 	}
 	
