@@ -2,9 +2,9 @@ import type { Context } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { ClassifierPollResult } from "./types";
-import type { RouterPhase, RouterTier } from "../types";
+import type { RouterTier } from "../types";
 import { parseCanonicalModelRef, isRouterTier } from "../config";
-import { getLastUserText, buildClassifierPrompt, parseClassifierOutput } from "./classifier-utils";
+import { parseClassifierOutput } from "./classifier-utils";
 let piSubagentsAvailable = false;
 let Agent: any = undefined;
 let get_subagent_result: any = undefined;
@@ -32,19 +32,19 @@ interface ClassifierPromise {
 const pendingClassifiers = new Map<string, ClassifierPromise>();
 
 /**
- * Spawn an async classifier agent (background LLM call)
- * Returns agent ID (pi-subagents) or synthetic ID (streamSimple fallback)
+ * Spawn an async classifier agent (background LLM call).
+ * Accepts a pre-built prompt string — callers must NOT pass the full Context
+ * object into this function to avoid holding large conversation trees in memory
+ * across the async closure lifetime.
  *
- * @param classifierModelRef - Model reference for classifier (e.g. anthropic/claude-3-haiku-20240307)
- * @param context - Current conversation context
- * @param currentPhase - Current router phase (for prompt biasing)
+ * @param classifierModelRef - Model reference for classifier
+ * @param prompt - Pre-built classifier prompt string (primitives only, no Context ref)
  * @param modelRegistry - Model registry for resolution
  * @returns Agent ID or undefined on spawn failure
  */
 export async function spawnClassifierAgent(
 	classifierModelRef: string | string[],
-	context: Context,
-	currentPhase: RouterPhase | undefined,
+	prompt: string,
 	modelRegistry: ExtensionContext["modelRegistry"],
 ): Promise<string | undefined> {
 	// Normalize to array for consistent handling
@@ -56,16 +56,14 @@ export async function spawnClassifierAgent(
 	if (piSubagentsAvailable && Agent) {
 		return await spawnViaSubagent(
 			classifierRefs[0],
-			context,
-			currentPhase,
+			prompt,
 		);
 	}
 
 	// streamSimple path supports full fallback chain
 	return await spawnViaStreamSimple(
 		classifierModelRef,
-		context,
-		currentPhase,
+		prompt,
 		modelRegistry,
 	);
 }
@@ -172,14 +170,11 @@ export function abandonClassifier(agentId: string): void {
 
 async function spawnViaSubagent(
 	classifierModelRef: string,
-	context: Context,
-	currentPhase: RouterPhase | undefined,
+	prompt: string,
 ): Promise<string | undefined> {
 	try {
 		const shortName = classifierModelRef.split('/').pop()?.split('.').pop()?.replace(/-v\d+:\d+$/, '') || classifierModelRef;
 		console.log(`⚡ classifier → ${shortName} (async·telemetry)`);
-		
- 		const prompt = buildClassifierPrompt(context, currentPhase);
 
 		const result = await Agent({
 			subagent_type: "quick_task",
@@ -200,8 +195,7 @@ async function spawnViaSubagent(
 
 async function spawnViaStreamSimple(
 	classifierModelRefsInput: string | string[],
-	context: Context,
-	currentPhase: RouterPhase | undefined,
+	prompt: string,
 	modelRegistry: ExtensionContext["modelRegistry"],
 	debug = false,
 ): Promise<string | undefined> {
@@ -247,7 +241,6 @@ async function spawnViaStreamSimple(
 				continue;
 			}
 
-			const prompt = buildClassifierPrompt(context, currentPhase);
 			const classifierContext: Context = {
 				messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 			};

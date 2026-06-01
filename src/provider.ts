@@ -548,7 +548,10 @@ export const registerRouterProvider = (
 									targetModelId,
 									lastTurnTimestamp: state.lastTurnTimestamp,
 									currentCheckpoint: state.currentCheckpoint,
-									frozenBlock: state.frozenCompressionBlock,
+									// Deserialize frozen block on use — scope stores as JSON string
+									frozenBlock: state.frozenCompressionBlock
+										? { messages: JSON.parse(state.frozenCompressionBlock.messagesJson), stats: state.frozenCompressionBlock.stats }
+										: undefined,
 									now,
 							  })
 							: {
@@ -619,8 +622,10 @@ export const registerRouterProvider = (
 						if (compressionCfg?.freezeAfter !== undefined && 
 						    turnNumber === compressionCfg.freezeAfter && 
 						    compressionResult.stats) {
+							const frozenMessages = compressionResult.context.messages.slice(0, -(compressionCfg.keepLastN ?? 4));
+							// Serialize to JSON — avoids holding Message[] in scope across turns
 							state.frozenCompressionBlock = {
-								messages: compressionResult.context.messages.slice(0, -(compressionCfg.keepLastN ?? 4)),
+								messagesJson: JSON.stringify(frozenMessages),
 								stats: compressionResult.stats,
 							};
 						}

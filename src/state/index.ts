@@ -15,7 +15,6 @@ import type {
 	EmbargoConfig,
 	ScopedPin,
 } from "../types";
-import type { Message } from "@oh-my-pi/pi-ai";
 import { FALLBACK_CONFIG, resolveProfileName } from "../config";
 import { MAX_DEBUG_HISTORY } from "../constants";
 import { persist, restoreFromSession, buildPersistedState } from "./persist";
@@ -42,7 +41,9 @@ export interface SessionScope {
 	lastDecision: RoutingDecision | undefined;
 	lastTurnTimestamp?: number;
 	currentCheckpoint?: CompressionCheckpoint;
-	frozenCompressionBlock?: { messages: Message[]; stats: CompressionStats };
+	/** Frozen compression block — messages stored as JSON string to avoid holding large
+	 *  message arrays in memory across turns. Deserialize only when needed for the next turn. */
+	frozenCompressionBlock?: { messagesJson: string; stats: CompressionStats };
 	isStreaming: boolean;
 	/** Routing decision counts per tier */
 	tierCounter: TierCounter;
@@ -246,6 +247,8 @@ export class RouterState {
 			});
 			if (this.currentConfig.debug && !this.parentAttributionLogged.has(sessionId)) {
 				this.parentAttributionLogged.add(sessionId);
+				// Schedule removal so the Set doesn't grow forever
+				setTimeout(() => this.parentAttributionLogged.delete(sessionId), 60_000);
 				if (isSibling) {
 					console.log(
 						`[model-router] sibling carry-forward: ${previousSessionId} → ${sessionId} (cost=$${previousScope.accumulatedCost.toFixed(4)})`,
@@ -267,6 +270,14 @@ export class RouterState {
 		} else {
 			this.setParentIfAbsent(existing, parentSessionId, sessionId);
 		}
+
+		// Evict scopes that are no longer reachable:
+		// keep the active scope + any ancestor in its parent chain + any scope
+		// that is a direct parent of the current scope (needed for rollup on agent_end).
+		// Only evict when the map exceeds a threshold to avoid per-turn overhead.
+		if (this.sessionScopes.size > 8) {
+			this.evictStaleScopes();
+		}
 	}
 
 	/**
@@ -285,6 +296,38 @@ export class RouterState {
 				console.log(
 					`[model-router] late-bound parent for ${sessionId}: ${parentSessionId}`,
 				);
+			}
+		}
+	}
+
+	/**
+	 * Evict session scopes that are no longer reachable from the active session.
+	 * Keeps: active scope + all ancestors in parent chain + any in-flight children
+	 * whose parentSessionId points to a kept scope (needed for rollup on agent_end).
+	 * Orphaned / stale sibling scopes that died mid-turn without agent_end are removed.
+	 */
+	private evictStaleScopes(): void {
+		// Walk up the parent chain from active scope — everything on that path is reachable
+		const reachable = new Set<string>();
+		let cursor: string | undefined = this.activeSessionId;
+		while (cursor) {
+			if (reachable.has(cursor)) break;
+			reachable.add(cursor);
+			cursor = this.sessionScopes.get(cursor)?.parentSessionId;
+		}
+		// Keep in-flight children (parentSessionId in reachable set)
+		for (const [id, scope] of this.sessionScopes) {
+			if (scope.parentSessionId && reachable.has(scope.parentSessionId)) {
+				reachable.add(id);
+			}
+		}
+		// Evict anything not reachable
+		for (const id of this.sessionScopes.keys()) {
+			if (!reachable.has(id) && id !== "__default__") {
+				this.sessionScopes.delete(id);
+				if (this.currentConfig.debug) {
+					console.log(`[model-router] evicted stale scope: ${id}`);
+				}
 			}
 		}
 	}
@@ -436,6 +479,18 @@ export class RouterState {
 
 	get tierCounter(): TierCounter { return this.scope.tierCounter; }
 	get modelCosts(): Map<string, ModelCostEntry> { return this.scope.modelCosts; }
+
+	// ─── Classifier cache accessors (scope-delegating) ───────────────────
+	get lastClassifierKey(): string | undefined { return this.scope.lastClassifierKey; }
+	set lastClassifierKey(v: string | undefined) { this.scope.lastClassifierKey = v; }
+	get lastClassifierVerdict(): { tier: RouterTier; reasoning: string } | undefined { return this.scope.lastClassifierVerdict; }
+	set lastClassifierVerdict(v: { tier: RouterTier; reasoning: string } | undefined) { this.scope.lastClassifierVerdict = v; }
+	get classifierTurnsSinceRun(): number { return this.scope.classifierTurnsSinceRun; }
+	set classifierTurnsSinceRun(v: number) { this.scope.classifierTurnsSinceRun = v; }
+	get userMessagesSeen(): number { return this.scope.userMessagesSeen; }
+	set userMessagesSeen(v: number) { this.scope.userMessagesSeen = v; }
+	get lastUserEntryId(): string | undefined { return this.scope.lastUserEntryId; }
+	set lastUserEntryId(v: string | undefined) { this.scope.lastUserEntryId = v; }
 
 	/** Record a routing decision (tier counter). Called at decision time. */
 	recordRoutingDecision(tier: RouterTier): void {

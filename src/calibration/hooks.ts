@@ -21,7 +21,7 @@ import {
 	cancelPendingSave,
 } from "./index";
 import type { TraceRecord } from "./types";
-import { getLastUserText } from "../routing";
+import { getLastUserText, buildClassifierPrompt } from "./classifier-utils";
 import { getCurrentVersion } from "../version-check";
 
 /**
@@ -134,8 +134,9 @@ export async function onSessionEnd(
 
 /**
  * Spawn async classifier after routing decision.
- * Captures the actual user prompt + heuristic context at spawn time.
- * Result records itself via promise when LLM verdict arrives.
+ * Extracts all needed primitives from context/ctx BEFORE the async closure
+ * so the closure holds only strings/numbers — never Context, ExtensionContext,
+ * or sessionManager references (which keep the full conversation tree in RAM).
  */
 export function spawnClassifierForTurn(
 	state: RouterState,
@@ -148,7 +149,7 @@ export function spawnClassifierForTurn(
 	const cal = state.calibration;
 	if (cal.pendingAgentId) return; // skip if already pending
 	if (!config.calibration.classifierModel) return;
-	
+
 	// Skip async spawn in adaptive mode when sync classifier already ran
 	if (config.calibration.mode === "adaptive" && state.lastDecision && (state.lastDecision as any).syncClassifierRan) {
 		return;
@@ -156,9 +157,22 @@ export function spawnClassifierForTurn(
 	const ctx = state.lastExtensionContext;
 	if (!ctx) return;
 
-	// Capture the user prompt + heuristic snapshot NOW
+	// ── Extract all needed primitives NOW, before entering the async closure ──
+	// Nothing from context, ctx, or state should be captured by the closure.
+	// Each of these holds (directly or transitively) the full session tree.
 	const userPrompt = getLastUserText(context);
 	const decision = state.lastDecision;
+	const classifierPrompt = buildClassifierPrompt(
+		context,
+		decision?.phase,
+		// toolCounts not available here; that's fine, the bucket already updated the cache key
+	);
+	const modelRegistry = ctx.modelRegistry; // registry ref is safe — small, no session data
+	const notifyFn = ctx.ui.notify.bind(ctx.ui);  // bound fn, not ctx itself
+	const debugEnabled = state.debugEnabled;
+	const classifierModelRef = config.calibration.classifierModel;
+	const calibrationMode = config.calibration.mode ?? "telemetry";
+	const traceEnabled = !!config.calibration.traceEnabled;
 
 	cal.llmCallsAttempted++;
 	cal.pendingHeuristicTier = heuristicTier;
@@ -170,26 +184,33 @@ export function spawnClassifierForTurn(
 	cal.pendingTurnIndex = cal.turnsProcessed;
 	cal.pendingSpawnTime = Date.now();
 
+	// Snapshot the trace file path (string — safe to capture)
+	const traceFilePath = traceEnabled ? cal.traceFilePath : undefined;
+
 	// Synthetic tracking ID
 	const trackingId = `classifier-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 	cal.pendingAgentId = trackingId;
 
-	if (state.debugEnabled) {
-		ctx.ui.notify(
+	if (debugEnabled) {
+		notifyFn(
 			`[calibration] Spawning classifier for: "${truncatePrompt(userPrompt, 60)}"`,
 			"info",
 		);
 	}
 
-	// Spawn the classifier — the returned promise resolves when the LLM finishes
+	// Spawn the classifier — pass the pre-built prompt string, NOT the full context
 	const classifierPromise = spawnClassifierAgent(
-		config.calibration.classifierModel,
-		context,
-		decision?.phase,
-		ctx.modelRegistry,
+		classifierModelRef,
+		classifierPrompt,
+		modelRegistry,
 	);
 
-	// Attach promise handler for when result arrives
+	// Attach promise handler for when result arrives.
+	// Closure captures ONLY: state (RouterState — needed for calibration matrix),
+	// trackingId (string), notifyFn (bound UI fn), debugEnabled (bool),
+	// classifierModelRef (string|string[]), calibrationMode (string),
+	// traceFilePath (string|undefined).
+	// Does NOT capture: context, ctx, or any object with sessionManager.
 	classifierPromise
 		.then(async (agentId) => {
 			// If calibration was disabled or state reset since spawn, bail
@@ -286,27 +307,25 @@ export function spawnClassifierForTurn(
 					return;
 				}
 
-				const heuristicTier = state.calibration.pendingHeuristicTier;
+				const heuristicTierFinal = state.calibration.pendingHeuristicTier;
 				const verdict = result.verdict;
 
-				updateCalibrationMatrix(state.calibration, heuristicTier, verdict.tier);
+				updateCalibrationMatrix(state.calibration, heuristicTierFinal, verdict.tier);
 
-				if (state.calibration.traceFilePath) {
+				if (traceFilePath) {
 					writeCompletedTrace(state.calibration, verdict, ageMs);
 				}
 
 				// Badge-style log with decision (always shown)
-				const classifierRef = config.calibration?.classifierModel;
-				const refForLabel = Array.isArray(classifierRef) ? classifierRef[0] : classifierRef;
+				const refForLabel = Array.isArray(classifierModelRef) ? classifierModelRef[0] : classifierModelRef;
 				const shortName = refForLabel
 					?.split('/').pop()?.split('.').pop()?.replace(/-v\d+:\d+$/, '') || 'classifier';
-				const agreed = heuristicTier === verdict.tier;
-				const modeLabel = config.calibration?.mode === 'adaptive' ? 'adaptive' : 'telemetry';
-				console.log(`⚡ classifier → ${shortName} (async·${modeLabel}) → ${verdict.tier} ${agreed ? '✓' : '✗'}`);
+				const agreed = heuristicTierFinal === verdict.tier;
+				console.log(`⚡ classifier → ${shortName} (async·${calibrationMode}) → ${verdict.tier} ${agreed ? '✓' : '✗'}`);
 
-				if (state.debugEnabled) {
-					ctx.ui.notify(
-						`[calibration] h=${heuristicTier}, llm=${verdict.tier} ${agreed ? '✓' : '✗'} (${state.calibration.totalComparisons} comparisons, ${ageMs}ms)`,
+				if (debugEnabled) {
+					notifyFn(
+						`[calibration] h=${heuristicTierFinal}, llm=${verdict.tier} ${agreed ? '✓' : '✗'} (${state.calibration.totalComparisons} comparisons, ${ageMs}ms)`,
 						"info",
 					);
 				}
@@ -328,8 +347,8 @@ export function spawnClassifierForTurn(
 				writePendingAsFailed(state.calibration, reason, ageMs);
 				clearPending(state.calibration);
 
-				if (state.debugEnabled) {
-					ctx.ui.notify(
+				if (debugEnabled) {
+					notifyFn(
 						`[calibration] Classifier error: ${String(err).slice(0, 60)}`,
 						"warning",
 					);
@@ -349,8 +368,8 @@ export function spawnClassifierForTurn(
 			);
 			clearPending(state.calibration);
 
-			if (state.debugEnabled) {
-				ctx.ui.notify(
+			if (debugEnabled) {
+				notifyFn(
 					`[calibration] Spawn threw: ${String(err).slice(0, 100)}`,
 					"warning",
 				);
