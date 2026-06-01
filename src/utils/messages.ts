@@ -162,39 +162,37 @@ const TOOL_WINDOW_CAP = 12;
  * in chronological order, plus aggregated counts.
  *
  * **NEVER reads** tool arguments, tool result content, thinking blocks, or text.
+ *
+ * Single-pass: no intermediate arrays, no flat(), early exit when window is full.
  */
 export function extractRecentToolCalls(
 	context: Context,
 ): { counts: Record<string, number>; names: string[] } {
-	// Collect groups of tool names per-message (backward message order)
-	const groups: string[][] = [];
+	// Collect at most TOOL_WINDOW_CAP names in reverse (most-recent first),
+	// then reverse once at the end. No intermediate groups array or .flat().
+	const reversed: string[] = [];
 
-	for (let i = context.messages.length - 1; i >= 0; i--) {
+	outer: for (let i = context.messages.length - 1; i >= 0; i--) {
 		const msg = context.messages[i];
 		if (msg.role === "user") break; // stop at last user message (exclusive)
 		if (msg.role !== "assistant") continue;
 		if (!Array.isArray(msg.content)) continue;
 
-		const group: string[] = [];
-		for (const block of msg.content) {
-			if (
-				block.type === "toolCall" &&
-				typeof block.name === "string" &&
-				block.name.length > 0
-			) {
-				group.push(block.name);
+		// Walk blocks in reverse so the last call in a message is collected first
+		// (i.e. we fill the cap with the newest calls across all messages).
+		const blocks = msg.content as any[];
+		for (let j = blocks.length - 1; j >= 0; j--) {
+			const block = blocks[j];
+			if (block.type === "toolCall" && typeof block.name === "string" && block.name.length > 0) {
+				reversed.push(block.name);
+				if (reversed.length === TOOL_WINDOW_CAP) break outer;
 			}
 		}
-		if (group.length > 0) groups.push(group);
 	}
 
-	// Reverse groups to chronological order (we walked backwards),
-	// then flatten in order. Within each group (message), order is already chronological.
-	groups.reverse();
-	const allNames = groups.flat();
-
-	// Keep only the last TOOL_WINDOW_CAP entries (most recent)
-	const names = allNames.slice(-TOOL_WINDOW_CAP);
+	// reversed holds newest-first; restore chronological order.
+	reversed.reverse();
+	const names = reversed;
 
 	const counts: Record<string, number> = {};
 	for (const name of names) {

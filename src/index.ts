@@ -384,6 +384,11 @@ const routerExtension = (pi: ExtensionAPI) => {
 
 		// Poll classifier (first chance), write trace
 		await calibrationTurnEnd(_event, ctx, state, state.currentConfig);
+
+		// Release the context reference — it holds the full session tree (messages,
+		// sessionManager, modelRegistry). Keeping it past turn_end prevents GC of the
+		// prior turn's message set. The reference is re-assigned at turn_start.
+		state.lastExtensionContext = undefined;
 	});
 
 	// session_end is not a standard extension event; instead merge calibration

@@ -210,24 +210,35 @@ export const sanitizeToolName = (name: string): string => {
  * that fail API validation when replayed in conversation history.
  */
 export const sanitizeContext = (context: Context): Context => {
-	let modified = false;
+	// Pre-scan: check if any message has an invalid tool call name before allocating.
+	// The common path (no malformed names) returns the original context as-is.
+	let needsSanitize = false;
+	outer: for (const msg of context.messages) {
+		if (!Array.isArray(msg.content)) continue;
+		for (const block of msg.content as any[]) {
+			if (block.type === "toolCall" && block.name && !VALID_TOOL_NAME_RE.test(block.name)) {
+				needsSanitize = true;
+				break outer;
+			}
+		}
+	}
+	if (!needsSanitize) return context;
+
+	// Slow path: at least one invalid name found — rebuild only the affected messages.
 	const messages = context.messages.map((msg) => {
 		if (!Array.isArray(msg.content)) return msg;
 		let contentModified = false;
-		const content = msg.content.map((block: any) => {
+		const content = (msg.content as any[]).map((block: any) => {
 			if (block.type === "toolCall" && block.name && !VALID_TOOL_NAME_RE.test(block.name)) {
 				contentModified = true;
 				return { ...block, name: sanitizeToolName(block.name) };
 			}
 			return block;
 		});
-		if (contentModified) {
-			modified = true;
-			return { ...msg, content };
-		}
+		if (contentModified) return { ...msg, content };
 		return msg;
 	});
-	return modified ? { ...context, messages } : context;
+	return { ...context, messages };
 };
 
 /**
@@ -756,7 +767,7 @@ export const registerRouterProvider = (
 									state.currentConfig.streamIdleTimeoutMs,
 									targetProvider,
 								);
-								const retryContext = sanitizeContext(context);
+								const retryContext = sanitizeContext(finalContext);
 								try {
 									const retryStream = streamSimple(targetModel, retryContext, {
 										...options,
