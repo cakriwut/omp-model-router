@@ -79,6 +79,8 @@ Config file: `~/.omp/agent/model-router.json`
   "defaultProfile": "auto",
   "debug": false,
   "maxSessionBudget": 5.0,
+  "defaultPin": "auto",
+  "pinTimeout": 600000,
   "enableRtk": true,
   "historyCompression": {
     "enabled": true,
@@ -185,6 +187,24 @@ See `docs/BEST_PRACTICES_AUDIT.md` for detailed compliance report.
 
 **Reference:** https://github.com/can1357/oh-my-pi/blob/main/docs/skills/authoring-extensions.md
 ## Pitfalls (read before editing)
+
+### Pin system: session-scoped, decaying, config-anchored
+
+As of v0.8.0, pins are **memory-only** and **session-scoped**. They decay after `pinTimeout` ms and return to `defaultPin` (the config floor).
+
+| Config field | Default | Description |
+|---|---|---|
+| `defaultPin` | `"auto"` | Floor tier after decay. `"auto"` = no pin, heuristic free. A tier value (`"high"`, `"medium"`, `"low"`) acts as a permanent non-decaying baseline. |
+| `pinTimeout` | `600000` | How long a scoped pin stays active (ms). Default: 10 minutes. |
+
+**Priority model:**
+- **P1 (user):** `/router pin <tier>` and `/router fix <tier>` always override any existing pin and reset the timer.
+- **P2 (system):** Heuristic Rule J, classifier override, rule match, and auto-upgrade only set a pin when no active pin exists.
+- `/router pin auto` = immediate decay + clears `lastDecision` for a clean break.
+
+**Pins are never persisted to disk.** `router-state.json` no longer contains `pinByProfile` or `pinTier`. Old persisted pins are silently ignored on upgrade.
+
+---
 
 ### Adding a new top-level field to `RouterConfig`
 

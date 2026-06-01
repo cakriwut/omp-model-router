@@ -50,6 +50,6 @@
 
 ## 8. Config & Documentation
 
-- [ ] 8.1 Update `AGENTS.md` — document `defaultPin` and `pinTimeout` config fields, remove "Adding a new top-level field" pitfall for pin (it's gone)
-- [ ] 8.2 Update config example in `AGENTS.md` to include `defaultPin` and `pinTimeout`
-- [ ] 8.3 Verify `bun run test test/config-field-preservation.test.ts` passes with new fields
+- [x] 8.1 Update `AGENTS.md` — document `defaultPin` and `pinTimeout` config fields, remove "Adding a new top-level field" pitfall for pin (it's gone)
+- [x] 8.2 Update config example in `AGENTS.md` to include `defaultPin` and `pinTimeout`
+- [x] 8.3 Verify `bun run test test/config-field-preservation.test.ts` passes with new fields
