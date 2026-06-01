@@ -1,6 +1,6 @@
 # @cakriwut/omp-model-router
 
-Cost-optimized model routing for Oh-My-Pi — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Optionally compresses conversation history using TOON format to reduce input tokens. **NEW**: Integrates with RTK (Rust Token Killer) for 60-90% token savings on tool outputs.
+Cost-optimized model routing for Oh-My-Pi — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Optionally compresses conversation history using TOON format to reduce input tokens. Integrates with RTK (Rust Token Killer) for 60-90% token savings on tool outputs. **NEW**: Classifier prompt cache eliminates ~80% of redundant LLM classifier calls in tool loops; tool-mix bucket signal enables mid-loop phase-transition detection.
 
 ## Structure
 
@@ -23,6 +23,8 @@ test/                     # Test suite (bun test)
 
 - **Intelligent Routing**: Classifies prompts into High/Medium/Low tiers based on complexity
 - **Adaptive Calibration**: LLM-powered classifier for routing decisions (when enabled)
+- **Classifier Prompt Cache**: Caches classifier verdicts per `(userText, msgIndex, toolBucket)` — eliminates ~80% of redundant classifier calls in tool loops (TTL-gated, per-session)
+- **Tool-Mix Bucket Signal**: Detects mid-loop phase transitions (exploration → implementation) and re-routes appropriately; injects `read×4 edit×3 …` activity summary into classifier prompt
 - **Cost Optimization**: Automatically selects cheaper models for simple tasks
 - **Model Fallback Chain**: Automatically retries fallback models when primary fails
 - **History Compression (TOON)**: Compresses old conversation history, saving 30–50% of input tokens
@@ -82,6 +84,9 @@ Config file: `~/.omp/agent/model-router.json`
   "defaultPin": "auto",
   "pinTimeout": 600000,
   "enableRtk": true,
+  "classifierCache": {
+    "ttlTurns": 20
+  },
   "historyCompression": {
     "enabled": true,
     "keepLastN": 4,
@@ -125,6 +130,10 @@ When `calibration.enabled` is `true` and `calibration.mode` is `"adaptive"`, the
 - When sync classifier fails (model not found, API error), the matrix-based calibration (`applyCalibratedTier`) is used as a fallback
 - Async classifier spawn is **skipped** in adaptive mode when sync classifier runs (50% cost savings)
 
+**Classifier Prompt Cache** (Phase 1): In tool loops, ~80% of classifier calls receive identical input — the cache eliminates them. The cache key is `lastUserText|userMsgIndex|toolBucket` (TTL default: 20 turns). Calibration matrix is still updated on every turn regardless of cache source. Configure via `classifierCache.ttlTurns`.
+
+**Tool-Mix Bucket Signal** (Phase 2): Extends the cache key with a phase bucket (`exploration`, `implementation`, `verification`, `delegation`, `mixed`, `fresh`) derived from the last 12 tool calls since the last user message. A bucket transition (e.g. `exploration → implementation`) causes a cache miss and re-runs the classifier with a tool-activity summary line added to the prompt. `bash` is conservatively bucketed as `other` pending argument-based disambiguation.
+
 ### Classifier Fallback Chain (v0.7.3+)
 
 `classifierModel` accepts either a single string (backward compat) or an array of refs. Entries are tried in order; if one fails (not in registry, no API key, stream error, parse failure), the next is attempted. If all classifiers in the chain fail, the router falls back to the heuristic — no hard error.
@@ -159,12 +168,13 @@ If the classifier decision isn't being used (check decision reasoning with `debu
 3. Look for `[model-router] Classifier failed: ...` in console logs (requires `debug: true`)
 4. Decision reasoning will show `"Classifier unavailable, using heuristic: ..."` when classifier fails
 5. If matrix has sufficient data (>= `warmupTurns`), matrix-based calibration will be applied as fallback
+6. Decision reasoning shows `"Classifier (cached): ..."` on cache hits — this is expected in tool loops
 
 ## Development
 
 ```bash
 bun install
-bun run test                # Run test suite with summary output (334 tests)
+bun run test                # Run test suite with summary output (500 tests)
 bun run test:verbose        # Show all output with dots reporter
 bun run deploy:dev          # Deploy to ~/.omp/agent/extensions/model-router for local testing
 ```
@@ -203,6 +213,40 @@ As of v0.8.0, pins are **memory-only** and **session-scoped**. They decay after 
 - `/router pin auto` = immediate decay + clears `lastDecision` for a clean break.
 
 **Pins are never persisted to disk.** `router-state.json` no longer contains `pinByProfile` or `pinTier`. Old persisted pins are silently ignored on upgrade.
+
+---
+
+### Classifier prompt cache: key format and cache invalidation
+
+As of the `classifier-prompt-cache` + `classifier-tool-mix-signal` changes, the classifier cache key has **three components**:
+
+```
+sig = lastUserText + "|" + userMsgIndex + "|" + bucket
+```
+
+| Component | Purpose |
+|---|---|
+| `lastUserText` | Busts cache on new user message |
+| `userMsgIndex` | Disambiguates repeated identical user text |
+| `bucket` | Busts cache on mid-loop phase transitions (exploration → implementation, etc.) |
+
+**Bucket values:** `exploration`, `implementation`, `verification`, `delegation`, `mixed`, `fresh`.
+
+**Fresh** is the stable value when fewer than 2 tool calls exist since the last user message. Early turns of a new message stay at `fresh` until the agent starts using tools.
+
+**Cache fields on `RouterState`** (transient, never persisted):
+- `lastClassifierKey: string | undefined`
+- `lastClassifierVerdict: { tier, reasoning } | undefined`
+- `classifierTurnsSinceRun: number` (resets to 0 on MISS, increments on HIT)
+
+**Invalidation events:**
+- New user message (text or index change) → MISS
+- Tool-mix bucket transitions → MISS  
+- `classifierTurnsSinceRun >= ttlTurns` (default 20) → MISS
+- Context-capacity promotion (`isContextTriggered`) → cache cleared explicitly
+- Process restart / new session → cache never persisted
+
+**Calibration matrix is always updated** — even on HIT, `updateCalibrationMatrix(heuristic, cachedVerdict)` fires. Training signal is per-turn, not per-classifier-call.
 
 ---
 
