@@ -4,6 +4,7 @@ import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type {
 	AutoUpgradeConfig,
+	EmbargoConfig,
 	RouterConfig,
 	RouterProfile,
 	RoutedTierConfig,
@@ -43,6 +44,12 @@ export const FALLBACK_CONFIG: RouterConfig = {
 		traceEnabled: false,
 		useGlobalPrior: true,
 		globalPriorWeight: 0.1,
+	},
+	embargo: {
+		enabled: true,
+		defaultCooldownMs: 60_000,
+		minCooldownMs: 5_000,
+		maxCooldownMs: 3_600_000,
 	},
 };
 

@@ -1,5 +1,8 @@
 import type { SessionCalibration } from "../calibration/types";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import type {
 	RouterConfig,
 	RouterPinByProfile,
@@ -9,6 +12,8 @@ import type {
 	CustomSessionEntry,
 	CompressionStats,
 	CompressionCheckpoint,
+	EmbargoEntry,
+	EmbargoConfig,
 } from "../types";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { FALLBACK_CONFIG, resolveProfileName } from "../config";
@@ -117,6 +122,24 @@ export class RouterState {
 	toolFailureStreak: Map<string, number> = new Map();
 	/** When set, forces the next routing decision to use this tier (one-shot). */
 	autoUpgradeTier: RouterTier | undefined;
+
+	// ─── Embargo state (global, persisted to disk) ─────────────────────
+	/** Model ref → embargo entry. Global across all sessions/profiles. */
+	embargoMap: Map<string, EmbargoEntry> = new Map();
+	/** Debounce timer for embargo persistence. */
+	private embargoWriteTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Path to embargo persistence file. */
+	private get embargoFilePath(): string {
+		return join(this.embargoDir, "model-router-embargo.json");
+	}
+	private get embargoDir(): string {
+		try {
+			const { getAgentDir } = require("@oh-my-pi/pi-coding-agent");
+			return getAgentDir();
+		} catch {
+			return join(homedir(), ".omp", "agent");
+		}
+	}
 
 	// ─── Update detection (transient, not persisted) ────────────────────
 	updateAvailable: { current: string; latest: string } | undefined;
@@ -411,6 +434,154 @@ export class RouterState {
 		tier: RouterTier,
 	): RoutingDecision["thinking"] | undefined {
 		return this.thinkingByProfile[profileName]?.[tier];
+	}
+
+	// ─── Embargo methods ─────────────────────────────────────────────────
+
+	/**
+	 * Embargo a model. Sets the entry in the map and triggers debounced persist.
+	 */
+	embargoModel(
+		modelRef: string,
+		status: number | undefined,
+		reason: string,
+		durationMs: number,
+		requestedDurationMs?: number,
+	): void {
+		const now = Date.now();
+		const entry: EmbargoEntry = {
+			modelRef,
+			expiresAt: now + durationMs,
+			embargoedAt: now,
+			status,
+			reason,
+			requestedDurationMs,
+			effectiveDurationMs: durationMs,
+		};
+		this.embargoMap.set(modelRef, entry);
+		this.persistEmbargo();
+	}
+
+	/**
+	 * Check if a model is currently embargoed (non-expired).
+	 * Lazily cleans expired entries.
+	 */
+	isEmbargoed(modelRef: string): boolean {
+		const entry = this.embargoMap.get(modelRef);
+		if (!entry) return false;
+		if (Date.now() >= entry.expiresAt) {
+			this.embargoMap.delete(modelRef);
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * Get remaining embargo time in ms for a model, or 0 if not embargoed.
+	 */
+	getEmbargoTimeRemaining(modelRef: string): number {
+		const entry = this.embargoMap.get(modelRef);
+		if (!entry) return 0;
+		const remaining = entry.expiresAt - Date.now();
+		if (remaining <= 0) {
+			this.embargoMap.delete(modelRef);
+			return 0;
+		}
+		return remaining;
+	}
+
+	/**
+	 * Lift embargo for a model (e.g., on successful stream completion).
+	 */
+	liftEmbargo(modelRef: string): void {
+		if (this.embargoMap.delete(modelRef)) {
+			this.persistEmbargo();
+		}
+	}
+
+	/**
+	 * Get all active (non-expired) embargo entries.
+	 */
+	getActiveEmbargoes(): EmbargoEntry[] {
+		const now = Date.now();
+		const active: EmbargoEntry[] = [];
+		for (const [ref, entry] of this.embargoMap) {
+			if (now < entry.expiresAt) {
+				active.push(entry);
+			} else {
+				this.embargoMap.delete(ref);
+			}
+		}
+		return active;
+	}
+
+	/**
+	 * Clear all embargoes.
+	 */
+	clearAllEmbargoes(): void {
+		this.embargoMap.clear();
+		this.persistEmbargo();
+	}
+
+	/**
+	 * Get the model ref with the soonest expiry from a list of model refs.
+	 * Used for deadlock prevention when all models are embargoed.
+	 */
+	getSoonestExpiry(modelRefs: string[]): string | undefined {
+		let soonest: string | undefined;
+		let soonestTime = Infinity;
+		for (const ref of modelRefs) {
+			const entry = this.embargoMap.get(ref);
+			if (entry && entry.expiresAt < soonestTime) {
+				soonestTime = entry.expiresAt;
+				soonest = ref;
+			}
+		}
+		return soonest;
+	}
+
+	/**
+	 * Persist embargo map to disk (debounced 100ms).
+	 */
+	private persistEmbargo(): void {
+		if (this.embargoWriteTimer) clearTimeout(this.embargoWriteTimer);
+		this.embargoWriteTimer = setTimeout(() => {
+			this.embargoWriteTimer = undefined;
+			try {
+				const dir = this.embargoDir;
+				if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+				const data: Record<string, EmbargoEntry> = {};
+				for (const [ref, entry] of this.embargoMap) {
+					if (entry.expiresAt > Date.now()) {
+						data[ref] = entry;
+					}
+				}
+				writeFileSync(this.embargoFilePath, JSON.stringify(data, null, 2));
+			} catch {
+				// Best-effort persistence — never throw
+			}
+		}, 100);
+	}
+
+	/**
+	 * Restore embargo map from disk. Discards expired entries.
+	 * Safe to call multiple times (idempotent).
+	 */
+	restoreEmbargo(): void {
+		try {
+			const filePath = this.embargoFilePath;
+			if (!existsSync(filePath)) return;
+			const raw = readFileSync(filePath, "utf-8");
+			const data = JSON.parse(raw) as Record<string, EmbargoEntry>;
+			const now = Date.now();
+			for (const [ref, entry] of Object.entries(data)) {
+				if (entry && typeof entry.expiresAt === "number" && entry.expiresAt > now) {
+					this.embargoMap.set(ref, entry);
+				}
+			}
+		} catch {
+			// Missing or corrupt file — start with empty map
+		}
 	}
 
 	persist(): void {

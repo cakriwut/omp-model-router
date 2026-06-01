@@ -25,6 +25,12 @@ import {
 	applyCompression,
 } from "./context-compression";
 import { spawnClassifierForTurn } from "./calibration/hooks";
+import {
+	StatusAwareError,
+	isRetryableStatus,
+	parseRetryAfterMs,
+	computeEmbargoDuration,
+} from "./embargo";
 
 
 export const createErrorMessage = (
@@ -319,6 +325,35 @@ export const registerRouterProvider = (
 						modelsToTry = filtered.length > 0 ? filtered : [decision.targetLabel];
 					}
 
+					// ── Embargo-aware filtering ────────────────────────────────────────
+					const embargoEnabled = state.currentConfig.embargo?.enabled !== false;
+					if (embargoEnabled) {
+						const nonEmbargoed = modelsToTry.filter((ref) => !state.isEmbargoed(ref));
+						if (nonEmbargoed.length > 0) {
+							const skipped = modelsToTry.filter((ref) => state.isEmbargoed(ref));
+							if (state.currentConfig.debug && skipped.length > 0) {
+								for (const ref of skipped) {
+									const remaining = Math.ceil(state.getEmbargoTimeRemaining(ref) / 1000);
+									console.log(`[model-router] ⏭ Skipped (embargoed): ${ref} — ${remaining}s remaining`);
+								}
+							}
+							if (modelsToTry[0] !== nonEmbargoed[0]) {
+								decision.isEmbargoed = true;
+								decision.embargoTimeRemaining = state.getEmbargoTimeRemaining(modelsToTry[0]);
+							}
+							modelsToTry = nonEmbargoed;
+						} else {
+							// All embargoed — use soonest expiry to prevent deadlock
+							const soonest = state.getSoonestExpiry(modelsToTry);
+							if (soonest) {
+								modelsToTry = [soonest];
+								if (state.currentConfig.debug) {
+									console.log(`[model-router] ⚠ All models embargoed — trying soonest-expiry: ${soonest}`);
+								}
+							}
+						}
+					}
+
 					// ── Delegate to target model ──────────────────────────────────────
 					let lastError: unknown;
 					let success = false;
@@ -530,15 +565,23 @@ export const registerRouterProvider = (
 								});
 							}
 							if (event.type === "error") {
-								throw new Error(
-									(event as { error?: { errorMessage?: string } }).error
-										?.errorMessage || "Model failed.",
-								);
+								const errEvent = event as { error?: { errorMessage?: string; errorStatus?: number } };
+								const errMsg = errEvent.error?.errorMessage || "Model failed.";
+								const errStatus = errEvent.error?.errorStatus;
+								const retryAfter = parseRetryAfterMs(errMsg);
+								throw new StatusAwareError(errMsg, errStatus, retryAfter);
 							}
 							stream.push(event);
 						}
 						if (state.currentConfig.debug) {
 							console.log(`  ✓ Success with ${modelRef}`);
+						}
+						// Lift embargo on success (model recovered)
+						if (embargoEnabled && state.isEmbargoed(modelRef)) {
+							state.liftEmbargo(modelRef);
+							if (state.currentConfig.debug) {
+								console.log(`[model-router] ✓ Embargo lifted: ${modelRef}`);
+							}
 						}
 						success = true;
 						if (i > 0) decision.isFallback = true;
@@ -547,6 +590,20 @@ export const registerRouterProvider = (
 						const errMsg = err instanceof Error ? err.message : String(err);
 						if (state.currentConfig.debug) {
 							console.log(`  ✗ Failed: ${errMsg}`);
+						}
+						// Embargo model on retryable errors
+						if (embargoEnabled) {
+							const errStatus = err instanceof StatusAwareError ? err.status : undefined;
+							const errRetryAfter = err instanceof StatusAwareError ? err.retryAfterMs : undefined;
+							if (isRetryableStatus(errStatus, errMsg)) {
+								const embargoCfg = state.currentConfig.embargo ?? { enabled: true };
+								const duration = computeEmbargoDuration(errRetryAfter, embargoCfg);
+								const reason = errStatus ? `HTTP ${errStatus}: ${errMsg.slice(0, 100)}` : errMsg.slice(0, 100);
+								state.embargoModel(modelRef, errStatus, reason, duration, errRetryAfter);
+								if (state.currentConfig.debug) {
+									console.log(`[model-router] ⏸ Embargoed: ${modelRef} for ${Math.ceil(duration / 1000)}s (HTTP ${errStatus ?? 'unknown'})`);
+								}
+							}
 						}
 						lastError = err;
 					}

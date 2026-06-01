@@ -68,6 +68,8 @@ const routerExtension = (pi: ExtensionAPI) => {
 				state.currentConfig,
 				state.selectedProfile,
 			);
+			// Restore embargo state from disk
+			state.restoreEmbargo();
 			actions.registerRouterProvider();
 			// Initialize calibration if newly enabled (handles /reload after enabling in config)
 			if (ctx && state.currentConfig.calibration?.enabled && !state.calibration) {

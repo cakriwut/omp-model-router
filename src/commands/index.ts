@@ -14,6 +14,7 @@ import { handleSet } from "./set";
 import { handleReload } from "./reload";
 import { handleUpdate } from "./update";
 import { handleHelp } from "./help";
+import { handleEmbargo } from "./embargo";
 
 export { resolveConfigValue, applyConfigUpdate, SET_KEYS } from "./shared";
 export type { Actions } from "./shared";
@@ -49,6 +50,7 @@ export const registerCommands = (
 	const set = handleSet(state, actions);
 	const reload = handleReload(state, actions);
 	const update = handleUpdate(state);
+	const embargo = handleEmbargo(state);
 	const help = handleHelp;
 
 	const SUBCOMMANDS = [
@@ -65,6 +67,7 @@ export const registerCommands = (
 		"reload",
 		"help",
 		"update",
+		"embargo",
 	];
 
 	pi.registerCommand("router", {
@@ -124,6 +127,13 @@ export const registerCommands = (
 					const items = ["on", "off", "toggle", "clear", "show"]
 						.filter((v) => v.startsWith(dPrefix))
 						.map((v) => ({ value: `debug ${v}`, label: v }));
+					return items.length > 0 ? items : null;
+				}
+				case "embargo": {
+					const ePrefix = subArgs[0] ?? "";
+					const items = ["clear"]
+						.filter((v) => v.startsWith(ePrefix))
+						.map((v) => ({ value: `embargo ${v}`, label: v }));
 					return items.length > 0 ? items : null;
 				}
 				case "set": {
@@ -203,6 +213,9 @@ export const registerCommands = (
 					break;
 				case "update":
 					await update(subArgs, ctx);
+					break;
+				case "embargo":
+					await embargo(subArgs, ctx);
 					break;
 				case "set":
 					await set(subArgs, ctx);

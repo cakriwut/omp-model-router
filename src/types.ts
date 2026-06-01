@@ -69,6 +69,34 @@ export interface HistoryCompressionConfig {
 		maxCheckpointSize?: number;
 	};
 }
+export interface EmbargoEntry {
+	/** The model ref being embargoed (e.g. "anthropic/claude-sonnet-4-5"). */
+	modelRef: string;
+	/** Epoch ms when the embargo expires. */
+	expiresAt: number;
+	/** Epoch ms when the embargo was set. */
+	embargoedAt: number;
+	/** HTTP status that triggered the embargo (429, 503, 529, 502). */
+	status: number | undefined;
+	/** Human-readable reason (e.g. "429 rate limited"). */
+	reason: string;
+	/** The retry-after-ms value requested by the provider (before clamping). */
+	requestedDurationMs?: number;
+	/** The actual duration applied after clamping. */
+	effectiveDurationMs: number;
+}
+
+export interface EmbargoConfig {
+	/** Enable automatic model embargo on retryable HTTP errors. Default: true. */
+	enabled: boolean;
+	/** Default cooldown in ms when no retry-after signal is available. Default: 60000 (60s). */
+	defaultCooldownMs?: number;
+	/** Minimum embargo duration in ms (prevents rapid cycling). Default: 5000 (5s). */
+	minCooldownMs?: number;
+	/** Maximum embargo duration in ms (prevents extreme starvation). Default: 3600000 (1 hour). */
+	maxCooldownMs?: number;
+}
+
 export interface AutoUpgradeConfig {
 	/** Enable automatic tier upgrade on repeated tool failures. Default: false. */
 	enabled: boolean;
@@ -149,6 +177,8 @@ export interface RouterConfig {
 	profiles: Record<string, RouterProfile>;
 	/** Auto-upgrade tier when the same tool fails consecutively. */
 	autoUpgrade?: AutoUpgradeConfig;
+	/** Automatic model embargo on retryable HTTP errors (429, 503, 529, 502). */
+	embargo?: EmbargoConfig;
 	/** Calibration system for async LLM classifier with learning. */
 	calibration?: CalibrationConfig;
 	/**
@@ -185,6 +215,8 @@ export interface RoutingDecision {
 	isContextTriggered?: boolean;
 	isBudgetForced?: boolean;
 	isRuleMatched?: boolean;
+	isEmbargoed?: boolean;
+	embargoTimeRemaining?: number;
 	compression?: CompressionStats;
 	compressionTriggerReason?: "context_size" | "cache_expiry";
 	compressionCacheHit?: boolean;
