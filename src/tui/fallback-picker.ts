@@ -1,4 +1,4 @@
-import type { Component, TUI, SelectListTheme, SymbolTheme } from "@oh-my-pi/pi-tui";
+import type { Component, TUI, SelectListTheme, SymbolTheme, Tab } from "@oh-my-pi/pi-tui";
 import { Input, SelectList, TabBar, fuzzyFilter, replaceTabs, truncateToWidth, matchesKey } from "@oh-my-pi/pi-tui";
 import type { KeybindingsManager, Theme } from "@oh-my-pi/pi-coding-agent";
 
@@ -85,15 +85,13 @@ export class FallbackPickerComponent implements Component {
 			this.#selected.set(modelRef, index + 1);
 		});
 		
-		// Initialize TabBar with provider scopes
+		// Initialize TabBar with provider scopes derived from available models
 		const selectListTheme = buildSelectListTheme(this.#theme);
-		const tabs = [
-			{ id: "all", label: "ALL" },
-			{ id: "amazon-bedrock", label: "AMAZON BEDROCK" },
-			{ id: "anthropic", label: "ANTHROPIC" },
-			{ id: "openai", label: "OPENAI" },
-			{ id: "google", label: "GOOGLE" },
-		];
+		const providers = [...new Set(allModels.map((m) => m.value.split("/")[0]))].sort();
+		const tabs: Tab[] = [{ id: "all", label: "ALL" }];
+		for (const p of providers) {
+			tabs.push({ id: p, label: p.toUpperCase() });
+		}
 		this.#tabBar = new TabBar(
 			"Provider scope",
 			tabs,

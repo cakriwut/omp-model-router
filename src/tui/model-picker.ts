@@ -67,14 +67,15 @@ export interface ModelPickerOptions {
 	models?: readonly ModelItem[];
 }
 
-/** Tabs by id; ALL is the unfiltered scope. */
-const TABS: Tab[] = [
-	{ id: "all", label: "ALL" },
-	{ id: "amazon-bedrock", label: "AMAZON BEDROCK" },
-	{ id: "anthropic", label: "ANTHROPIC" },
-	{ id: "openai", label: "OPENAI" },
-	{ id: "google", label: "GOOGLE" },
-];
+/** Tabs by id; ALL is the unfiltered scope. Rest derived from models. */
+function buildTabs(models: readonly ModelItem[]): Tab[] {
+	const providers = [...new Set(models.map((m) => m.provider))].sort();
+	const tabs: Tab[] = [{ id: "all", label: "ALL" }];
+	for (const p of providers) {
+		tabs.push({ id: p, label: p.toUpperCase() });
+	}
+	return tabs;
+}
 
 /**
  * Convert a `Model` from the registry into a `ModelItem` for the picker.
@@ -158,7 +159,7 @@ export class ModelPickerComponent implements Component {
 		this.#currentFallbacks = options.currentFallbacks ?? [];
 		this.#models = options.models ?? collectModels(options.modelRegistry);
 
-		this.#tabBar = new TabBar("Provider", TABS, {
+		this.#tabBar = new TabBar("Provider", buildTabs(this.#models), {
 			label: (text) => theme.fg("muted", text),
 			activeTab: (text) => theme.fg("accent", text),
 			inactiveTab: (text) => theme.fg("muted", text),
