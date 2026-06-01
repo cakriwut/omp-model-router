@@ -14,7 +14,9 @@ import type {
 	RouterThinkingByTier,
 } from "../types";
 import type { SessionCalibration, CalibrationConfig } from "../calibration/types";
+import type { SessionScope } from "../state";
 import { updateCalibrationMatrix, applyCalibratedTier } from "../calibration/session";
+import { setScopedPin } from "./pin";
 import { hasImageAttachment } from "./text";
 import { decideRouting, buildRoutingDecision, phaseForTier } from "./heuristic";
 
@@ -96,6 +98,11 @@ export interface RoutingInput {
 	modelRegistry: ExtensionContext["modelRegistry"];
 	lastExtensionContext?: ExtensionContext;
 	calibration?: SessionCalibration;
+	/**
+	 * Active session scope — mutated by setScopedPin when a pin-creating event fires.
+	 * Optional for backward compat; when absent, scoped pin creation is skipped.
+	 */
+	scope?: SessionScope;
 }
 
 export interface RoutingConfig {
@@ -107,6 +114,8 @@ export interface RoutingConfig {
 	classifierModel?: string | string[];
 	debug?: boolean;
 	calibrationConfig?: CalibrationConfig;
+	/** Subset of RouterConfig needed for scoped-pin operations (timeout, floor). */
+	pinConfig?: { pinTimeout?: number; defaultPin?: RouterTier | "auto" };
 }
 
 /**
@@ -132,6 +141,17 @@ export const resolveRouting = async (
 		config.rules,
 		input.isBudgetExceeded,
 	);
+
+	// ── P2 pin for Rule J and rule-match (heuristic-created sticky decisions) ───────
+	if (input.scope && !input.pinnedTier && config.pinConfig) {
+		const isRuleJ = decision.reasoning.includes("planning-phase bias");
+		const isRuleMatch = decision.isRuleMatched === true;
+		if (isRuleJ) {
+			setScopedPin(input.scope, decision.tier, "heuristic", config.pinConfig);
+		} else if (isRuleMatch) {
+			setScopedPin(input.scope, decision.tier, "rule", config.pinConfig);
+		}
+	}
 
 	// 2. Context trigger — promote tier to the cheapest one whose model can
 	//    actually fit the current context. Static thresholds are wrong because
@@ -207,6 +227,10 @@ export const resolveRouting = async (
 				decision.phase = "implementation";
 				decision.reasoning = `Budget exceeded. Downgraded classifier decision to medium. (Original: ${decision.reasoning})`;
 				decision.isBudgetForced = true;
+			}
+			// P2 pin for classifier override
+			if (input.scope && config.pinConfig) {
+				setScopedPin(input.scope, decision.tier, "classifier", config.pinConfig);
 			}
 		} else {
 			// Classifier failed — try matrix calibration as fallback

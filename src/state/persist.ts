@@ -61,8 +61,6 @@ export const buildPersistedState = (
 ): RouterPersistedState => ({
 	enabled: state.routerEnabled,
 	selectedProfile: state.selectedProfile,
-	pinTier: state.pinnedTierByProfile[state.selectedProfile],
-	pinByProfile: { ...state.pinnedTierByProfile },
 	thinkingByProfile: { ...state.thinkingByProfile },
 	debugEnabled: state.debugEnabled,
 	widgetEnabled: state.widgetEnabled,
@@ -144,7 +142,6 @@ export const restoreFromSession = (
 	);
 
 	// ─── Reset session-scoped state ─────────────────────────────────
-	state.pinnedTierByProfile = {};
 	state.thinkingByProfile = {};
 	state.widgetEnabled = false;
 	state.debugHistory = [];
@@ -177,15 +174,10 @@ export const restoreFromSession = (
 
 	if (isRouterPersistedState(savedState)) {
 		// Do NOT restore enabled/selectedProfile from state — config is authoritative
-		state.pinnedTierByProfile = savedState.pinByProfile
-			? { ...savedState.pinByProfile }
-			: {};
+		// Pins are NO LONGER persisted — scoped pins are memory-only and session-scoped.
 		state.thinkingByProfile = savedState.thinkingByProfile
 			? { ...savedState.thinkingByProfile }
 			: {};
-		if (savedState.pinTier) {
-			state.pinnedTierByProfile[state.selectedProfile] = savedState.pinTier;
-		}
 		state.debugEnabled = savedState.debugEnabled ?? state.debugEnabled;
 		state.widgetEnabled = savedState.widgetEnabled ?? state.widgetEnabled;
 		// debugHistory is session-scoped and NOT restored — usage ledger is

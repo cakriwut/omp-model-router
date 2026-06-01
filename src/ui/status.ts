@@ -6,9 +6,11 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type {
 	RoutingDecision,
 	RouterConfig,
-	RouterPinByProfile,
 	RouterThinkingByProfile,
+	ScopedPin,
 } from "../types";
+import { resolveEffectivePin, DEFAULT_PIN_TIMEOUT_MS } from "../routing/pin";
+import type { SessionScope } from "../state";
 import {
 	shortenModelId,
 	THINKING_COLOR,
@@ -16,7 +18,7 @@ import {
 	PROFILE_PALETTE,
 	makeTierPalette,
 } from "./theme";
-import { formatPinSummary } from "./profile";
+import { formatScopedPin } from "./profile";
 
 // ─── Shimmer widget ───────────────────────────────────────────────────────────
 
@@ -121,14 +123,13 @@ export const buildStatusText = (
 	theme: Theme,
 	routerEnabled: boolean,
 	selectedProfile: string,
-	pinnedTierByProfile: RouterPinByProfile,
+	activePin: string | undefined,
 	thinkingByProfile: RouterThinkingByProfile,
 	lastDecision: RoutingDecision | undefined,
 	lastNonRouterModel: string | undefined,
 	isStreaming: boolean,
 	compressionEnabled = false,
 ): string => {
-	const activePin = pinnedTierByProfile[selectedProfile];
 	const pinSuffix = activePin ? theme.fg("accent", ` ⬣${activePin}`) : "";
 
 	if (!routerEnabled) {
@@ -217,7 +218,7 @@ export const updateStatus = (
 	ctx: ExtensionContext,
 	routerEnabled: boolean,
 	selectedProfile: string,
-	pinnedTierByProfile: RouterPinByProfile,
+	scope: SessionScope,
 	thinkingByProfile: RouterThinkingByProfile,
 	lastDecision: RoutingDecision | undefined,
 	lastNonRouterModel: string | undefined,
@@ -227,12 +228,12 @@ export const updateStatus = (
 	isStreaming = false,
 ) => {
 	const theme = ctx.ui.theme;
+	const activePin = resolveEffectivePin(scope, currentConfig);
+	const pinSuffix = activePin ? theme.fg("accent", ` \u2b23${activePin}`) : "";
 
 	if (isStreaming && routerEnabled) {
 		ctx.ui.setStatus("router", undefined);
 
-		const activePin = pinnedTierByProfile[selectedProfile];
-		const pinSuffix = activePin ? theme.fg("accent", ` ⬣${activePin}`) : "";
 		const matchesProfile = lastDecision?.profile === selectedProfile;
 		const matchesPin = activePin ? lastDecision?.tier === activePin : true;
 
@@ -287,7 +288,7 @@ export const updateStatus = (
 		theme,
 		routerEnabled,
 		selectedProfile,
-		pinnedTierByProfile,
+		activePin,
 		thinkingByProfile,
 		lastDecision,
 		lastNonRouterModel,
@@ -302,12 +303,11 @@ export const updateStatus = (
 	}
 
 	const statusProfile = selectedProfile;
-	const activePin = pinnedTierByProfile[statusProfile];
 
 	const widgetLines = [
 		`Router: ${routerEnabled ? "enabled" : "disabled"}`,
 		`Profile: ${statusProfile}${routerEnabled ? " (active)" : ""}`,
-		`Pin: ${activePin ?? "auto"}`,
+		`Pin: ${formatScopedPin(scope, currentConfig)}`,
 		`Session cost: $${accumulatedCost.toFixed(4)}` +
 			(currentConfig.maxSessionBudget
 				? ` / $${currentConfig.maxSessionBudget.toFixed(2)}`
@@ -332,10 +332,6 @@ export const updateStatus = (
 		);
 	} else if (!routerEnabled && lastNonRouterModel) {
 		widgetLines.push(`Fallback: ${lastNonRouterModel}`);
-	}
-
-	if (Object.keys(pinnedTierByProfile).length > 1) {
-		widgetLines.push(`Pins: ${formatPinSummary(pinnedTierByProfile)}`);
 	}
 
 	ctx.ui.setWidget(

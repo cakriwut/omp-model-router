@@ -4,6 +4,7 @@ import type { RouterState } from "../state";
 import type { RouterTier } from "../types";
 import type { Actions } from "./shared";
 import { THINKING_LEVELS, ROUTER_TIERS, isThinkingLevel } from "../config";
+import { resolveEffectivePin } from "../routing/pin";
 
 const TIER_VALUES: readonly string[] = ["high", "medium", "low"];
 
@@ -35,7 +36,7 @@ export const handleThinking = (
 	if (args.length === 1) {
 		levelValue = args[0];
 		tier =
-			state.pinnedTierByProfile[profileName] ??
+			resolveEffectivePin(state.scope, state.currentConfig) ??
 			(state.lastDecision?.profile === profileName
 				? state.lastDecision.tier
 				: "medium");
@@ -47,7 +48,7 @@ export const handleThinking = (
 			profileName = args[0];
 			levelValue = args[1];
 			tier =
-				state.pinnedTierByProfile[profileName] ??
+				resolveEffectivePin(state.scope, state.currentConfig) ??
 				(state.lastDecision?.profile === profileName
 					? state.lastDecision.tier
 					: "medium");

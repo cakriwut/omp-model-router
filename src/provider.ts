@@ -14,6 +14,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent";
 import type { RoutingDecision } from "./types";
 import { profileNames, parseCanonicalModelRef, ROUTER_TIERS } from "./config";
+import { resolveEffectivePin, setScopedPin } from "./routing/pin";
 import {
 	resolveRouting,
 	extractTextFromContent,
@@ -262,15 +263,17 @@ export const registerRouterProvider = (
 							? state.currentConfig.calibration.classifierModel
 							: state.currentConfig.classifierModel;
 
+					const resolvedPin = resolveEffectivePin(state.scope, state.currentConfig);
 					const decision = await resolveRouting(
 						{
 							context,
 							previousDecision: state.lastDecision,
-							pinnedTier: state.pinnedTierByProfile[model.id],
+							pinnedTier: resolvedPin,
 							isBudgetExceeded,
 							modelRegistry: state.currentModelRegistry,
 							lastExtensionContext: state.lastExtensionContext,
 							calibration: state.calibration,
+							scope: state.scope,
 						},
 						{
 							profileName: model.id,
@@ -281,23 +284,11 @@ export const registerRouterProvider = (
 							classifierModel: effectiveClassifierModel,
 							debug: state.currentConfig.debug,
 							calibrationConfig: state.currentConfig.calibration,
+							pinConfig: { pinTimeout: state.currentConfig.pinTimeout, defaultPin: state.currentConfig.defaultPin },
 						},
-					);
-					// ── Auto-upgrade override (one-shot) ──────────────────────────────
-					if (state.autoUpgradeTier) {
-						const upgradeTier = state.autoUpgradeTier;
-						state.autoUpgradeTier = undefined;
-						const tierConfig = profile[upgradeTier];
-						const { provider: upProvider, modelId: upModelId } =
-							parseCanonicalModelRef(tierConfig.model);
-						decision.tier = upgradeTier;
-						decision.targetProvider = upProvider;
-						decision.targetModelId = upModelId;
-						decision.targetLabel = tierConfig.model;
-						decision.thinking = tierConfig.thinking ?? decision.thinking;
-						decision.reasoning = `auto-upgrade: consecutive tool failures → ${upgradeTier}`;
-					}
+						);
 
+					// (auto-upgrade is now handled via setScopedPin in index.ts tool_execution_end)
 
 					state.lastDecision = decision;
 					actions.recordDebugDecision(decision);

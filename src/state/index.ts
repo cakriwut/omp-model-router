@@ -5,7 +5,6 @@ import { homedir } from "node:os";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import type {
 	RouterConfig,
-	RouterPinByProfile,
 	RouterThinkingByProfile,
 	RouterTier,
 	RoutingDecision,
@@ -14,6 +13,7 @@ import type {
 	CompressionCheckpoint,
 	EmbargoEntry,
 	EmbargoConfig,
+	ScopedPin,
 } from "../types";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { FALLBACK_CONFIG, resolveProfileName } from "../config";
@@ -47,6 +47,12 @@ export interface SessionScope {
 	tierCounter: TierCounter;
 	/** Cost breakdown per model */
 	modelCosts: Map<string, ModelCostEntry>;
+	/**
+	 * Session-scoped, memory-only pin. Decays after `config.pinTimeout` ms.
+	 * Independent of sibling/parent sessions — sub-agent pins do not bleed.
+	 * Set via `setScopedPin`; cleared via `clearScopedPin` or on expiry.
+	 */
+	scopedPin?: ScopedPin;
 }
 
 /**
@@ -89,7 +95,6 @@ export class RouterState {
 	isInternalModelSwitch = false;
 
 	// ─── Routing state ───────────────────────────────────────────────────
-	pinnedTierByProfile: RouterPinByProfile = {};
 	thinkingByProfile: RouterThinkingByProfile = {};
 
 	// ─── Session-scoped state (per-session isolation) ───────────────────
@@ -120,8 +125,6 @@ export class RouterState {
 	// ─── Auto-upgrade failure tracking (transient, not persisted) ───────
 	/** Tracks consecutive failures: toolName → count */
 	toolFailureStreak: Map<string, number> = new Map();
-	/** When set, forces the next routing decision to use this tier (one-shot). */
-	autoUpgradeTier: RouterTier | undefined;
 
 	// ─── Embargo state (global, persisted to disk) ─────────────────────
 	/** Model ref → embargo entry. Global across all sessions/profiles. */

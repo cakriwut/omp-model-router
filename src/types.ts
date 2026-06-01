@@ -3,6 +3,22 @@ import type { CalibrationConfig } from "./calibration/types";
 
 export type RouterTier = "high" | "medium" | "low";
 export type RouterPin = RouterTier | "auto";
+
+export type ScopedPinSource =
+	| "user"
+	| "heuristic"
+	| "classifier"
+	| "rule"
+	| "auto-upgrade";
+
+export interface ScopedPin {
+	/** The pinned tier. */
+	tier: RouterTier;
+	/** Epoch ms when the pin was set (used for timeout comparison). */
+	setAt: number;
+	/** Who created the pin — determines priority and conflict resolution. */
+	source: ScopedPinSource;
+}
 export type RouterPhase = "planning" | "implementation" | "lightweight";
 export type RouterPinByProfile = Partial<Record<string, RouterTier>>;
 export type RouterThinkingByTier = Partial<Record<RouterTier, ThinkingLevel>>;
@@ -189,6 +205,19 @@ export interface RouterConfig {
 	 * Default: false.
 	 */
 	enableRtk?: boolean;
+	/**
+	 * Permanent tier floor returned after a scoped pin decays.
+	 * - `"auto"` (default): no pin; the heuristic decides freely after decay.
+	 * - A tier value (`"high"` | `"medium"` | `"low"`): acts as a permanent,
+	 *   non-decaying floor — routing never falls below this tier.
+	 */
+	defaultPin?: RouterTier | "auto";
+	/**
+	 * How long a scoped pin stays active before it decays, in milliseconds.
+	 * After expiry the pin is cleared and `defaultPin` (or "auto") takes effect.
+	 * Default: 600 000 ms (10 minutes).
+	 */
+	pinTimeout?: number;
 }
 
 export interface RoutingDecisionUsage {
@@ -225,7 +254,9 @@ export interface RoutingDecision {
 export interface RouterPersistedState {
 	enabled: boolean;
 	selectedProfile: string;
+	/** @deprecated Pins are no longer persisted (scoped-pin-decay). Kept for backward compat deserialization. */
 	pinTier?: RouterTier;
+	/** @deprecated Pins are no longer persisted (scoped-pin-decay). Kept for backward compat deserialization. */
 	pinByProfile?: RouterPinByProfile;
 	thinkingByProfile?: RouterThinkingByProfile;
 	debugEnabled?: boolean;

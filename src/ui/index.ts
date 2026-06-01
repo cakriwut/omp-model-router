@@ -7,7 +7,7 @@ export {
 } from "./theme";
 export {
 	formatDecision,
-	formatPinSummary,
+	formatScopedPin,
 	formatThinkingSummary,
 	formatModelRef,
 } from "./profile";

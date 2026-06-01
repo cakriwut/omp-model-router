@@ -21,6 +21,7 @@ import {
 } from "./calibration/hooks";
 import { checkForUpdate } from "./version-check";
 import { registerRtkIntegration } from "./rtk-integration";
+import { setScopedPin } from "./routing/pin";
 
 const routerExtension = (pi: ExtensionAPI) => {
 	pi.setLabel("Model Router");
@@ -46,7 +47,7 @@ const routerExtension = (pi: ExtensionAPI) => {
 				ctx,
 				state.routerEnabled,
 				state.selectedProfile,
-				state.pinnedTierByProfile,
+				state.scope,
 				state.thinkingByProfile,
 				state.lastDecision,
 				state.lastNonRouterModel,
@@ -404,7 +405,7 @@ const routerExtension = (pi: ExtensionAPI) => {
 			const currentIdx = ROUTER_TIERS.indexOf(currentTier);
 			if (currentIdx > 0) {
 				const upgradedTier = ROUTER_TIERS[currentIdx - 1]; // higher = lower index
-				state.autoUpgradeTier = upgradedTier;
+				setScopedPin(state.scope, upgradedTier, "auto-upgrade", state.currentConfig);
 				state.toolFailureStreak.delete(event.toolName);
 				if (state.debugEnabled) {
 					ctx.ui.notify(

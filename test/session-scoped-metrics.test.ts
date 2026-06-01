@@ -52,7 +52,6 @@ describe("Session-scoped metrics", () => {
 
 		// Create state with user preferences
 		const state = new RouterState(FALLBACK_CONFIG);
-		state.pinnedTierByProfile["auto"] = "high";
 		state.widgetEnabled = true;
 		state.debugEnabled = true;
 
@@ -63,8 +62,8 @@ describe("Session-scoped metrics", () => {
 		const newState = new RouterState(FALLBACK_CONFIG);
 		newState.restoreFromSession(mockContext);
 
-		// Verify that user preferences ARE restored
-		expect(newState.pinnedTierByProfile["auto"]).toBe("high");
+		// Verify that user preferences ARE restored (pins are NOT — they're session-scoped)
+		expect(newState.scope.scopedPin).toBeUndefined();
 		expect(newState.widgetEnabled).toBe(true);
 		expect(newState.debugEnabled).toBe(true);
 	});
