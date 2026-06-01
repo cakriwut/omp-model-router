@@ -240,20 +240,25 @@ export class RouterState {
 	}
 
 	/**
-	 * Finalize a child session scope and roll up its accumulated cost/token
-	 * counters into the parent scope.
+	 * Finalize a child session scope and merge its aggregable metrics into the parent.
+	 * Called when a sub-agent completes (`agent_end` event).
 	 *
-	 * Behavior:
-	 * - If `child.parentSessionId` is set AND the parent scope still exists,
-	 *   the child's cost and token counters are added to the parent.
-	 * - If `child.parentSessionId` is `undefined`, the scope is deleted
-	 *   WITHOUT any rollup — the child's cost is effectively dropped. This is
-	 *   the dominant symptom when parent attribution fails upstream.
-	 * - The child scope is always deleted to free memory.
+	 * **Merged fields** (summed into parent):
+	 *   accumulatedCost, accumulatedOriginalTokens, accumulatedCompressedTokens,
+	 *   accumulatedTokensSaved, accumulatedCacheReadTokens,
+	 *   compressionRequestCount, compressionTotalOriginalChars,
+	 *   compressionTotalCompressedChars, tierCounter (element-wise),
+	 *   modelCosts (by model key — see {@link mergeModelCosts}).
 	 *
-	 * To diagnose missing rollups, enable `config.debug` and inspect the
-	 * `[model-router] parent attribution:` and `[model-router] late-bound
-	 * parent for ...` logs emitted by {@link activateSession}.
+	 * **Skipped fields** (parent retains its own values):
+	 *   debugHistory, lastDecision — parent's own routing trace.
+	 *   isStreaming, lastTurnTimestamp, currentCheckpoint — per-session ephemeral state.
+	 *   sessionId, parentSessionId — identity fields.
+	 *
+	 * If `child.parentSessionId` is `undefined` or the parent scope no longer
+	 * exists in memory, the child scope is deleted without any rollup. To diagnose
+	 * missing rollups enable `config.debug` and inspect `[model-router] parent
+	 * attribution:` log lines from {@link activateSession}.
 	 */
 	finalizeChildSession(childSessionId: string): void {
 		const child = this.sessionScopes.get(childSessionId);
@@ -263,16 +268,54 @@ export class RouterState {
 		if (parentId) {
 			const parent = this.sessionScopes.get(parentId);
 			if (parent) {
-				parent.accumulatedCost += child.accumulatedCost;
-				parent.accumulatedOriginalTokens += child.accumulatedOriginalTokens;
-				parent.accumulatedCompressedTokens += child.accumulatedCompressedTokens;
-				parent.accumulatedTokensSaved += child.accumulatedTokensSaved;
-				parent.accumulatedCacheReadTokens += child.accumulatedCacheReadTokens;
+				// ── numeric sums ─────────────────────────────────────────────
+				parent.accumulatedCost               += child.accumulatedCost;
+				parent.accumulatedOriginalTokens     += child.accumulatedOriginalTokens;
+				parent.accumulatedCompressedTokens   += child.accumulatedCompressedTokens;
+				parent.accumulatedTokensSaved        += child.accumulatedTokensSaved;
+				parent.accumulatedCacheReadTokens    += child.accumulatedCacheReadTokens;
+				parent.compressionRequestCount       += child.compressionRequestCount;
+				parent.compressionTotalOriginalChars += child.compressionTotalOriginalChars;
+				parent.compressionTotalCompressedChars += child.compressionTotalCompressedChars;
+				// ── struct sum ───────────────────────────────────────────────
+				parent.tierCounter.high   += child.tierCounter.high;
+				parent.tierCounter.medium += child.tierCounter.medium;
+				parent.tierCounter.low    += child.tierCounter.low;
+				// ── map merge ────────────────────────────────────────────────
+				this.mergeModelCosts(parent.modelCosts, child.modelCosts);
+				// SKIP: debugHistory, lastDecision — parent retains its own routing trace.
+				// SKIP: isStreaming, lastTurnTimestamp, currentCheckpoint — per-session ephemeral state.
+				// SKIP: sessionId, parentSessionId — identity fields.
 			}
 		}
 
 		// Clean up child scope to free memory
 		this.sessionScopes.delete(childSessionId);
+	}
+
+	/**
+	 * Merge source model-cost map into target. For each entry in source:
+	 * - If absent from target: copy as a new entry (value copy, not reference).
+	 * - If present: sum all numeric fields in-place; keep target's `tier` label.
+	 */
+	private mergeModelCosts(
+		target: Map<string, ModelCostEntry>,
+		source: Map<string, ModelCostEntry>,
+	): void {
+		for (const [key, src] of source) {
+			const existing = target.get(key);
+			if (existing) {
+				existing.invocations      += src.invocations;
+				existing.inputTokens      += src.inputTokens;
+				existing.outputTokens     += src.outputTokens;
+				existing.cacheReadTokens  += src.cacheReadTokens;
+				existing.cacheWriteTokens += src.cacheWriteTokens;
+				existing.cost             += src.cost;
+				// keep existing.tier — parent's label wins
+			} else {
+				target.set(key, { ...src });
+			}
+		}
 	}
 
 	/** Get total cost across all active session scopes. */
