@@ -289,6 +289,13 @@ describe("3.x finalizeChildSession rollup completeness", () => {
 			isStreaming: true,
 			lastTurnTimestamp: true,
 			currentCheckpoint: true,
+			frozenCompressionBlock: true,
+			scopedPin: true,
+			lastClassifierKey: true,
+			lastClassifierVerdict: true,
+			classifierTurnsSinceRun: true,
+			userMessagesSeen: true,
+			lastUserEntryId: true,
 		};
 
 		const { state, map } = makeState();
