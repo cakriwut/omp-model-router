@@ -76,13 +76,6 @@ const TABS: Tab[] = [
 	{ id: "google", label: "GOOGLE" },
 ];
 
-const BADGE_WIDTH = 12;
-const TIER_LETTER: Record<RouterTier, string> = {
-	high: "H",
-	medium: "M",
-	low: "L",
-};
-
 /**
  * Convert a `Model` from the registry into a `ModelItem` for the picker.
  * Skips router/* virtual models.
@@ -313,14 +306,13 @@ export class ModelPickerComponent implements Component {
 
 	#badgeFor(item: ModelItem): { text: string; styled: string } {
 		const ref = `${item.provider}/${item.id}`;
-		const tierLetter = TIER_LETTER[this.#tier];
 		if (ref === this.#currentPrimary) {
-			const text = `★ ${tierLetter}.primary`;
+			const text = "[primary]";
 			return { text, styled: this.#theme.fg("accent", text) };
 		}
 		const fbIndex = this.#currentFallbacks.indexOf(ref);
 		if (fbIndex >= 0) {
-			const text = `↓ ${tierLetter}.fb-${fbIndex + 1}`;
+			const text = `[fallback ${fbIndex + 1}]`;
 			return { text, styled: this.#theme.fg("muted", text) };
 		}
 		return { text: "", styled: "" };
@@ -347,18 +339,16 @@ export class ModelPickerComponent implements Component {
 			const item = this.#filtered[i];
 			const isSelected = i === this.#selectedIndex;
 			const badge = this.#badgeFor(item);
-			// Pad badge column to fixed width using its visible (un-styled) text length.
-			const padCount = Math.max(0, BADGE_WIDTH - badge.text.length);
-			const badgeCell = badge.styled + " ".repeat(padCount);
 
 			const cursor = isSelected ? t.fg("accent", "❯ ") : "  ";
 			const primary = `${item.provider}/${item.id}`;
 			const meta = modelMeta(item.contextWindow, item.costInput, item.costOutput);
+			const badgeSuffix = badge.styled ? ` ${badge.styled}` : "";
 			const body = isSelected
-				? `${t.fg("accent", primary)} ${t.fg("muted", `· ${meta}`)}`
-				: `${primary} ${t.fg("muted", `· ${meta}`)}`;
+				? `${t.fg("accent", primary)} ${t.fg("muted", `· ${meta}`)}${badgeSuffix}`
+				: `${primary} ${t.fg("muted", `· ${meta}`)}${badgeSuffix}`;
 
-			lines.push(`${badgeCell}${cursor}${body}`);
+			lines.push(`${cursor}${body}`);
 		}
 
 		// Scroll info
