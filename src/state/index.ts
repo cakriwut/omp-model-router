@@ -90,6 +90,7 @@ export class RouterState {
 	// ─── Session-scoped state (per-session isolation) ───────────────────
 	private sessionScopes = new Map<string, SessionScope>();
 	activeSessionId: string | undefined;
+	private parentAttributionLogged = new Set<string>();
 
 	// ─── Debug & UI ──────────────────────────────────────────────────────
 	debugEnabled = false;
@@ -139,11 +140,33 @@ export class RouterState {
 
 	/**
 	 * Activate a session scope. Called on session_start/turn_start.
-	 * Creates a new scope if one doesn't exist for this session ID.
+	 *
+	 * Late-binding rule: the **first non-undefined** `parentSessionId` observed
+	 * for a given `sessionId` wins. A subsequent call with a defined parent
+	 * will populate the field only if the existing scope's parent is still
+	 * `undefined`; it NEVER overwrites a parent that was already set.
+	 *
+	 * Callers SHOULD pass the parent from the harness's authoritative source:
+	 * `ctx.sessionManager.getHeader()?.parentSession`. Do not infer parents
+	 * from heuristics — pass `undefined` if the header is not available and
+	 * rely on a later activation to late-bind.
+	 *
+	 * The optional `source` argument is used only for debug-log attribution
+	 * (gated on `config.debug`) and has no functional effect.
+	 *
+	 * @param sessionId       The session being activated.
+	 * @param parentSessionId Parent session id from `SessionHeader.parentSession`, if known.
+	 * @param source          Provenance of `parentSessionId` for diagnostics: "header" |
+	 *                        "fallback" | "none". Defaults to "none".
 	 */
-	activateSession(sessionId: string, parentSessionId?: string): void {
+	activateSession(
+		sessionId: string,
+		parentSessionId?: string,
+		source: "header" | "fallback" | "none" = "none",
+	): void {
 		this.activeSessionId = sessionId;
-		if (!this.sessionScopes.has(sessionId)) {
+		const existing = this.sessionScopes.get(sessionId);
+		if (!existing) {
 			this.sessionScopes.set(sessionId, {
 				sessionId,
 				parentSessionId,
@@ -161,6 +184,44 @@ export class RouterState {
 				tierCounter: { high: 0, medium: 0, low: 0 },
 				modelCosts: new Map(),
 			});
+			if (this.currentConfig.debug && !this.parentAttributionLogged.has(sessionId)) {
+				this.parentAttributionLogged.add(sessionId);
+				if (parentSessionId !== undefined && source === "header") {
+					console.log(
+						`[model-router] parent attribution: child=${sessionId} source=header parent=${parentSessionId}`,
+					);
+				} else if (parentSessionId !== undefined && source === "fallback") {
+					console.log(
+						`[model-router] parent attribution: child=${sessionId} source=fallback parent=${parentSessionId}`,
+					);
+				} else {
+					console.log(
+						`[model-router] parent attribution: child=${sessionId} source=none (root or orphan)`,
+					);
+				}
+			}
+		} else {
+			this.setParentIfAbsent(existing, parentSessionId, sessionId);
+		}
+	}
+
+	/**
+	 * Late-bind a parent session id on an existing scope. Only assigns when the
+	 * scope's current `parentSessionId` is `undefined` and the incoming value
+	 * is defined — first non-undefined parent wins.
+	 */
+	private setParentIfAbsent(
+		scope: SessionScope,
+		parentSessionId: string | undefined,
+		sessionId: string,
+	): void {
+		if (scope.parentSessionId === undefined && parentSessionId !== undefined) {
+			scope.parentSessionId = parentSessionId;
+			if (this.currentConfig.debug) {
+				console.log(
+					`[model-router] late-bound parent for ${sessionId}: ${parentSessionId}`,
+				);
+			}
 		}
 	}
 
@@ -179,8 +240,20 @@ export class RouterState {
 	}
 
 	/**
-	 * Finalize a child session scope and merge its cost into the parent.
-	 * Called when a sub-agent completes.
+	 * Finalize a child session scope and roll up its accumulated cost/token
+	 * counters into the parent scope.
+	 *
+	 * Behavior:
+	 * - If `child.parentSessionId` is set AND the parent scope still exists,
+	 *   the child's cost and token counters are added to the parent.
+	 * - If `child.parentSessionId` is `undefined`, the scope is deleted
+	 *   WITHOUT any rollup — the child's cost is effectively dropped. This is
+	 *   the dominant symptom when parent attribution fails upstream.
+	 * - The child scope is always deleted to free memory.
+	 *
+	 * To diagnose missing rollups, enable `config.debug` and inspect the
+	 * `[model-router] parent attribution:` and `[model-router] late-bound
+	 * parent for ...` logs emitted by {@link activateSession}.
 	 */
 	finalizeChildSession(childSessionId: string): void {
 		const child = this.sessionScopes.get(childSessionId);

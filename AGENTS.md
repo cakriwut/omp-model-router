@@ -254,6 +254,31 @@ NOT `"file:..."`.
 
 After v0.6.2, the `/router update` command will detect dev installs and show this help automatically.
 
+### Parent attribution for sub-agent sessions
+
+The router tracks per-session cost in `RouterState.sessionScopes` (a `Map<sessionId, SessionScope>`). When a sub-agent ends (`agent_end`), `finalizeChildSession(childId)` rolls the child's accumulated cost up to its parent, identified by `SessionScope.parentSessionId`.
+
+- `parentSessionId` is set inside `activateSession`, sourced from `ctx.sessionManager.getHeader()?.parentSession` — the harness's authoritative persistent record of the agent tree.
+- **Fallback:** in the `turn_start` path, if the header has no `parentSession`, the previously-active sessionId is used (legacy heuristic). This is best-effort and only fires when the header is silent.
+- **First non-undefined parent wins.** Once `parentSessionId` is set on a scope, later `activateSession` calls never overwrite it. This keeps attribution stable across re-activation of the same session within a turn.
+
+**Diagnosing missing rollup.** Enable `debug: true` in config. Each attribution decision logs as:
+
+```
+[model-router] parent attribution: child=<id> source=<header|fallback|none> parent=<id>
+```
+
+If you see `source=none` for a session you expected to be a child, the harness header has no `parentSession` recorded for that session — the rollup will not happen and that is the symptom to chase upstream, not in the router.
+
+### Follow-on rollup threads
+
+Context for future contributors so the rollup investigation isn't re-derived:
+
+- **Thread B (next):** Expand `finalizeChildSession` to roll up **all** scope fields. Today only 5 of the ~12 fields on `SessionScope` are merged into the parent. Missing: `tierCounter`, `modelCosts`, `compressionRequestCount`, `compressionTotalOriginalChars`, `compressionTotalCompressedChars`.
+- **Thread A (after B):** Wire `/router usage` to read from the in-memory `SessionScope` aggregates instead of re-scanning the session JSONL, so sub-agent costs rolled up by Thread B actually surface in the usage report.
+- **Thread D:** Decide whether `maxSessionBudget` is per-session or per-agent-tree. Each session currently checks only its own `accumulatedCost`; in-flight sub-agent spend is invisible to the parent until `agent_end`.
+- **Thread E:** Move `frozenCompressionBlock` from `RouterState` (shared) into `SessionScope` (per-session) to prevent cross-session compression-cache pollution in multi-agent runs.
+
 
 ## Publish
 

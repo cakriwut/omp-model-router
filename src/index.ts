@@ -168,6 +168,14 @@ const routerExtension = (pi: ExtensionAPI) => {
 	// Register RTK integration (state-aware for observability)
 	registerRtkIntegration(pi, state);
 
+	const resolveParentFromHeader = (ctx: ExtensionContext): string | undefined => {
+		try {
+			return ctx.sessionManager.getHeader()?.parentSession ?? undefined;
+		} catch {
+			return undefined;
+		}
+	};
+
 	pi.on("session_start", async (_event, ctx) => {
 		actions.reloadConfig();
 
@@ -176,7 +184,8 @@ const routerExtension = (pi: ExtensionAPI) => {
 
 		// Activate session scope (isolates cost/state per session)
 		const sessionId = ctx.sessionManager.getSessionId();
-		state.activateSession(sessionId);
+		const sessionParent = resolveParentFromHeader(ctx);
+		state.activateSession(sessionId, sessionParent, sessionParent ? "header" : "none");
 
 		state.restoreFromSession(ctx);
 
@@ -241,7 +250,8 @@ const routerExtension = (pi: ExtensionAPI) => {
 
 		// Activate scope for the branched session
 		const sessionId = ctx.sessionManager.getSessionId();
-		state.activateSession(sessionId);
+		const sessionParent = resolveParentFromHeader(ctx);
+		state.activateSession(sessionId, sessionParent, sessionParent ? "header" : "none");
 
 		state.restoreFromSession(ctx);
 
@@ -286,7 +296,23 @@ const routerExtension = (pi: ExtensionAPI) => {
 		// Re-activate the correct session scope (handles sub-agent context switches)
 		const sessionId = ctx.sessionManager.getSessionId();
 		if (sessionId !== state.activeSessionId) {
-			state.activateSession(sessionId, state.activeSessionId);
+			const headerParent = resolveParentFromHeader(ctx);
+			const fallbackParent = state.activeSessionId;
+			const resolvedParent = headerParent ?? fallbackParent;
+			const source = headerParent ? "header" : (fallbackParent ? "fallback" : "none");
+
+			if (
+				state.currentConfig.debug &&
+				headerParent !== undefined &&
+				fallbackParent !== undefined &&
+				headerParent !== fallbackParent
+			) {
+				console.log(
+					`[model-router] parent attribution disagreement for ${sessionId}: header=${headerParent} fallback=${fallbackParent} — using header`
+				);
+			}
+
+			state.activateSession(sessionId, resolvedParent, source);
 		}
 
 		if (state.updateBannerShown) {
