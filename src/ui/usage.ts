@@ -50,6 +50,8 @@ export interface UsageReportInput {
 	modelCosts: Map<string, ModelCostEntry>;
 	lastDecision: RoutingDecision | undefined;
 	accumulatedCost?: number;
+	/** Sum of accumulatedCost across all active session scopes (root + in-flight children). For report display only — budget enforcement is per-session. */
+	treeCost?: number;
 	accumulatedOriginalTokens?: number;
 	accumulatedCompressedTokens?: number;
 	accumulatedTokensSaved?: number;
@@ -112,6 +114,13 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 	const headerLeft = `Router: ${selectedProfile}`;
 	const headerPad = Math.max(1, BAR_WIDTH + 2 - headerLeft.length - costStr.length);
 	const headerLine = `${headerLeft}${" ".repeat(headerPad)}${costStr}`;
+
+	// Tree-cost line: only shown when there are active child sessions contributing
+	const treeCost = opts.treeCost;
+	const hasTreeCost = treeCost !== undefined && treeCost > headerCost + 0.000001;
+	const treeCostLine = hasTreeCost
+		? theme.fg("dim", `Tree: $${treeCost.toFixed(4)} total (session + ${(treeCost - headerCost).toFixed(4)} children)`)
+		: undefined;
 
 	// Stacked distribution bar + label line
 	let barLine: string;
@@ -181,7 +190,7 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 		} catch { /* ignore bad model ref */ }
 	}
 
-	const lines = [headerLine, barLine, labelLine, "", ...modelLines];
+	const lines = [headerLine, ...(treeCostLine ? [treeCostLine] : []), barLine, labelLine, "", ...modelLines];
 	if (lastDecision) {
 		const triggerSuffix = lastDecision.compressionTriggerReason 
 			? ` [${lastDecision.compressionTriggerReason === 'context_size' ? '⟨size⟩' : '⟨expiry⟩'}]`

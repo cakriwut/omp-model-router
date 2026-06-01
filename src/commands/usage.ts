@@ -203,6 +203,7 @@ export const handleUsage = (
 		modelCosts: reportModelCosts,
 		lastDecision: state.lastDecision,
 		accumulatedCost: reportTotalCost,
+		treeCost: state.totalCost,
 		accumulatedOriginalTokens: state.accumulatedOriginalTokens,
 		accumulatedCompressedTokens: state.accumulatedCompressedTokens,
 		accumulatedTokensSaved: state.accumulatedTokensSaved,
