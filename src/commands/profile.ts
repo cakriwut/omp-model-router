@@ -88,9 +88,8 @@ export const handleProfile = (
 						modelRegistry: ctx.modelRegistry,
 						onSave: (savedProfileName, profile) => {
 							// Persist and reload config
-							patchConfigFile({ profiles: { ...state.currentConfig.profiles, [savedProfileName]: profile } })
-								.then(() => onReload())
-								.then(() => ctx.ui.notify("Profile saved.", "info"));
+							patchConfigFile({ profiles: { ...state.currentConfig.profiles, [savedProfileName]: profile } });
+							onReload().then(() => ctx.ui.notify("Profile saved.", "info"));
 						},
 					},
 				);

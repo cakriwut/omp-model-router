@@ -1,5 +1,5 @@
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
-import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { replaceTabs, truncateToWidth, matchesKey } from "@oh-my-pi/pi-tui";
 import type { KeybindingsManager, Theme, ModelRegistry } from "@oh-my-pi/pi-coding-agent";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { RouterProfile, RouterTier } from "../types";
@@ -100,7 +100,7 @@ export class ProfileEditorComponent implements Component {
 		const lines: string[] = [];
 
 		// Title bar
-		const headerHint = t.fg("muted", "[S save · ESC cancel]");
+		const headerHint = t.fg("muted", "[ctrl+s save · ESC cancel]");
 		const title = `Editing: ${this.#profileName}`;
 		lines.push(`${title}    ${headerHint}`);
 		lines.push("");
@@ -191,9 +191,9 @@ export class ProfileEditorComponent implements Component {
 
 	#hintLine(): string {
 		if (this.#state === "dirty_confirm") {
-			return "Unsaved: S save · y discard · n continue";
+			return "Unsaved: ctrl+s save · y discard · n continue";
 		}
-		return "ENTER/SPACE edit field · S save · ESC cancel";
+		return "ENTER/SPACE edit field · ctrl+s save · ESC cancel";
 	}
 
 	// ─── Input ─────────────────────────────────────────────────────────────
@@ -243,8 +243,8 @@ export class ProfileEditorComponent implements Component {
 			return;
 		}
 
-		// 4. S → save.
-		if (data === "S") {
+		// 4. ctrl+s → save.
+		if (matchesKey(data, "ctrl+s")) {
 			this.#done(this.#draft);
 			return;
 		}
@@ -263,7 +263,7 @@ export class ProfileEditorComponent implements Component {
 	}
 
 	#handleDirtyConfirm(data: string): void {
-		if (data === "S") {
+		if (matchesKey(data, "ctrl+s")) {
 			this.#done(this.#draft);
 			return;
 		}
