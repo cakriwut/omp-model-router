@@ -223,8 +223,8 @@ export function spawnClassifierForTurn(
 				state.calibration.llmCallsFailed++;
 				writePendingAsFailed(state.calibration, "spawn-no-id", 0);
 				clearPending(state.calibration);
-				if (state.debugEnabled) {
-					ctx.ui.notify(
+				if (debugEnabled) {
+					notifyFn(
 						"[calibration] Spawn returned no agentId",
 						"warning",
 					);
@@ -250,8 +250,8 @@ export function spawnClassifierForTurn(
 					state.calibration.llmCallsFailed++;
 					writePendingAsFailed(state.calibration, "timeout", ageMs);
 					clearPending(state.calibration);
-					if (state.debugEnabled) {
-						ctx.ui.notify(
+					if (debugEnabled) {
+						notifyFn(
 							`[calibration] Classifier timed out after ${ageMs}ms`,
 							"warning",
 						);
@@ -291,8 +291,8 @@ export function spawnClassifierForTurn(
 						ageMs,
 					);
 					clearPending(state.calibration);
-					if (state.debugEnabled) {
-						ctx.ui.notify(
+					if (debugEnabled) {
+						notifyFn(
 							`[calibration] Classifier failed: ${result.error}`,
 							"warning",
 						);

@@ -13,6 +13,9 @@ import type { RouterTier, RouterPhase } from "../types";
 /** Timeout for the synchronous classifier LLM call (prevents indefinite blocking) */
 const SYNC_CLASSIFIER_TIMEOUT_MS = 10_000;
 
+/** Max chars buffered from classifier stream — prevents runaway memory on huge/slow models */
+const SYNC_CLASSIFIER_MAX_BUFFER = 4096;
+
 export const runClassifier = async (
 	classifierModelRefsInput: string | string[],
 	modelRegistry: ExtensionContext["modelRegistry"],
@@ -93,6 +96,11 @@ export const runClassifier = async (
 						typeof (event as { delta?: unknown }).delta === "string"
 					) {
 						fullText += (event as { delta: string }).delta;
+						// Hard cap: abort if model streams too much (e.g. large local model)
+						if (fullText.length > SYNC_CLASSIFIER_MAX_BUFFER) {
+							ac.abort();
+							break;
+						}
 					}
 				}
 
