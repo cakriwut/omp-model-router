@@ -292,7 +292,6 @@ async function runClassifierStream(
 	headers?: Record<string, string>,
 ): Promise<{ tier: RouterTier; reasoning: string } | undefined> {
 	const INNER_TIMEOUT_MS = 30_000;
-	const MAX_BUFFER = 4096;
 	const ac = new AbortController();
 	const timeout = setTimeout(() => ac.abort(), INNER_TIMEOUT_MS);
 
@@ -306,11 +305,6 @@ async function runClassifierStream(
 				typeof (event as { delta?: unknown }).delta === "string"
 			) {
 				fullText += (event as { delta: string }).delta;
-				// Hard cap: abort if model streams too much (e.g. large local model)
-				if (fullText.length > MAX_BUFFER) {
-					ac.abort();
-					break;
-				}
 			}
 		}
 
