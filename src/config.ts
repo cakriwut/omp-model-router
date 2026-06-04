@@ -21,7 +21,7 @@ export const FALLBACK_CONFIG: RouterConfig = {
 	debug: false,
 	enableRtk: false,  // RTK integration disabled by default (opt-in)
 	defaultPin: "auto" as const,
-	pinTimeout: 600_000,
+	pinTimeout: 300_000,
 	pinPressureThreshold: 3,
 	profiles: {
 		auto: {

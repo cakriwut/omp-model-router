@@ -15,7 +15,7 @@ import type { RouterConfig, RouterTier, ScopedPin, ScopedPinSource } from "../ty
 import type { SessionScope } from "../state";
 
 /** Default pin timeout in milliseconds (10 minutes). */
-export const DEFAULT_PIN_TIMEOUT_MS = 600_000;
+export const DEFAULT_PIN_TIMEOUT_MS = 300_000;
 /** Default consecutive-disagreement threshold before a system pin pressure-lapses. */
 export const DEFAULT_PIN_PRESSURE_THRESHOLD = 3;
 
