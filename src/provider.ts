@@ -26,6 +26,7 @@ import {
 	applyCompression,
 } from "./context-compression";
 import { spawnClassifierForTurn } from "./calibration/hooks";
+import { loadPitfalls } from "./calibration/pitfalls";
 import {
 	StatusAwareError,
 	isRetryableStatus,
@@ -396,13 +397,20 @@ export const registerRouterProvider = (
 						state.accumulatedCost >= state.currentConfig.maxSessionBudget;
 
 					// ── Resolve routing decision (heuristic + overrides) ──────────────
-					// When calibration is in adaptive mode, use calibration.classifierModel for routing
+					// When calibration is in adaptive mode, use calibration.classifierModel for routing.
+					// Classifier is only active when: calibration.enabled && mode=adaptive (or
+					// top-level classifierModel is set for legacy direct use).
 					const effectiveClassifierModel =
 						state.currentConfig.calibration?.enabled &&
 						state.currentConfig.calibration?.mode === "adaptive" &&
 						state.currentConfig.calibration?.classifierModel
 							? state.currentConfig.calibration.classifierModel
 							: state.currentConfig.classifierModel;
+
+					// Load pitfalls once per routing decision; cached in-process after first read.
+					const pitfalls = effectiveClassifierModel
+						? loadPitfalls(state.currentCwd, state.currentConfig.pitfallsPath)
+						: undefined;
 
 					const { scopedPin, floor } = resolveEffectivePin(state.scope, state.currentConfig);
 					const decision = await resolveRouting(
@@ -428,8 +436,9 @@ export const registerRouterProvider = (
 							debug: state.currentConfig.debug,
 							calibrationConfig: state.currentConfig.calibration,
 							pinConfig: { pinTimeout: state.currentConfig.pinTimeout, defaultPin: state.currentConfig.defaultPin, pinPressureThreshold: state.currentConfig.pinPressureThreshold },
+							pitfalls: pitfalls || undefined,
 						},
-						);
+					);
 
 					// (auto-upgrade is now handled via setScopedPin in index.ts tool_execution_end)
 

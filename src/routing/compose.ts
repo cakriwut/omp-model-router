@@ -17,7 +17,7 @@ import type { SessionCalibration, CalibrationConfig } from "../calibration/types
 import type { SessionScope } from "../state";
 import type { RouterState } from "../state";
 import { getLastUserText, extractRecentToolCalls, getBucket } from "../utils/messages.js";
-import { updateCalibrationMatrix, applyCalibratedTier } from "../calibration/session";
+import { updateCalibrationMatrix } from "../calibration/session";
 import { setScopedPin, incrementPinPressure, DEFAULT_PIN_PRESSURE_THRESHOLD } from "./pin";
 import { hasImageAttachment } from "./text";
 import { decideRouting, buildRoutingDecision, phaseForTier } from "./heuristic";
@@ -126,6 +126,11 @@ export interface RoutingConfig {
 	calibrationConfig?: CalibrationConfig;
 	/** Subset of RouterConfig needed for scoped-pin operations (timeout, floor, pressure threshold). */
 	pinConfig?: { pinTimeout?: number; defaultPin?: RouterTier | "auto"; pinPressureThreshold?: number };
+	/**
+	 * Pre-loaded pitfalls markdown content (injected into classifier prompt).
+	 * Loaded by the caller (provider.ts) via loadPitfalls() so FS concerns stay out of compose.
+	 */
+	pitfalls?: string;
 }
 
 /**
@@ -290,6 +295,7 @@ export const resolveRouting = async (
 				decision.phase,
 				config.debug,
 				toolCounts,
+				config.pitfalls,
 			);
 			syncClassifierRan = true;
 			if (verdict && scope) {
@@ -327,25 +333,9 @@ export const resolveRouting = async (
 				setScopedPin(input.scope, decision.tier, "classifier", config.pinConfig);
 			}
 		} else {
-			// Classifier failed (MISS path only) — try matrix calibration as fallback
-			if (input.calibration && config.calibrationConfig?.enabled) {
-				const calibratedTier = applyCalibratedTier(
-					decision.tier,
-					input.calibration,
-					config.calibrationConfig,
-				);
-				if (calibratedTier !== decision.tier) {
-					decision = buildRoutingDecision(
-						config.profileName,
-						config.profile,
-						calibratedTier,
-						phaseForTier(calibratedTier),
-						`Calibrated: heuristic ${decision.tier} → ${calibratedTier} (matrix-based override)`,
-						config.thinkingOverrides,
-						false,
-					);
-				}
-			}
+			// Classifier was configured but failed — fall back to heuristic.
+			// In adaptive mode the pitfalls harness replaces matrix-based calibration;
+			// if the classifier can't produce a verdict we simply use the heuristic.
 			decision.reasoning = `Classifier unavailable, using heuristic: ${decision.reasoning}`;
 		}
 	}

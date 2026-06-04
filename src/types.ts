@@ -240,6 +240,13 @@ export interface RouterConfig {
 		ttlTurns?: number;
 	};
 	/**
+	 * Path to a local project-specific classifier pitfalls markdown file.
+	 * When set, takes precedence over the default local search path.
+	 * Global pitfalls (~/.omp/agent/model-router/pitfalls.md) are still
+	 * loaded as fallback if this path does not exist.
+	 */
+	pitfallsPath?: string;
+	/**
 	 * Stream idle timeout in milliseconds. If no event arrives from the delegated
 	 * model stream for this duration, the request is aborted and fallback is triggered.
 	 * Set to 0 to disable. Default: 120000 (120s).

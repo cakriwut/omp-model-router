@@ -8,10 +8,10 @@ Cost-optimized model routing for [Oh-My-Pi](https://github.com/can1357/oh-my-pi)
 ---
 
 ## Features
-
 ### 🎯 Intelligent Routing
 - **Tier-based selection**: Automatically classifies prompts as High/Medium/Low complexity
 - **Adaptive calibration**: Optional LLM-powered classifier for routing decisions (see [Calibration Modes](#calibration-modes))
+- **Classifier Pitfalls Harness**: Markdown files that teach the classifier known misclassification patterns — no training data required (see [Classifier Pitfalls Harness](#classifier-pitfalls-harness))
 - **Configurable profiles**: Auto, Deep, Cheap, Hybrid, OSS (bring your own!)
 - **Manual overrides**: Pin a tier when you need control
 - **Heuristic refinement**: Detects clarifications, code edits, planning, and explicit speed requests
@@ -241,7 +241,7 @@ At turn 5 (configurable), the router creates a **frozen checkpoint** — a TOON-
 
 ## Calibration Modes
 
-The calibration system allows you to use an LLM classifier for routing decisions instead of the heuristic.
+The calibration system lets an LLM classifier drive routing decisions instead of the heuristic.
 
 ### Telemetry Mode (default)
 
@@ -257,8 +257,7 @@ The calibration system allows you to use an LLM classifier for routing decisions
 
 - Classifier runs in the background for **data collection only**
 - Heuristic routing decisions are used for actual routing
-- Tracks accuracy: heuristic vs LLM predictions
-- Use this to evaluate classifier performance before switching to adaptive mode
+- Use this to observe classifier behaviour before committing
 
 ### Adaptive Mode
 
@@ -272,22 +271,76 @@ The calibration system allows you to use an LLM classifier for routing decisions
 }
 ```
 
-- Classifier **controls routing decisions**
-- LLM evaluates each prompt and overrides heuristic classification
+- Classifier **controls routing decisions** — its verdict is the final tier
 - Bypassed when tier is pinned, context-triggered, or rule-matched
-- Telemetry classifier still runs in background for accuracy tracking
+- When classifier fails (rate-limit, model unavailable), heuristic is used automatically
+- Use a cheap fast model (Haiku, Nova Micro) to keep overhead near zero
 
-### Use Cases
+### Classifier Fallback Chain
 
-**Start with `telemetry`:**
-- Collect data and tune the heuristic
-- Validate classifier accuracy before committing
-- No impact on routing performance
+`classifierModel` accepts a single string or an array. Entries are tried in order until one succeeds; if all fail the heuristic is used with no hard error:
 
-**Switch to `adaptive`:**
-- When you trust the classifier
-- Want maximum routing accuracy
-- Use a cheap, fast model (e.g., Haiku) to minimize overhead
+```json
+"classifierModel": [
+  "anthropic/claude-3-haiku-20240307",
+  "openai/gpt-4.1-nano",
+  "amazon-bedrock/amazon.nova-micro-v1:0"
+]
+```
+
+---
+
+## Classifier Pitfalls Harness
+
+The pitfalls harness injects known misclassification patterns directly into the classifier prompt. This replaces the need for open-ended telemetry to discover failure modes — you describe the pitfall once in a markdown file and the classifier sees it on every routing decision.
+
+### How It Works
+
+When a classifier model is active, the router looks for a pitfalls file in this order:
+
+1. `pitfallsPath` config field (explicit override)
+2. `model-router-pitfalls.md` in the current project directory
+3. `~/.omp/agent/model-router/pitfalls.md` (global, applies everywhere)
+
+The file contents are injected between the tier definitions and the conversation history in the classifier prompt, so the LLM sees ground truth before evaluating.
+
+### File Format
+
+Plain markdown. Use `##` headings to name each pitfall. Two to three lines per entry is enough — the classifier reads all of them.
+
+```markdown
+## Pitfall: Changelog or release notes
+Short summaries and version bumps are mechanical text assembly.
+Correct: **low**. Common misclass: medium.
+
+## Pitfall: Architecture decision or tradeoff analysis
+Even a short "should we use X or Y" prompt demands weighing trade-offs.
+Correct: **high**. Common misclass: medium (short prompt ≠ simple task).
+
+## Pitfall: Debugging across unfamiliar code with no repro
+Requires hypothesis generation and broad search — high cognitive load even for small fixes.
+Correct: **high**. Common misclass: medium (eventual fix may be a one-liner).
+```
+
+A starter file with 10 common pitfalls is installed at `~/.omp/agent/model-router/pitfalls.md` automatically. See `pitfalls.example.md` in this repo for the full template.
+
+### Project-Local Pitfalls
+
+Drop a `model-router-pitfalls.md` in your project root (the directory OMP runs from). It takes precedence over the global file and lets you encode domain-specific routing signals — e.g. "deploying to staging counts as low not high in this project".
+
+### Config Override
+
+To point at a non-standard path:
+
+```json
+{
+  "pitfallsPath": "./docs/router-pitfalls.md"
+}
+```
+
+### Caching
+
+The file is read once on the first routing decision that needs a classifier and cached in-process. Changes take effect on the next process start or `/reload`.
 
 ### Debug Messages
 
@@ -296,7 +349,6 @@ When `debug: true`, calibration emits messages like:
 [calibration] Initialized (mode: adaptive, warmup: 5)
 [calibration] h=medium, llm=high ✗ (42 comparisons, 1200ms)
 ```
-
 To hide these messages: set `"debug": false` and run `/reload`.
 
 

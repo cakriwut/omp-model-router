@@ -22,6 +22,7 @@ import {
 } from "./index";
 import type { TraceRecord } from "./types";
 import { getLastUserText, buildClassifierPrompt } from "./classifier-utils";
+import { loadPitfalls } from "./pitfalls";
 import { getCurrentVersion } from "../version-check";
 
 /**
@@ -170,10 +171,13 @@ export function spawnClassifierForTurn(
 	// Each of these holds (directly or transitively) the full session tree.
 	const userPrompt = getLastUserText(context);
 	const decision = state.lastDecision;
+	const pitfalls = loadPitfalls(state.currentCwd, config.pitfallsPath);
 	const classifierPrompt = buildClassifierPrompt(
 		context,
 		decision?.phase,
 		// toolCounts not available here; that's fine, the bucket already updated the cache key
+		undefined,
+		pitfalls || undefined,
 	);
 	const modelRegistry = ctx.modelRegistry; // registry ref is safe — small, no session data
 	const notifyFn = ctx.ui.notify.bind(ctx.ui);  // bound fn, not ctx itself

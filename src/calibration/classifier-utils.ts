@@ -85,6 +85,7 @@ export function buildClassifierPrompt(
 	context: Context,
 	currentPhase?: RouterPhase,
 	toolCounts?: Record<string, number>,
+	pitfalls?: string,
 ): string {
 	const promptText = getLastUserText(context);
 	const historyText = getConversationSummary(context, 6);
@@ -102,7 +103,7 @@ Tiers:
 - medium: Implementation of a known plan, multi-file edits, normal coding work, focused debugging, tests/fixes.
 - low: Summaries, changelogs, formatting, quick explanations, small bounded transforms, simple read-only lookup.
 
-${currentPhase ? `Current phase: ${currentPhase}\n` : ""}Conversation (user messages and assistant replies only, no tool output):
+${pitfalls ? `\nKnown classification pitfalls to consider:\n${pitfalls}\n\n` : ""}${currentPhase ? `Current phase: ${currentPhase}\n` : ""}Conversation (user messages and assistant replies only, no tool output):
 ${historyText}
 
 ${activityLine}Latest user message:

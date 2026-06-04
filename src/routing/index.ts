@@ -22,6 +22,7 @@ export const runClassifier = async (
 	currentPhase?: RouterPhase,
 	debug = false,
 	toolCounts?: Record<string, number>,
+	pitfalls?: string,
 ): Promise<{ tier: RouterTier; reasoning: string } | undefined> => {
 	// Normalize to array (backward compat: single string → array)
 	const classifierModelRefs = Array.isArray(classifierModelRefsInput)
@@ -36,7 +37,7 @@ export const runClassifier = async (
 
 	const classifierContext: Context = {
 		messages: [
-			{ role: "user", content: buildClassifierPrompt(context, currentPhase, toolCounts), timestamp: Date.now() },
+			{ role: "user", content: buildClassifierPrompt(context, currentPhase, toolCounts, pitfalls), timestamp: Date.now() },
 		],
 	};
 
