@@ -404,12 +404,13 @@ export const registerRouterProvider = (
 							? state.currentConfig.calibration.classifierModel
 							: state.currentConfig.classifierModel;
 
-					const resolvedPin = resolveEffectivePin(state.scope, state.currentConfig);
+					const { scopedPin, floor } = resolveEffectivePin(state.scope, state.currentConfig);
 					const decision = await resolveRouting(
 						{
 							context,
 							previousDecision: state.lastDecision,
-							pinnedTier: resolvedPin,
+							pinnedTier: scopedPin,
+							floor,
 							isBudgetExceeded,
 							modelRegistry: state.currentModelRegistry,
 							lastExtensionContext: state.lastExtensionContext,

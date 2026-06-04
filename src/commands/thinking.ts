@@ -36,7 +36,9 @@ export const handleThinking = (
 	if (args.length === 1) {
 		levelValue = args[0];
 		tier =
-			resolveEffectivePin(state.scope, state.currentConfig) ??
+			(resolveEffectivePin(state.scope, state.currentConfig).scopedPin
+				?? resolveEffectivePin(state.scope, state.currentConfig).floor)
+			??
 			(state.lastDecision?.profile === profileName
 				? state.lastDecision.tier
 				: "medium");
@@ -48,7 +50,9 @@ export const handleThinking = (
 			profileName = args[0];
 			levelValue = args[1];
 			tier =
-				resolveEffectivePin(state.scope, state.currentConfig) ??
+				(resolveEffectivePin(state.scope, state.currentConfig).scopedPin
+					?? resolveEffectivePin(state.scope, state.currentConfig).floor)
+				??
 				(state.lastDecision?.profile === profileName
 					? state.lastDecision.tier
 					: "medium");

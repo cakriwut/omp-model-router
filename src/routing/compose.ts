@@ -95,7 +95,10 @@ const promoteForContextCapacity = (
 export interface RoutingInput {
 	context: Context;
 	previousDecision: RoutingDecision | undefined;
+	/** Active scoped pin (from user /router pin or system). Skips heuristic+classifier entirely. */
 	pinnedTier?: RouterTier;
+	/** Config floor (from defaultPin). Applied as a minimum clamp AFTER all routing decisions. */
+	floor?: RouterTier;
 	isBudgetExceeded: boolean;
 	modelRegistry: ExtensionContext["modelRegistry"];
 	lastExtensionContext?: ExtensionContext;
@@ -398,6 +401,27 @@ export const resolveRouting = async (
 
 			// If no tier with image support found and budget exceeded, stay at current tier
 			// (routing proceeds without image capability rather than exceeding budget)
+		}
+	}
+
+	// 5. Floor clamp — apply defaultPin as a minimum tier AFTER all routing decisions.
+	//    Unlike a scoped pin (which skips heuristic+classifier entirely), the floor
+	//    only raises the result when routing chose something below it.
+	//    "hi" → classifier=low → floor=medium → final=medium (correct)
+	//    "design system" → classifier=high → floor=medium → final=high (correct)
+	if (input.floor) {
+		const floorIdx = TIER_ORDER.indexOf(input.floor);
+		const resultIdx = TIER_ORDER.indexOf(decision.tier);
+		if (resultIdx < floorIdx) {
+			decision = buildRoutingDecision(
+				config.profileName,
+				config.profile,
+				input.floor,
+				phaseForTier(input.floor),
+				`Config floor (defaultPin: ${input.floor}) raised result from ${decision.tier}. Original: ${decision.reasoning}`,
+				config.thinkingOverrides,
+				decision.isClassifierOverride ?? false,
+			);
 		}
 	}
 

@@ -295,7 +295,7 @@ export const decideRouting = (
 	if (pinnedTier) {
 		phase = phaseForTier(pinnedTier);
 		tier = pinnedTier;
-		reasoning = `Pinned to ${pinnedTier} tier via /router pin.`;
+		reasoning = `Pinned to ${pinnedTier} tier (scoped pin active).`;
 	} else {
 		// Check custom rules first (use matchesKeywords for word-boundary accuracy)
 		if (rules) {

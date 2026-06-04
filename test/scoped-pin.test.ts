@@ -36,25 +36,32 @@ const timeout10m = { pinTimeout: 600_000 };
 // ─── resolveEffectivePin ──────────────────────────────────────────────────────
 
 describe("resolveEffectivePin", () => {
-	it("returns undefined when no scopedPin and defaultPin is 'auto'", () => {
+	it("returns undefined scopedPin and floor when no scopedPin and defaultPin is 'auto'", () => {
 		const scope = makeScope();
-		expect(resolveEffectivePin(scope as any, cfgAuto)).toBeUndefined();
+		const r = resolveEffectivePin(scope as any, cfgAuto);
+		expect(r.scopedPin).toBeUndefined();
+		expect(r.floor).toBeUndefined();
 	});
 
-	it("returns undefined when no scopedPin and defaultPin is undefined", () => {
+	it("returns undefined scopedPin and floor when no scopedPin and defaultPin is undefined", () => {
 		const scope = makeScope();
-		expect(resolveEffectivePin(scope as any, cfgUndefined)).toBeUndefined();
+		const r = resolveEffectivePin(scope as any, cfgUndefined);
+		expect(r.scopedPin).toBeUndefined();
+		expect(r.floor).toBeUndefined();
 	});
 
-	it("returns 'high' when no scopedPin and defaultPin is 'high'", () => {
+	it("returns floor='high' when no scopedPin and defaultPin is 'high'", () => {
 		const scope = makeScope();
-		expect(resolveEffectivePin(scope as any, cfgHigh)).toBe("high");
+		const r = resolveEffectivePin(scope as any, cfgHigh);
+		expect(r.scopedPin).toBeUndefined();
+		expect(r.floor).toBe("high");
 	});
 
 	it("returns scopedPin.tier when pin is active (setAt = now-5min, timeout=10min)", () => {
 		const FIVE_MIN = 5 * 60 * 1000;
 		const scope = makeScope({ scopedPin: makePin("medium", FIVE_MIN, "heuristic") });
-		expect(resolveEffectivePin(scope as any, timeout10m)).toBe("medium");
+		const r = resolveEffectivePin(scope as any, timeout10m);
+		expect(r.scopedPin).toBe("medium");
 	});
 
 	it("does NOT clear scopedPin when active", () => {
@@ -83,30 +90,32 @@ describe("resolveEffectivePin", () => {
 		expect(scope.lastDecision).toBeUndefined();
 	});
 
-	it("returns defaultPin floor after expiry when defaultPin='medium'", () => {
+	it("returns floor='medium' after expiry when defaultPin='medium'", () => {
 		const ELEVEN_MIN = 11 * 60 * 1000;
 		const scope = makeScope({ scopedPin: makePin("high", ELEVEN_MIN) });
-		const result = resolveEffectivePin(scope as any, { ...timeout10m, ...cfgMedium });
-		expect(result).toBe("medium");
+		const r = resolveEffectivePin(scope as any, { ...timeout10m, ...cfgMedium });
+		expect(r.scopedPin).toBeUndefined();
+		expect(r.floor).toBe("medium");
 	});
 
-	it("returns undefined after expiry when defaultPin='auto'", () => {
+	it("returns undefined floor after expiry when defaultPin='auto'", () => {
 		const ELEVEN_MIN = 11 * 60 * 1000;
 		const scope = makeScope({ scopedPin: makePin("high", ELEVEN_MIN) });
-		const result = resolveEffectivePin(scope as any, { ...timeout10m, ...cfgAuto });
-		expect(result).toBeUndefined();
+		const r = resolveEffectivePin(scope as any, { ...timeout10m, ...cfgAuto });
+		expect(r.scopedPin).toBeUndefined();
+		expect(r.floor).toBeUndefined();
 	});
 
 	it("uses DEFAULT_PIN_TIMEOUT_MS (600000) when pinTimeout is undefined", () => {
 		// Pin set just before timeout — should still be alive
 		const justUnder = DEFAULT_PIN_TIMEOUT_MS - 1000;
 		const scope = makeScope({ scopedPin: makePin("low", justUnder) });
-		expect(resolveEffectivePin(scope as any, {})).toBe("low");
+		expect(resolveEffectivePin(scope as any, {}).scopedPin).toBe("low");
 
 		// Pin set just over timeout — should be expired
 		const justOver = DEFAULT_PIN_TIMEOUT_MS + 1000;
 		const expiredScope = makeScope({ scopedPin: makePin("low", justOver) });
-		expect(resolveEffectivePin(expiredScope as any, {})).toBeUndefined();
+		expect(resolveEffectivePin(expiredScope as any, {}).scopedPin).toBeUndefined();
 		expect(expiredScope.scopedPin).toBeUndefined();
 	});
 });

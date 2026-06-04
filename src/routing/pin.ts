@@ -37,30 +37,39 @@ export const DEFAULT_PIN_PRESSURE_THRESHOLD = 3;
  * @param config The current router config.
  * @returns      The effective pinned tier, or `undefined` if unpinned.
  */
+export interface ResolvedPin {
+	/** The active scoped pin tier (from user or system). undefined = no active scoped pin. */
+	scopedPin: RouterTier | undefined;
+	/** The config floor tier (from defaultPin). undefined = no floor configured. */
+	floor: RouterTier | undefined;
+}
+
 export function resolveEffectivePin(
 	scope: SessionScope,
 	config: Pick<RouterConfig, "defaultPin" | "pinTimeout">,
-): RouterTier | undefined {
-	const pin = scope.scopedPin;
+): ResolvedPin {
+	let scopedPin: RouterTier | undefined;
 
+	const pin = scope.scopedPin;
 	if (pin !== undefined) {
 		const timeout = config.pinTimeout ?? DEFAULT_PIN_TIMEOUT_MS;
 		if (Date.now() - pin.setAt < timeout) {
 			// Pin is still alive — use it.
-			return pin.tier;
+			scopedPin = pin.tier;
+		} else {
+			// Pin has expired — clean break (decision X2).
+			scope.scopedPin = undefined;
+			scope.lastDecision = undefined;
 		}
-		// Pin has expired — clean break (decision X2).
-		scope.scopedPin = undefined;
-		scope.lastDecision = undefined;
 	}
 
-	// No active scoped pin. Return config floor if set.
-	const floor = config.defaultPin;
-	if (floor !== undefined && floor !== "auto") {
-		return floor;
-	}
+	// Config floor — applied as a post-routing minimum clamp, NOT as an override.
+	const defaultPin = config.defaultPin;
+	const floor = (defaultPin !== undefined && defaultPin !== "auto")
+		? defaultPin
+		: undefined;
 
-	return undefined;
+	return { scopedPin, floor };
 }
 
 /**

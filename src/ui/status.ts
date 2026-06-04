@@ -228,8 +228,11 @@ export const updateStatus = (
 	isStreaming = false,
 ) => {
 	const theme = ctx.ui.theme;
-	const activePin = resolveEffectivePin(scope, currentConfig);
-	const pinSuffix = activePin ? theme.fg("accent", ` \u2b23${activePin}`) : "";
+	const { scopedPin, floor } = resolveEffectivePin(scope, currentConfig);
+	const activePin = scopedPin;
+	const pinSuffix = activePin
+		? theme.fg("accent", ` \u2b23${activePin}`)
+		: (floor ? theme.fg("dim", ` \u230a${floor}\u230b`) : "");
 
 	if (isStreaming && routerEnabled) {
 		ctx.ui.setStatus("router", undefined);
