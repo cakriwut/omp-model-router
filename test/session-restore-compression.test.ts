@@ -49,63 +49,14 @@ beforeEach(() => {
 });
 
 describe("Session restore compression state", () => {
-	test.skip("new session initializes lastTurnTimestamp to prevent immediate trigger", () => {
+	// Design: compression counters and checkpoint are session-scoped and always
+	// start at zero — they are NOT persisted or restored across sessions.
+	// lastTurnTimestamp is set only when a compression turn fires, not on restore.
+
+	test("compression counters start at zero after restoreFromSession", () => {
 		const state = new RouterState(mockExtensionAPI);
 		state.currentConfig = mockConfig;
 		const ctx: any = mockExtensionContext();
-
-		state.restoreFromSession(ctx);
-
-		expect(state.lastTurnTimestamp).toBeDefined();
-		expect(state.lastTurnTimestamp).toBeGreaterThan(Date.now() - 1000); // within 1s of now
-		expect(state.compressionRequestCount).toBe(0);
-		expect(state.currentCheckpoint).toBeUndefined();
-	});
-
-	test.skip("persisted compression state is restored on session reload", () => {
-		const state = new RouterState(mockExtensionAPI);
-		state.currentConfig = mockConfig;
-		const ctx: any = mockExtensionContext();
-
-		// Simulate first session: set compression state
-		state.restoreFromSession(ctx);
-		state.compressionRequestCount = 5;
-		state.compressionTotalOriginalChars = 100_000;
-		state.compressionTotalCompressedChars = 20_000;
-		state.lastTurnTimestamp = Date.now() - 10_000; // 10s ago
-		state.currentCheckpoint = {
-			compressedPrefix: { role: "user", content: "toon compressed" },
-			excludedTailMessages: [],
-			metadata: {
-				originalMessageCount: 10,
-				estimatedOriginalTokens: 5000,
-				estimatedCompressedTokens: 1000,
-				triggerReason: "context_size",
-				timestamp: Date.now() - 10_000,
-			},
-		};
-
-		// Save state (persist() writes to file and session)
-		state.persist();
-
-		// Create new state instance (simulates session reload)
-		const state2 = new RouterState(mockExtensionAPI);
-		state2.currentConfig = mockConfig;
-		state2.restoreFromSession(ctx);
-
-		// Verify compression state restored
-		expect(state2.compressionRequestCount).toBe(5);
-		expect(state2.compressionTotalOriginalChars).toBe(100_000);
-		expect(state2.compressionTotalCompressedChars).toBe(20_000);
-		expect(state2.lastTurnTimestamp).toBe(state.lastTurnTimestamp);
-		expect(state2.currentCheckpoint).toBeDefined();
-		expect(state2.currentCheckpoint?.metadata.triggerReason).toBe("context_size");
-	});
-
-	test.skip("compression state reset when no saved state exists", () => {
-		const state = new RouterState(mockExtensionAPI);
-		state.currentConfig = mockConfig;
-		const ctx: any = mockExtensionContext("/test-fresh");
 
 		state.restoreFromSession(ctx);
 
@@ -113,7 +64,47 @@ describe("Session restore compression state", () => {
 		expect(state.compressionTotalOriginalChars).toBe(0);
 		expect(state.compressionTotalCompressedChars).toBe(0);
 		expect(state.currentCheckpoint).toBeUndefined();
-		expect(state.lastTurnTimestamp).toBeDefined();
-		expect(state.lastTurnTimestamp).toBeGreaterThan(Date.now() - 1000);
+	});
+
+	test("lastTurnTimestamp is undefined after restoreFromSession (set on first compression turn)", () => {
+		const state = new RouterState(mockExtensionAPI);
+		state.currentConfig = mockConfig;
+		const ctx: any = mockExtensionContext();
+
+		state.restoreFromSession(ctx);
+
+		// lastTurnTimestamp is NOT initialised by restoreFromSession.
+		// It is set by provider.ts after a compression turn completes.
+		// Starting as undefined ensures progressive TOON skips the time-threshold
+		// check on the very first turn (no stale timestamp to compare against).
+		expect(state.lastTurnTimestamp).toBeUndefined();
+	});
+
+	test("compression counters are NOT restored from persisted state (always session-fresh)", () => {
+		const state = new RouterState(mockExtensionAPI);
+		state.currentConfig = mockConfig;
+		const ctx: any = mockExtensionContext();
+
+		state.restoreFromSession(ctx);
+
+		// Simulate mid-session compression activity
+		state.compressionRequestCount = 5;
+		state.compressionTotalOriginalChars = 100_000;
+		state.compressionTotalCompressedChars = 20_000;
+		state.lastTurnTimestamp = Date.now() - 10_000;
+
+		// Persist current state to disk
+		state.persist();
+
+		// New state instance restoring from same session — compression counters must NOT carry over
+		const state2 = new RouterState(mockExtensionAPI);
+		state2.currentConfig = mockConfig;
+		state2.restoreFromSession(ctx);
+
+		expect(state2.compressionRequestCount).toBe(0);
+		expect(state2.compressionTotalOriginalChars).toBe(0);
+		expect(state2.compressionTotalCompressedChars).toBe(0);
+		expect(state2.lastTurnTimestamp).toBeUndefined();
+		expect(state2.currentCheckpoint).toBeUndefined();
 	});
 });
