@@ -161,12 +161,39 @@ export const parseCanonicalModelRef = (
  * Filters out invalid entries from arrays (warning each), drops the field entirely when
  * nothing valid remains.
  */
+/**
+ * Model ID patterns that are unsafe as classifiers.
+ * Large generalist models (>70B params) stream at very high bandwidth and
+ * ignore or underperform on max_tokens constraints, causing TCP buffer OOM
+ * when used as classifiers. The classifier output is always < 100 chars —
+ * there is no reason to use a 671B model for it.
+ */
+const UNSAFE_CLASSIFIER_PATTERNS = [
+	/671b/i,
+	/405b/i,
+	/70b(?!.*micro)/i,
+];
+
+const isUnsafeClassifier = (ref: string): string | undefined => {
+	for (const pattern of UNSAFE_CLASSIFIER_PATTERNS) {
+		if (pattern.test(ref)) {
+			return `model "${ref}" matches unsafe-classifier pattern ${pattern} — large generalist models cause TCP buffer OOM when used as classifiers (output is always <100 chars; use a micro/nano/haiku-class model instead)`;
+		}
+	}
+	return undefined;
+};
+
 const validateClassifierModel = (
 	value: unknown,
 	warnings: string[],
 ): string | string[] | undefined => {
 	if (typeof value === "string") {
 		const trimmed = value.trim();
+		const unsafeReason = isUnsafeClassifier(trimmed);
+		if (unsafeReason) {
+			warnings.push(`Skipping classifierModel: ${unsafeReason}`);
+			return undefined;
+		}
 		try {
 			parseCanonicalModelRef(trimmed);
 			return trimmed;
@@ -182,6 +209,11 @@ const validateClassifierModel = (
 		for (const entry of value) {
 			if (typeof entry !== "string") continue;
 			const trimmed = entry.trim();
+			const unsafeReason = isUnsafeClassifier(trimmed);
+			if (unsafeReason) {
+				warnings.push(`Skipping classifierModel in array: ${unsafeReason}`);
+				continue;
+			}
 			try {
 				parseCanonicalModelRef(trimmed);
 				valid.push(trimmed);
