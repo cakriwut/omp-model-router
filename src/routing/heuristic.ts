@@ -281,6 +281,7 @@ export const decideRouting = (
 	phaseBias = 0.5,
 	rules?: RoutingRule[],
 	isBudgetExceeded = false,
+	floor?: RouterTier,
 ): RoutingDecision => {
 	const prompt = getLastUserText(context).toLowerCase();
 	const recentConversation = getRecentConversationText(context);
@@ -288,8 +289,12 @@ export const decideRouting = (
 	const wordCount = countWords(prompt);
 
 	let phase: RouterPhase = previousDecision?.phase ?? "implementation";
-	let tier: RouterTier = "medium";
-	let reasoning = "Defaulted to medium tier for general coding work.";
+	// Use floor as the default starting tier when provided (replaces hardcoded 'medium').
+	// This is the 'last resort' value — heuristic rules and classifier can freely override it.
+	let tier: RouterTier = floor ?? "medium";
+	let reasoning = floor
+		? `Defaulted to ${floor} tier (config defaultPin).`
+		: "Defaulted to medium tier for general coding work.";
 	let isRuleMatched = false;
 
 	if (pinnedTier) {

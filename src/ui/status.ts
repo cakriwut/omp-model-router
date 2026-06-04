@@ -228,11 +228,10 @@ export const updateStatus = (
 	isStreaming = false,
 ) => {
 	const theme = ctx.ui.theme;
-	const { scopedPin, floor } = resolveEffectivePin(scope, currentConfig);
+	const { scopedPin } = resolveEffectivePin(scope, currentConfig);
 	const activePin = scopedPin;
-	const pinSuffix = activePin
-		? theme.fg("accent", ` \u2b23${activePin}`)
-		: (floor ? theme.fg("dim", ` \u230a${floor}\u230b`) : "");
+	// Active scoped pin shown prominently; floor (defaultPin) is the silent default — no badge.
+	const pinSuffix = activePin ? theme.fg("accent", ` \u2b23${activePin}`) : "";
 
 	if (isStreaming && routerEnabled) {
 		ctx.ui.setStatus("router", undefined);

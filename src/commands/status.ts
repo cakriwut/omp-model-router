@@ -11,7 +11,7 @@ const formatScopedPin = (state: RouterState): string => {
 	const pin = state.scope.scopedPin;
 	if (!pin) {
 		const floor = state.currentConfig.defaultPin ?? "auto";
-		return floor === "auto" ? "none (heuristic)" : `none (floor: ${floor})`;
+		return floor === "auto" ? "none (heuristic free)" : `none (default: ${floor})`;
 	}
 	const timeout = state.currentConfig.pinTimeout ?? DEFAULT_PIN_TIMEOUT_MS;
 	const remaining = timeout - (Date.now() - pin.setAt);

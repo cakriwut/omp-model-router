@@ -150,6 +150,7 @@ export const resolveRouting = async (
 		config.phaseBias,
 		config.rules,
 		input.isBudgetExceeded,
+		input.floor,
 	);
 
 	// ── Pressure lapse: if a system pin is active, check whether the heuristic
@@ -169,6 +170,7 @@ export const resolveRouting = async (
 				config.phaseBias,
 				config.rules,
 				input.isBudgetExceeded,
+				input.floor,
 			);
 			const threshold =
 				config.pinConfig.pinPressureThreshold ??
@@ -404,26 +406,11 @@ export const resolveRouting = async (
 		}
 	}
 
-	// 5. Floor clamp — apply defaultPin as a minimum tier AFTER all routing decisions.
-	//    Unlike a scoped pin (which skips heuristic+classifier entirely), the floor
-	//    only raises the result when routing chose something below it.
-	//    "hi" → classifier=low → floor=medium → final=medium (correct)
-	//    "design system" → classifier=high → floor=medium → final=high (correct)
-	if (input.floor) {
-		const floorIdx = TIER_ORDER.indexOf(input.floor);
-		const resultIdx = TIER_ORDER.indexOf(decision.tier);
-		if (resultIdx < floorIdx) {
-			decision = buildRoutingDecision(
-				config.profileName,
-				config.profile,
-				input.floor,
-				phaseForTier(input.floor),
-				`Config floor (defaultPin: ${input.floor}) raised result from ${decision.tier}. Original: ${decision.reasoning}`,
-				config.thinkingOverrides,
-				decision.isClassifierOverride ?? false,
-			);
-		}
-	}
+	// 5. Floor: defaultPin is the starting default tier when no scoped pin is active.
+	//    It is NOT a minimum clamp — heuristic and classifier can freely route
+	//    to any tier including below the floor. The floor only provides the
+	//    baseline default (replacing the hardcoded 'medium') when routing starts.
+	//    Nothing to do here — floor was already passed as the heuristic default tier.
 
 	return decision;
 };
