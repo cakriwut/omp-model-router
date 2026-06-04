@@ -225,3 +225,240 @@ describe("clearScopedPin", () => {
 		expect(scope.lastDecision).toBeUndefined();
 	});
 });
+
+// ─── Integration: 7.4 sticky loop bounded ────────────────────────────────────
+
+describe("Integration: sticky loop bounded by timeout", () => {
+	it("pin set by Rule J (heuristic) expires after timeout and heuristic runs fresh", () => {
+		const scope = makeScope();
+		const cfg = { pinTimeout: 300_000, defaultPin: "auto" as const };
+
+		// Rule J fires: heuristic sets a system pin to "high"
+		setScopedPin(scope as any, "high", "heuristic", cfg);
+		expect(scope.scopedPin?.tier).toBe("high");
+		expect(scope.scopedPin?.source).toBe("heuristic");
+
+		// Set lastDecision to simulate phase state that Rule J would re-use
+		scope.lastDecision = { tier: "high", phase: "planning" } as RoutingDecision;
+
+		// Pin still active within timeout → resolves to scoped pin
+		const { scopedPin: activePin } = resolveEffectivePin(scope as any, cfg);
+		expect(activePin).toBe("high");
+		expect(scope.scopedPin).toBeDefined();   // not cleared yet
+		expect(scope.lastDecision).toBeDefined(); // not cleared yet
+
+		// Simulate timeout: advance setAt back past pinTimeout
+		scope.scopedPin!.setAt = Date.now() - cfg.pinTimeout - 1;
+
+		// After expiry → resolveEffectivePin clears both scopedPin and lastDecision
+		const { scopedPin: expiredPin, floor } = resolveEffectivePin(scope as any, cfg);
+		expect(expiredPin).toBeUndefined();  // no active scoped pin
+		expect(floor).toBeUndefined();       // defaultPin=auto → no floor
+		expect(scope.scopedPin).toBeUndefined();    // cleared
+		expect(scope.lastDecision).toBeUndefined(); // cleared → heuristic runs fresh
+
+		// A new P2 pin CAN now be set (slot is free after expiry)
+		setScopedPin(scope as any, "medium", "heuristic", cfg);
+		expect(scope.scopedPin?.tier).toBe("medium");
+	});
+
+	it("pressure lapse: incrementPinPressure clears system pin after N disagreements", () => {
+		const { incrementPinPressure } = require("../src/routing/pin");
+		const scope = makeScope();
+		const cfg = { pinTimeout: 300_000 };
+
+		// Classifier pins "high"
+		setScopedPin(scope as any, "high", "classifier", cfg);
+		expect(scope.scopedPin?.tier).toBe("high");
+
+		// Shadow heuristic disagrees (says "medium") — turns 1 and 2: no lapse yet
+		expect(incrementPinPressure(scope as any, "medium", 3)).toBe(false);
+		expect(scope.scopedPin?.overridePressureCount).toBe(1);
+		expect(incrementPinPressure(scope as any, "medium", 3)).toBe(false);
+		expect(scope.scopedPin?.overridePressureCount).toBe(2);
+
+		// Turn 3: threshold reached → pin lapses
+		expect(incrementPinPressure(scope as any, "medium", 3)).toBe(true);
+		expect(scope.scopedPin).toBeUndefined();
+		expect(scope.lastDecision).toBeUndefined();
+	});
+
+	it("pressure counter resets when heuristic agrees", () => {
+		const { incrementPinPressure } = require("../src/routing/pin");
+		const scope = makeScope();
+		const cfg = { pinTimeout: 300_000 };
+
+		setScopedPin(scope as any, "high", "heuristic", cfg);
+
+		// Two disagreements
+		incrementPinPressure(scope as any, "medium", 3);
+		incrementPinPressure(scope as any, "medium", 3);
+		expect(scope.scopedPin?.overridePressureCount).toBe(2);
+
+		// Heuristic agrees → counter resets
+		expect(incrementPinPressure(scope as any, "high", 3)).toBe(false);
+		expect(scope.scopedPin?.overridePressureCount).toBe(0);
+		expect(scope.scopedPin).toBeDefined(); // pin still alive
+
+		// One more disagreement — streak restarts from 0, not 2
+		incrementPinPressure(scope as any, "medium", 3);
+		expect(scope.scopedPin?.overridePressureCount).toBe(1);
+	});
+
+	it("user pin is immune to pressure lapse", () => {
+		const { incrementPinPressure } = require("../src/routing/pin");
+		const scope = makeScope();
+		const cfg = { pinTimeout: 300_000 };
+
+		// User sets pin to "high"
+		setScopedPin(scope as any, "high", "user", cfg);
+
+		// 10 consecutive disagreements — should never lapse
+		for (let i = 0; i < 10; i++) {
+			expect(incrementPinPressure(scope as any, "low", 3)).toBe(false);
+		}
+		expect(scope.scopedPin).toBeDefined();
+		expect(scope.scopedPin?.tier).toBe("high");
+	});
+});
+
+// ─── Integration: 7.5 user pin overrides system pin ──────────────────────────
+
+describe("Integration: user pin overrides system pin and decays independently", () => {
+	it("user /router pin overrides active heuristic pin and resets timer", () => {
+		const scope = makeScope();
+		const cfg = { pinTimeout: 300_000 };
+
+		// Heuristic sets system pin to "high"
+		setScopedPin(scope as any, "high", "heuristic", cfg);
+		const systemSetAt = scope.scopedPin!.setAt;
+		expect(scope.scopedPin?.source).toBe("heuristic");
+
+		// Small delay to ensure setAt differs
+		const before = Date.now();
+
+		// User runs /router pin medium — P1 always overrides
+		setScopedPin(scope as any, "medium", "user", cfg);
+		expect(scope.scopedPin?.tier).toBe("medium");
+		expect(scope.scopedPin?.source).toBe("user");
+		expect(scope.scopedPin!.setAt).toBeGreaterThanOrEqual(systemSetAt); // timer reset
+	});
+
+	it("user pin blocks all subsequent system pin attempts", () => {
+		const scope = makeScope();
+		const cfg = { pinTimeout: 300_000 };
+
+		// User pins to "medium"
+		setScopedPin(scope as any, "medium", "user", cfg);
+
+		// All P2 system sources are blocked
+		setScopedPin(scope as any, "high", "heuristic", cfg);
+		expect(scope.scopedPin?.tier).toBe("medium");  // unchanged
+
+		setScopedPin(scope as any, "high", "classifier", cfg);
+		expect(scope.scopedPin?.tier).toBe("medium");  // unchanged
+
+		setScopedPin(scope as any, "high", "rule", cfg);
+		expect(scope.scopedPin?.tier).toBe("medium");  // unchanged
+
+		setScopedPin(scope as any, "high", "auto-upgrade", cfg);
+		expect(scope.scopedPin?.tier).toBe("medium");  // unchanged
+	});
+
+	it("/router pin auto clears pin and lastDecision immediately", () => {
+		const scope = makeScope({
+			scopedPin: makePin("high", 0, "user"),
+			lastDecision: { tier: "high", phase: "planning" } as RoutingDecision,
+		});
+
+		clearScopedPin(scope as any);
+
+		expect(scope.scopedPin).toBeUndefined();
+		expect(scope.lastDecision).toBeUndefined();
+	});
+
+	it("user pin decays after timeout and returns to config floor", () => {
+		const scope = makeScope();
+		const cfg = { pinTimeout: 300_000, defaultPin: "medium" as RouterTier };
+
+		// User pins to "high"
+		setScopedPin(scope as any, "high", "user", cfg);
+		expect(resolveEffectivePin(scope as any, cfg).scopedPin).toBe("high");
+
+		// Simulate expiry
+		scope.scopedPin!.setAt = Date.now() - cfg.pinTimeout - 1;
+
+		// After decay → no scoped pin, floor = medium
+		const { scopedPin, floor } = resolveEffectivePin(scope as any, cfg);
+		expect(scopedPin).toBeUndefined();
+		expect(floor).toBe("medium");
+		expect(scope.scopedPin).toBeUndefined();
+		expect(scope.lastDecision).toBeUndefined();
+	});
+});
+
+// ─── Integration: 7.6 sub-agent independent pin lifecycle ────────────────────
+
+describe("Integration: sub-agent session has independent pin lifecycle", () => {
+	it("sub-agent scope is independent of parent scope", () => {
+		const parentScope = makeScope();
+		const childScope = makeScope();  // separate SessionScope instance
+		const cfg = { pinTimeout: 300_000 };
+
+		// Parent gets a classifier pin
+		setScopedPin(parentScope as any, "high", "classifier", cfg);
+		expect(parentScope.scopedPin?.tier).toBe("high");
+
+		// Child scope is unaffected
+		expect(childScope.scopedPin).toBeUndefined();
+
+		// Child sets its own pin to "low"
+		setScopedPin(childScope as any, "low", "heuristic", cfg);
+		expect(childScope.scopedPin?.tier).toBe("low");
+
+		// Parent scope unchanged
+		expect(parentScope.scopedPin?.tier).toBe("high");
+	});
+
+	it("child pin expiry does not affect parent", () => {
+		const parentScope = makeScope();
+		const childScope = makeScope();
+		const cfg = { pinTimeout: 300_000 };
+
+		setScopedPin(parentScope as any, "high", "user", cfg);
+		setScopedPin(childScope as any, "medium", "classifier", cfg);
+
+		// Expire child pin
+		childScope.scopedPin!.setAt = Date.now() - cfg.pinTimeout - 1;
+		resolveEffectivePin(childScope as any, cfg); // triggers expiry/clear
+
+		expect(childScope.scopedPin).toBeUndefined();
+		expect(parentScope.scopedPin?.tier).toBe("high"); // parent untouched
+	});
+
+	it("fresh session (new scope) starts with no pin regardless of defaultPin", () => {
+		// Spec: A new session always starts with no scoped pin
+		const freshScope = makeScope(); // models SessionScope construction
+		expect(freshScope.scopedPin).toBeUndefined();
+
+		// Config floor provides effective pin for routing, but scopedPin itself is empty
+		const cfg = { pinTimeout: 300_000, defaultPin: "medium" as RouterTier };
+		const { scopedPin, floor } = resolveEffectivePin(freshScope as any, cfg);
+		expect(scopedPin).toBeUndefined();  // no scoped pin
+		expect(floor).toBe("medium");       // floor from config
+	});
+
+	it("parent pin unaffected by child setScopedPin", () => {
+		const parentScope = makeScope();
+		const childScope = makeScope();
+		const cfg = { pinTimeout: 300_000 };
+
+		setScopedPin(parentScope as any, "medium", "user", cfg);
+
+		// Child sets a high pin — parent's pin is a different object
+		setScopedPin(childScope as any, "high", "classifier", cfg);
+
+		expect(parentScope.scopedPin?.tier).toBe("medium");
+		expect(childScope.scopedPin?.tier).toBe("high");
+	});
+});
