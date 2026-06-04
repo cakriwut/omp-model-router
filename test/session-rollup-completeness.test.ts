@@ -296,6 +296,7 @@ describe("3.x finalizeChildSession rollup completeness", () => {
 			classifierTurnsSinceRun: true,
 			userMessagesSeen: true,
 			lastUserEntryId: true,
+			lastAsyncClassifierKey: true,
 		};
 
 		const { state, map } = makeState();
