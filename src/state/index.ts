@@ -434,6 +434,73 @@ export class RouterState {
 		return total;
 	}
 
+	/**
+	 * Aggregate token counts across all active session scopes.
+	 *
+	 * Two complementary views are returned:
+	 *
+	 * **Scope-level** — sourced from the per-scope `accumulated*` fields.
+	 * These are maintained by the compression pipeline and the stream-completion
+	 * handler; they capture original/compressed/saved/cacheRead token volumes
+	 * for context-window management purposes.
+	 *
+	 * **Model-level** — sourced from `scope.modelCosts`, which is populated by
+	 * `recordModelCost` on each LLM stream completion. This is the authoritative
+	 * source for billable input/output tokens and cache-write tokens, which are
+	 * not tracked at the scope level.
+	 *
+	 * The two views are intentionally separate: scope-level tokens reflect
+	 * context management accounting; model-level tokens reflect API billing.
+	 * Do not add them together — they measure different things.
+	 *
+	 * Child sessions that have already been finalized via `finalizeChildSession`
+	 * are rolled up into their parent scope before this method is called, so
+	 * the result already includes sub-agent spend.
+	 */
+	totalTokens(): TotalTokens {
+		let originalTokens = 0;
+		let compressedTokens = 0;
+		let tokensSaved = 0;
+		let cacheReadTokens = 0;
+		let inputTokens = 0;
+		let outputTokens = 0;
+		let modelCacheReadTokens = 0;
+		let cacheWriteTokens = 0;
+
+		for (const scope of this.sessionScopes.values()) {
+			// Scope-level accounting
+			originalTokens   += scope.accumulatedOriginalTokens;
+			compressedTokens += scope.accumulatedCompressedTokens;
+			tokensSaved      += scope.accumulatedTokensSaved;
+			cacheReadTokens  += scope.accumulatedCacheReadTokens;
+
+			// Model-level billing (per-model entries may span multiple scopes
+			// when sub-agents are in flight; sum across all scopes here so we
+			// don't depend on rollup having already completed for in-flight children)
+			for (const entry of scope.modelCosts.values()) {
+				inputTokens          += entry.inputTokens;
+				outputTokens         += entry.outputTokens;
+				modelCacheReadTokens += entry.cacheReadTokens;
+				cacheWriteTokens     += entry.cacheWriteTokens;
+			}
+		}
+
+		return {
+			// Scope-level (context management accounting)
+			originalTokens,
+			compressedTokens,
+			tokensSaved,
+			cacheReadTokens,
+			// Model-level (API billing)
+			inputTokens,
+			outputTokens,
+			modelCacheReadTokens,
+			cacheWriteTokens,
+			// Derived
+			totalBillableInputTokens: inputTokens + modelCacheReadTokens + cacheWriteTokens,
+		};
+	}
+
 	// ─── Backward-compatible accessors (delegate to active scope) ────────
 
 	get accumulatedCost(): number { return this.scope.accumulatedCost; }

@@ -9,7 +9,7 @@ export const handleHelp = async (
 			"Router Subcommands:",
 			"  status                      Show current status, profile, pin, cost, and last decision.",
 			"  usage                       Show model context, cost, and session usage summary.",
-			"  profile [name]              Switch to a profile (enables router if off). Lists available if no name.",
+			"  profile [name]              Switch profile or launch interactive profile manager (no args).",
 			"  pin [profile] <tier|auto>   Force a tier (high|medium|low) for a profile or set to auto.",
 			"  thinking [prof] [tier] <lv> Override thinking level for a profile/tier (off|minimal|...|xhigh|auto).",
 			"  disable                     Disable the router and restore the last used non-router model.",

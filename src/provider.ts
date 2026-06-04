@@ -536,10 +536,13 @@ export const registerRouterProvider = (
 						);
 						continue;
 					}
+						// Hoisted so the catch block (probe-retry path) can access them
+						let effectiveContext: typeof context = context;
+						let finalContext: typeof context = context;
 						try {
 							// Auto-truncation if picked model has smaller context window
 							const targetLimit = targetModel.contextWindow || 128_000;
-							const effectiveContext =
+							effectiveContext =
 								targetLimit < (model.contextWindow ?? Infinity)
 									? truncateContext(context, targetLimit)
 									: context;
@@ -574,7 +577,7 @@ export const registerRouterProvider = (
 									checkpointExpired: false,
 							  };
 						
-						const finalContext = compressionResult.context;
+						finalContext = compressionResult.context;
 						const turnNumber = effectiveContext.messages.length;
 						
 						// ── Update state and decision based on compression result ────
@@ -763,7 +766,7 @@ export const registerRouterProvider = (
 								if (state.currentConfig.debug) {
 									console.log(`[model-router] probe succeeded — retrying ${modelRef}`);
 								}
-								// Re-derive values for retry (original try-scoped vars not accessible)
+								// Retry using hoisted finalContext (set before the try block)
 								const retryIdleMs = resolveStreamIdleTimeout(
 									state.currentConfig.streamIdleTimeoutMs,
 									targetProvider,

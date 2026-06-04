@@ -336,11 +336,8 @@ If you see `source=none` for a session you expected to be a child, the harness h
 
 ### Follow-on rollup threads
 
-Context for future contributors so the rollup investigation isn't re-derived:
+Open work for future contributors:
 
-- ✅ **Thread B (done):** Expand `finalizeChildSession` to roll up **all** scope fields. Today only 5 of the ~12 fields on `SessionScope` are merged into the parent. Missing: `tierCounter`, `modelCosts`, `compressionRequestCount`, `compressionTotalOriginalChars`, `compressionTotalCompressedChars`.
-  - `finalizeChildSession` now merges all 8 aggregable fields — compressionRequestCount, compressionTotalOriginalChars/CompressedChars, tierCounter (element-wise), and modelCosts (by key with numeric accumulation).
-- **Thread A (after B):** Wire `/router usage` to read from the in-memory `SessionScope` aggregates instead of re-scanning the session JSONL, so sub-agent costs rolled up by Thread B actually surface in the usage report.
 - **Thread D:** Decide whether `maxSessionBudget` is per-session or per-agent-tree. Each session currently checks only its own `accumulatedCost`; in-flight sub-agent spend is invisible to the parent until `agent_end`.
 - **Thread E:** Move `frozenCompressionBlock` from `RouterState` (shared) into `SessionScope` (per-session) to prevent cross-session compression-cache pollution in multi-agent runs.
 
