@@ -1,8 +1,8 @@
 {
   "type": "module",
   "name": "@cakriwut/omp-model-router",
-  "version": "0.7.3",
-  "description": "Cost-optimized model routing for Oh-My-Pi — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Uses TOON compression for conversation history optimization.",
+  "version": "0.7.4",
+  "description": "Cost-optimized model routing for Oh-My-Pi \u2014 routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Uses TOON compression for conversation history optimization.",
   "author": "Riwut Libinuko <cakriwut@gmail.com>",
   "license": "MIT",
   "repository": {
