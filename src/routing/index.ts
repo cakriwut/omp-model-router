@@ -12,6 +12,8 @@ import type { RouterTier, RouterPhase } from "../types";
 
 /** Timeout for the synchronous classifier LLM call (prevents indefinite blocking) */
 const SYNC_CLASSIFIER_TIMEOUT_MS = 10_000;
+/** Max chars to buffer from classifier stream — classifier output is always < 200 chars */
+const SYNC_CLASSIFIER_MAX_BUFFER = 512;
 
 export const runClassifier = async (
 	classifierModelRefsInput: string | string[],
@@ -92,7 +94,14 @@ export const runClassifier = async (
 						event.type === "text_delta" &&
 						typeof (event as { delta?: unknown }).delta === "string"
 					) {
-						fullText += (event as { delta: string }).delta;
+						const remaining = SYNC_CLASSIFIER_MAX_BUFFER - fullText.length;
+						if (remaining <= 0) { ac.abort(); break; }
+						// Slice delta to never exceed MAX_BUFFER regardless of chunk size
+						fullText += (event as { delta: string }).delta.slice(0, remaining);
+						if (fullText.length >= SYNC_CLASSIFIER_MAX_BUFFER) {
+							ac.abort();
+							break;
+						}
 					}
 				}
 

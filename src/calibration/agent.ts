@@ -292,6 +292,8 @@ async function runClassifierStream(
 	headers?: Record<string, string>,
 ): Promise<{ tier: RouterTier; reasoning: string } | undefined> {
 	const INNER_TIMEOUT_MS = 30_000;
+	/** Classifier output is always < 200 chars; cap at 512 to never buffer large models */
+	const MAX_BUFFER = 512;
 	const ac = new AbortController();
 	const timeout = setTimeout(() => ac.abort(), INNER_TIMEOUT_MS);
 
@@ -304,7 +306,14 @@ async function runClassifierStream(
 				event.type === "text_delta" &&
 				typeof (event as { delta?: unknown }).delta === "string"
 			) {
-				fullText += (event as { delta: string }).delta;
+				const remaining = MAX_BUFFER - fullText.length;
+				if (remaining <= 0) { ac.abort(); break; }
+				// Slice delta to never exceed MAX_BUFFER regardless of chunk size
+				fullText += (event as { delta: string }).delta.slice(0, remaining);
+				if (fullText.length >= MAX_BUFFER) {
+					ac.abort();
+					break;
+				}
 			}
 		}
 
