@@ -298,7 +298,7 @@ async function runClassifierStream(
 	const timeout = setTimeout(() => ac.abort(), INNER_TIMEOUT_MS);
 
 	try {
-		const stream = streamSimple(model, context, { apiKey, headers, signal: ac.signal });
+		const stream = streamSimple(model, context, { apiKey, headers, signal: ac.signal, maxTokens: 200 });
 		let fullText = "";
 
 		for await (const event of stream) {

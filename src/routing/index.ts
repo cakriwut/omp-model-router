@@ -87,6 +87,7 @@ export const runClassifier = async (
 					apiKey,
 					headers,
 					signal: ac.signal,
+					maxTokens: 200,
 				});
 				let fullText = "";
 				for await (const event of stream) {
