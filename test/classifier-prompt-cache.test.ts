@@ -26,29 +26,20 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 let runClassifierCallCount = 0;
 let runClassifierOverride: (() => Promise<{ tier: "low" | "medium" | "high"; reasoning: string } | undefined>) | undefined;
 
-mock.module("../src/routing/index", () => {
-	// Re-export everything the real module exports that compose.ts (or other code)
-	// may use, but replace runClassifier with a controllable stub.
-	return {
-		// The only symbol compose.ts uses via dynamic import:
-		runClassifier: async (..._args: unknown[]) => {
-			runClassifierCallCount++;
-			return runClassifierOverride ? runClassifierOverride() : Promise.resolve(undefined);
-		},
-		// Re-export other symbols that barrel-consumers may reference (stubs are fine)
-		decideRouting: () => { throw new Error("not stubbed"); },
-		buildRoutingDecision: () => { throw new Error("not stubbed"); },
-		phaseForTier: () => "implementation",
-		hasImageAttachment: () => false,
-		getLastUserText: (ctx: any) => {
-			const msgs = ctx?.messages ?? [];
-			for (let i = msgs.length - 1; i >= 0; i--) {
-				if (msgs[i].role === "user") return String(msgs[i].content ?? "");
-			}
-			return "";
-		},
-	};
-});
+// Grab real exports synchronously before mock replaces the module.
+// Spread into the mock so all barrel re-exports remain intact and tests
+// running in the same worker process (e.g. profile-effectiveness) don't
+// receive "not stubbed" throw stubs.
+const realRoutingIndex = require("../src/routing/index");
+
+mock.module("../src/routing/index", () => ({
+	...realRoutingIndex,
+	// Override only the symbol compose.ts dynamic-imports: runClassifier.
+	runClassifier: async (..._args: unknown[]) => {
+		runClassifierCallCount++;
+		return runClassifierOverride ? runClassifierOverride() : Promise.resolve(undefined);
+	},
+}));
 
 import { resolveRouting, type RoutingInput, type RoutingConfig } from "../src/routing/compose";
 import type { RouterProfile, RouterConfig } from "../src/types";

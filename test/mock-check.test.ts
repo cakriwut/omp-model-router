@@ -2,7 +2,7 @@ import { mock, test, expect } from "bun:test";
 
 mock.module("../src/calibration/index", () => ({
   spawnClassifierAgent: async () => { console.log("MOCK CALLED"); return "mock-id"; },
-  pollClassifierResult: async () => ({ ready: false }),
+  pollClassifierResult: async () => ({ ready: true, verdict: { tier: "medium", reasoning: "mock" } }),
   abandonClassifier: () => {},
   openTraceFile: () => undefined,
   appendTraceRecord: () => {},

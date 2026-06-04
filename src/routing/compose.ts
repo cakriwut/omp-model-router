@@ -255,10 +255,15 @@ export const resolveRouting = async (
 		}
 	}
 	// 3. Classifier override — gated by prompt-equality cache (Phase 1)
+	//    Skip entirely in sub-agent sessions: the parent already classified the
+	//    user request, and running a blocking LLM call before every tool-loop
+	//    turn inside a parallel task wastes 10-20s and can freeze sub-agents.
+	const isSubAgent = (input.state?.scope?.parentSessionId) !== undefined;
 	let syncClassifierRan = false;
 	let verdict: { tier: RouterTier; reasoning: string } | undefined;
 	if (
 		config.classifierModel &&
+		!isSubAgent &&
 		!input.pinnedTier &&
 		!decision.isContextTriggered &&
 		!decision.isRuleMatched

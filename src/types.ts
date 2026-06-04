@@ -252,6 +252,15 @@ export interface RouterConfig {
 	 * Set to 0 to disable. Default: 120000 (120s).
 	 */
 	streamIdleTimeoutMs?: number;
+	/**
+	 * Absolute wall-clock timeout in milliseconds for the entire delegated LLM stream,
+	 * from the moment streamSimple() is called until the stream completes.
+	 * Protects against models that drip-feed thinking tokens indefinitely (resetting
+	 * the idle timeout each time) — e.g. Opus extended thinking, slow inference.
+	 * When reached, the stream is aborted and the fallback chain triggers.
+	 * Set to 0 to disable. Default: 300000 (5 minutes).
+	 */
+	maxStreamDurationMs?: number;
 }
 
 export interface RoutingDecisionUsage {

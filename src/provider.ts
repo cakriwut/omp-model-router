@@ -56,6 +56,9 @@ function resolveStreamIdleTimeout(configOverride: number | undefined, provider: 
 	return STREAM_IDLE_TIMEOUT_BY_PROVIDER[provider] ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
 }
 
+/** Default absolute wall-clock limit for the entire delegated stream (5 min). */
+const DEFAULT_MAX_STREAM_DURATION_MS = 300_000;
+
 /** Probe timeout: how long to wait for the probe call to respond. */
 const PROBE_TIMEOUT_MS = 15_000;
 
@@ -109,6 +112,66 @@ export async function* withIdleTimeout<T>(
 			}
 		}
 	} finally {
+		void iterator.return?.()?.catch?.(() => {});
+	}
+}
+
+/**
+ * Thrown when a stream exceeds the absolute wall-clock duration limit.
+ * Treated the same as StreamIdleTimeoutError — triggers the fallback chain.
+ */
+export class StreamMaxDurationError extends Error {
+	constructor(timeoutMs: number) {
+		super(`Stream max duration exceeded: stream ran for over ${Math.ceil(timeoutMs / 1000)}s`);
+		this.name = "StreamMaxDurationError";
+	}
+}
+
+/**
+ * Wraps an async iterable with an absolute wall-clock duration limit.
+ * Unlike withIdleTimeout (which resets on every event), this fires once after
+ * `durationMs` from the moment iteration starts — regardless of how many events
+ * have arrived. Protects against models that drip-feed tokens indefinitely
+ * (e.g. Opus extended thinking resetting the idle timer every few seconds).
+ */
+export async function* withMaxDuration<T>(
+	iterable: AsyncIterable<T>,
+	durationMs: number,
+): AsyncGenerator<T> {
+	const iterator = iterable[Symbol.asyncIterator]();
+	let timedOut = false;
+	const { promise: deadlinePromise, resolve: resolveDeadline } =
+		Promise.withResolvers<{ kind: "deadline" }>();
+	const timer = setTimeout(() => {
+		timedOut = true;
+		resolveDeadline({ kind: "deadline" });
+	}, durationMs);
+	try {
+		while (true) {
+			const nextPromise = iterator.next().then(
+				(result) => ({ kind: "next" as const, result }),
+				(error) => ({ kind: "error" as const, error }),
+			);
+			const outcome = await Promise.race([nextPromise, deadlinePromise]);
+			if (outcome.kind === "deadline") {
+				void iterator.return?.()?.catch?.(() => {});
+				throw new StreamMaxDurationError(durationMs);
+			}
+			if (outcome.kind === "error") {
+				throw outcome.error;
+			}
+			if (outcome.result.done) {
+				return;
+			}
+			yield outcome.result.value;
+			if (timedOut) {
+				// Deadline fired while we were processing — stop at next yield boundary
+				void iterator.return?.()?.catch?.(() => {});
+				throw new StreamMaxDurationError(durationMs);
+			}
+		}
+	} finally {
+		clearTimeout(timer);
 		void iterator.return?.()?.catch?.(() => {});
 	}
 }
@@ -687,14 +750,22 @@ export const registerRouterProvider = (
 							...(delegatedReasoning ? { reasoning: delegatedReasoning } : {}),
 						});
 
-						// Wrap stream with idle timeout to detect stalled providers
+						// Wrap stream with idle timeout to detect stalled providers,
+						// then wrap with absolute wall-clock duration limit to catch
+						// models that drip-feed tokens indefinitely (e.g. extended thinking).
 						const idleTimeoutMs = resolveStreamIdleTimeout(
 							state.currentConfig.streamIdleTimeoutMs,
 							targetProvider,
 						);
-						const eventSource = idleTimeoutMs > 0
+						const maxDurationMs = state.currentConfig.maxStreamDurationMs !== undefined
+							? state.currentConfig.maxStreamDurationMs
+							: DEFAULT_MAX_STREAM_DURATION_MS;
+						let eventSource: AsyncIterable<import("@oh-my-pi/pi-ai").AssistantMessageEvent> = idleTimeoutMs > 0
 							? withIdleTimeout(delegatedStream, idleTimeoutMs)
 							: delegatedStream;
+						if (maxDurationMs > 0) {
+							eventSource = withMaxDuration(eventSource, maxDurationMs);
+						}
 
 						for await (const event of eventSource) {
 							if (event.type === "done") {
@@ -753,7 +824,7 @@ export const registerRouterProvider = (
 						}
 
 						// ── Stream idle timeout: probe provider before giving up ──────
-						if (err instanceof StreamIdleTimeoutError && apiKey) {
+						if ((err instanceof StreamIdleTimeoutError || err instanceof StreamMaxDurationError) && apiKey) {
 							let probeRetry = 0;
 							while (probeRetry < PROBE_MAX_RETRIES) {
 								probeRetry++;
@@ -787,9 +858,15 @@ export const registerRouterProvider = (
 										apiKey,
 										headers: targetModel.headers,
 									});
-									const retrySource = retryIdleMs > 0
+									const retryMaxDurationMs = state.currentConfig.maxStreamDurationMs !== undefined
+										? state.currentConfig.maxStreamDurationMs
+										: DEFAULT_MAX_STREAM_DURATION_MS;
+									let retrySource: AsyncIterable<import("@oh-my-pi/pi-ai").AssistantMessageEvent> = retryIdleMs > 0
 										? withIdleTimeout(retryStream, retryIdleMs)
 										: retryStream;
+									if (retryMaxDurationMs > 0) {
+										retrySource = withMaxDuration(retrySource, retryMaxDurationMs);
+									}
 									for await (const event of retrySource) {
 										if (event.type === "done") {
 											const u = event.message.usage;
@@ -828,7 +905,7 @@ export const registerRouterProvider = (
 									success = true;
 									break;
 								} catch (retryErr) {
-									if (retryErr instanceof StreamIdleTimeoutError) {
+									if (retryErr instanceof StreamIdleTimeoutError || retryErr instanceof StreamMaxDurationError) {
 										// Same stall on retry — continue probing
 										if (state.currentConfig.debug) {
 											console.log(`[model-router] retry also stalled — will probe again`);
