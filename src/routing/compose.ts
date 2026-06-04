@@ -350,8 +350,7 @@ export const resolveRouting = async (
 		}
 	}
 	
-	// Attach metadata for async spawn decision (use type assertion for internal metadata)
-	(decision as RoutingDecision & { syncClassifierRan?: boolean }).syncClassifierRan = syncClassifierRan;
+	decision.syncClassifierRan = syncClassifierRan;
 
 	// 4. Image attachment upgrade — find lowest tier that supports images
 	if (hasImageAttachment(input.context)) {

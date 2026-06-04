@@ -14,6 +14,42 @@
  */
 
 import { describe, test, expect, mock, beforeEach } from "bun:test";
+
+// ── Mock runClassifier BEFORE importing compose (which dynamic-imports ./index) ─
+// compose.ts calls `await import("./index.js")` then invokes runClassifier.
+// Without this mock every cache-MISS path fires a real streamSimple HTTP call
+// and the test hangs indefinitely.
+//
+// The stub returns undefined (classifier unavailable) so MISS-path tests verify
+// the cache is not poisoned and routing falls back to heuristic — exactly the
+// behaviour those tests are checking.
+let runClassifierCallCount = 0;
+let runClassifierOverride: (() => Promise<{ tier: "low" | "medium" | "high"; reasoning: string } | undefined>) | undefined;
+
+mock.module("../src/routing/index", () => {
+	// Re-export everything the real module exports that compose.ts (or other code)
+	// may use, but replace runClassifier with a controllable stub.
+	return {
+		// The only symbol compose.ts uses via dynamic import:
+		runClassifier: async (..._args: unknown[]) => {
+			runClassifierCallCount++;
+			return runClassifierOverride ? runClassifierOverride() : Promise.resolve(undefined);
+		},
+		// Re-export other symbols that barrel-consumers may reference (stubs are fine)
+		decideRouting: () => { throw new Error("not stubbed"); },
+		buildRoutingDecision: () => { throw new Error("not stubbed"); },
+		phaseForTier: () => "implementation",
+		hasImageAttachment: () => false,
+		getLastUserText: (ctx: any) => {
+			const msgs = ctx?.messages ?? [];
+			for (let i = msgs.length - 1; i >= 0; i--) {
+				if (msgs[i].role === "user") return String(msgs[i].content ?? "");
+			}
+			return "";
+		},
+	};
+});
+
 import { resolveRouting, type RoutingInput, type RoutingConfig } from "../src/routing/compose";
 import type { RouterProfile, RouterConfig } from "../src/types";
 import type { Context } from "@oh-my-pi/pi-ai";
@@ -61,16 +97,13 @@ const baseRoutingConfig: RoutingConfig = {
 // Create a minimal mock pi for RouterState
 const mockPi = {} as any;
 
-// ─── Mock runClassifier via dynamic import override ───────────────────────────
-
-// We test cache by tracking how many times the dynamic import resolves.
-// Since we can't easily mock dynamic imports in Bun without module injection,
-// we test the cache behavior by observing RouterState field changes,
-// and test full integration via a passthrough approach.
-
-// ─── T5.1: Cache HIT stores and reuses state fields ──────────────────────────
+// ─── T5.1: Cache HIT stores and reuses state fields ────────────────────────────
 
 describe("Classifier prompt cache (Phase 1)", () => {
+	beforeEach(() => {
+		runClassifierCallCount = 0;
+		runClassifierOverride = undefined;
+	});
 	test("T5.1: cache fields are stored on MISS, turned into HIT on second call with same sig", async () => {
 		const state = new RouterState(mockPi);
 		state.activateSession("test-session");
@@ -137,6 +170,8 @@ describe("Classifier prompt cache (Phase 1)", () => {
 
 		// Cache was NOT used (ttlTurns boundary) — we don't see "Classifier (cached):" in reasoning.
 		expect(decision.reasoning).not.toContain("Classifier (cached):");
+		// runClassifier stub was actually invoked (MISS path hit the mock, not real HTTP)
+		expect(runClassifierCallCount).toBe(1);
 	});
 
 	test("T5.3: New user message busts cache (different lastUserText)", async () => {
@@ -169,6 +204,7 @@ describe("Classifier prompt cache (Phase 1)", () => {
 
 		// Should NOT use cached verdict for different message
 		expect(decision.reasoning).not.toContain("Classifier (cached):");
+		expect(runClassifierCallCount).toBe(1);
 	});
 
 	test("T5.4: userMsgIndex disambiguation — same text, second turn = different sig = MISS", async () => {
@@ -202,6 +238,7 @@ describe("Classifier prompt cache (Phase 1)", () => {
 
 		// userMsgIndex is 2, so sig = "run tests|2|fresh" != "run tests|1|fresh" → MISS
 		expect(decision.reasoning).not.toContain("Classifier (cached):");
+		expect(runClassifierCallCount).toBe(1);
 	});
 
 	test("T5.5: classifier returns undefined — cache fields NOT updated (not poisoned)", async () => {
@@ -229,6 +266,8 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		// classifier will return undefined (no real model available)
 		await resolveRouting(input, baseRoutingConfig);
 
+		// runClassifier stub was called (proves no real HTTP request was made)
+		expect(runClassifierCallCount).toBe(1);
 		// Cache should NOT be poisoned with undefined
 		expect(state.scope.lastClassifierKey).toBeUndefined();
 		expect(state.scope.lastClassifierVerdict).toBeUndefined();
@@ -263,6 +302,8 @@ describe("Classifier prompt cache (Phase 1)", () => {
 
 		// On HIT, syncClassifierRan is true — suppresses redundant async spawn in adaptive mode
 		expect((decision as any).syncClassifierRan).toBe(true);
+		// runClassifier was NOT called — it was a cache hit
+		expect(runClassifierCallCount).toBe(0);
 	});
 
 	test("T5.7: pinned tier bypasses cache entirely — cache fields remain untouched", async () => {
@@ -287,7 +328,8 @@ describe("Classifier prompt cache (Phase 1)", () => {
 
 		await resolveRouting(input, baseRoutingConfig);
 
-		// Cache never touched
+		// Cache never touched — classifier block was skipped entirely due to pin
+		expect(runClassifierCallCount).toBe(0);
 		expect(state.scope.lastClassifierKey).toBeUndefined();
 		expect(state.scope.lastClassifierVerdict).toBeUndefined();
 	});

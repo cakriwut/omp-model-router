@@ -276,6 +276,9 @@ export interface RoutingDecision {
 	compression?: CompressionStats;
 	compressionTriggerReason?: "context_size" | "cache_expiry";
 	compressionCacheHit?: boolean;
+	/** True when the synchronous classifier ran (or returned a cache hit) this turn.
+	 *  Set by resolveRouting; read by spawnClassifierForTurn to suppress redundant async spawn. */
+	syncClassifierRan?: boolean;
 }
 
 export interface RouterPersistedState {

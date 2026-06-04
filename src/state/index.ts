@@ -64,6 +64,13 @@ export interface SessionScope {
 	userMessagesSeen: number;
 	/** Session entry id of the last user message we counted — prevents double-counting in tool loops. */
 	lastUserEntryId: string | undefined;
+	/**
+	 * Dedup key for the async (fire-and-forget) classifier spawn.
+	 * Stored as String(userMessagesSeen) — coarse, once-per-user-message granularity.
+	 * Reset to undefined on new session scope; never carried forward to siblings.
+	 * Prevents repeated async spawns during tool loops regardless of calibration mode.
+	 */
+	lastAsyncClassifierKey: string | undefined;
 }
 
 /**
@@ -244,6 +251,8 @@ export class RouterState {
 				// (sibling sessions share the same user message stream)
 				userMessagesSeen: isSibling ? previousScope.userMessagesSeen : 0,
 				lastUserEntryId: isSibling ? previousScope.lastUserEntryId : undefined,
+				// Async classifier dedup — never carry forward; each session starts fresh
+				lastAsyncClassifierKey: undefined,
 			});
 			if (this.currentConfig.debug && !this.parentAttributionLogged.has(sessionId)) {
 				this.parentAttributionLogged.add(sessionId);
@@ -558,6 +567,8 @@ export class RouterState {
 	set userMessagesSeen(v: number) { this.scope.userMessagesSeen = v; }
 	get lastUserEntryId(): string | undefined { return this.scope.lastUserEntryId; }
 	set lastUserEntryId(v: string | undefined) { this.scope.lastUserEntryId = v; }
+	get lastAsyncClassifierKey(): string | undefined { return this.scope.lastAsyncClassifierKey; }
+	set lastAsyncClassifierKey(v: string | undefined) { this.scope.lastAsyncClassifierKey = v; }
 
 	/** Record a routing decision (tier counter). Called at decision time. */
 	recordRoutingDecision(tier: RouterTier): void {

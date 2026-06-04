@@ -150,8 +150,16 @@ export function spawnClassifierForTurn(
 	if (cal.pendingAgentId) return; // skip if already pending
 	if (!config.calibration.classifierModel) return;
 
-	// Skip async spawn in adaptive mode when sync classifier already ran
-	if (config.calibration.mode === "adaptive" && state.lastDecision && (state.lastDecision as any).syncClassifierRan) {
+	// Dedup: skip if we already spawned an async classifier for this user message.
+	// Key = String(userMessagesSeen) — coarse, once-per-user-message granularity.
+	// Applies in all calibration modes (telemetry + adaptive).
+	const asyncKey = String(state.userMessagesSeen);
+	if (state.lastAsyncClassifierKey === asyncKey) return;
+
+	// Skip async spawn in adaptive mode when sync classifier already ran this turn.
+	// (Redundant with the dedup above on subsequent turns, but kept as a fast-path
+	// guard for the first turn of a new user message before the key is set.)
+	if (config.calibration.mode === "adaptive" && state.lastDecision?.syncClassifierRan) {
 		return;
 	}
 	const ctx = state.lastExtensionContext;
@@ -190,6 +198,9 @@ export function spawnClassifierForTurn(
 	// Synthetic tracking ID
 	const trackingId = `classifier-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 	cal.pendingAgentId = trackingId;
+	// Mark this user message as having an async classifier spawned.
+	// Set synchronously (before the promise) so re-entrant calls are blocked immediately.
+	state.lastAsyncClassifierKey = asyncKey;
 
 	if (debugEnabled) {
 		notifyFn(
