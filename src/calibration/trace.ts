@@ -69,6 +69,8 @@ export interface PromptLogRecord {
 	error?: string;
 	latencyMs: number;
 	prompt: string;
+	/** Detected routing signals (repetition, escalation, etc.) */
+	signals?: string[];
 }
 
 /**

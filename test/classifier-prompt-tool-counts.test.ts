@@ -20,26 +20,26 @@ describe("buildClassifierPrompt — tool-count summary", () => {
 		const ctx = makeCtx("implement the feature");
 		const prompt = buildClassifierPrompt(ctx, "implementation", { read: 4, edit: 3, bash: 1 });
 		expect(prompt).toContain(
-			"Recent agent activity (last 12 tool calls): read×4 edit×3 bash×1"
+			"<activity>read×4 edit×3 bash×1</activity>"
 		);
 	});
 
 	test("activity line sorted by count descending", () => {
 		const ctx = makeCtx("fix the bug");
 		const prompt = buildClassifierPrompt(ctx, undefined, { bash: 2, read: 5, edit: 1 });
-		expect(prompt).toContain("read×5 bash×2 edit×1");
+		expect(prompt).toContain("<activity>read×5 bash×2 edit×1</activity>");
 	});
 
 	test("omitted when toolCounts is undefined", () => {
 		const ctx = makeCtx("summarize the file");
 		const prompt = buildClassifierPrompt(ctx);
-		expect(prompt).not.toContain("Recent agent activity");
+		expect(prompt).not.toContain("<activity>");
 	});
 
 	test("omitted when toolCounts is empty object", () => {
 		const ctx = makeCtx("summarize the file");
 		const prompt = buildClassifierPrompt(ctx, undefined, {});
-		expect(prompt).not.toContain("Recent agent activity");
+		expect(prompt).not.toContain("<activity>");
 	});
 
 	test("prompt unchanged when no toolCounts (backward compat)", () => {
@@ -54,7 +54,7 @@ describe("buildClassifierPrompt — tool-count summary", () => {
 		const prompt = buildClassifierPrompt(ctx, undefined, { read: 4, edit: 3, bash: 1 });
 		// Find the activity line
 		const lines = prompt.split("\n");
-		const activityLine = lines.find((l) => l.startsWith("Recent agent activity"));
+		const activityLine = lines.find((l) => l.startsWith("<activity>"));
 		expect(activityLine).toBeDefined();
 		expect(activityLine!.length).toBeLessThan(200);
 	});

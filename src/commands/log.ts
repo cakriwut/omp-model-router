@@ -4,18 +4,20 @@ import { homedir } from "node:os";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { RouterState } from "../state";
 import type { PromptLogRecord } from "../calibration/trace";
+import { createLogViewerFactory } from "../tui/log-viewer";
 
 /**
- * /router log [--last N] [--prompts]
+ * /router log [--last N] [--prompts] [--text]
  *
- * Shows classifier prompt log entries from the current session's artifact dir
- * (if available), falling back to scanning ~/.omp/agent/ for all prompt logs.
+ * Opens an interactive split-panel TUI showing classifier prompt log entries.
+ * Falls back to plain text when TUI is unavailable or --text is passed.
  */
 export const handleLog = (
 	state: RouterState,
 ) => async (args: string[], ctx: ExtensionContext) => {
 	const last = parseLastArg(args);
 	const showPrompts = args.includes("--prompts") || args.includes("-p");
+	const forceText = args.includes("--text") || args.includes("-t");
 
 	// Try current session's prompt log first
 	const sessionMgr = ctx.sessionManager as { getArtifactsDir?: () => string };
@@ -50,6 +52,13 @@ export const handleLog = (
 			"Ensure calibration.traceEnabled is true in your config.",
 			"warning",
 		);
+		return;
+	}
+
+	// ── TUI mode: open interactive split-panel viewer ──
+	if (ctx.hasUI && !forceText && !showPrompts) {
+		const displayRecords = last > 0 ? records.slice(-last) : records;
+		ctx.ui.custom(createLogViewerFactory(displayRecords, logPath));
 		return;
 	}
 

@@ -165,27 +165,35 @@ describe("buildClassifierPrompt — pitfalls injection", () => {
 	test("T7 includes pitfalls block when non-empty string provided", () => {
 		const pitfalls = "## Pitfall: Test\nDo not confuse reading with writing.";
 		const prompt = buildClassifierPrompt(ctx, undefined, undefined, pitfalls);
-		expect(prompt).toContain("Known classification pitfalls to consider:");
+		expect(prompt).toContain("<pitfalls>");
 		expect(prompt).toContain(pitfalls);
 	});
 
 	test("T8 omits pitfalls block when empty string", () => {
 		const prompt = buildClassifierPrompt(ctx, undefined, undefined, "");
-		expect(prompt).not.toContain("Known classification pitfalls");
+		expect(prompt).not.toContain("<pitfalls>");
 	});
 
 	test("T9 omits pitfalls block when undefined", () => {
 		const prompt = buildClassifierPrompt(ctx, undefined, undefined, undefined);
-		expect(prompt).not.toContain("Known classification pitfalls");
+		expect(prompt).not.toContain("<pitfalls>");
 	});
 
 	test("T10 pitfalls block appears between tier definitions and conversation section", () => {
 		const pitfalls = "## Pitfall: Order\nThis checks position.";
-		const prompt = buildClassifierPrompt(ctx, undefined, undefined, pitfalls);
+		// Need prior history so Conversation: section is present
+		const ctxWithHistory: Context = {
+			messages: [
+				{ role: "user", content: "earlier question" },
+				{ role: "assistant", content: "earlier answer" },
+				{ role: "user", content: "How does the authentication system work?" },
+			],
+		};
+		const prompt = buildClassifierPrompt(ctxWithHistory, undefined, undefined, pitfalls);
 
-		const tierIdx = prompt.indexOf("- low:");
-		const pitfallIdx = prompt.indexOf("Known classification pitfalls");
-		const convIdx = prompt.indexOf("Conversation (user messages");
+		const tierIdx = prompt.indexOf("low    —");
+		const pitfallIdx = prompt.indexOf("<pitfalls>");
+		const convIdx = prompt.indexOf("<history>");
 
 		expect(tierIdx).toBeGreaterThan(-1);
 		expect(pitfallIdx).toBeGreaterThan(-1);
@@ -200,6 +208,6 @@ describe("buildClassifierPrompt — pitfalls injection", () => {
 		const p1 = buildClassifierPrompt(ctx);
 		const p2 = buildClassifierPrompt(ctx, undefined, undefined, undefined);
 		expect(p1).toBe(p2);
-		expect(p1).not.toContain("pitfall");
+		expect(p1).not.toContain("<pitfalls>");
 	});
 });

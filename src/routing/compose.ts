@@ -22,7 +22,7 @@ import { setScopedPin, incrementPinPressure, DEFAULT_PIN_PRESSURE_THRESHOLD } fr
 import { hasImageAttachment } from "./text";
 import { decideRouting, buildRoutingDecision, phaseForTier } from "./heuristic";
 import { appendPromptRecord } from "../calibration/trace.js";
-import { buildClassifierPrompt } from "../calibration/classifier-utils.js";
+import { buildClassifierPrompt, detectSignals } from "../calibration/classifier-utils.js";
 
 // ─── Model-capacity-aware tier promotion ─────────────────────────────────────
 
@@ -307,13 +307,18 @@ export const resolveRouting = async (
 			scope.classifierTurnsSinceRun += 1;
 		} else {
 			const classifierSpawnTime = Date.now();
+			const { runClassifier, resolveClassifierContextWindow } = await import("./index.js");
+			const classifierContextWindow = resolveClassifierContextWindow(
+				config.classifierModel,
+				input.modelRegistry,
+			);
 			const builtPrompt = buildClassifierPrompt(
 				input.context,
 				decision.phase,
 				toolCounts,
 				config.pitfalls,
+				classifierContextWindow,
 			);
-			const { runClassifier } = await import("./index.js");
 			verdict = await runClassifier(
 				config.classifierModel,
 				input.modelRegistry,
@@ -322,6 +327,7 @@ export const resolveRouting = async (
 				config.debug,
 				toolCounts,
 				config.pitfalls,
+				classifierContextWindow,
 			);
 			if (verdict && scope) {
 				scope.lastClassifierKey = sig;
@@ -333,6 +339,7 @@ export const resolveRouting = async (
 				const refForModel = Array.isArray(config.classifierModel)
 					? config.classifierModel[0]
 					: config.classifierModel;
+				const detectedSignals = detectSignals(input.context);
 				appendPromptRecord(config.promptLogPath, {
 					timestamp:    new Date().toISOString(),
 					turnIndex:    input.calibration?.turnsProcessed ?? 0,
@@ -344,6 +351,7 @@ export const resolveRouting = async (
 					error:        verdict ? undefined : "no-verdict",
 					latencyMs:    Date.now() - classifierSpawnTime,
 					prompt:       builtPrompt,
+					signals:      detectedSignals.length > 0 ? detectedSignals : undefined,
 				});
 			}
 		}

@@ -145,7 +145,7 @@ describe("classifierPrompt.jsonl", () => {
 		const content = readFileSync(logPath, "utf-8").trim();
 		const record: PromptLogRecord = JSON.parse(content);
 
-		expect(record.prompt).toStartWith("You are a model router classifier");
+		expect(record.prompt).toStartWith("<task>");
 		expect(record.verdict).not.toBeNull();
 		expect(record.verdict!.tier).toBe("high");
 		expect(["low", "medium", "high"]).toContain(record.heuristicTier);

@@ -16,6 +16,31 @@ const SYNC_CLASSIFIER_TIMEOUT_MS = 10_000;
 /** Max chars to buffer from classifier stream — classifier output is always < 200 chars */
 const SYNC_CLASSIFIER_MAX_BUFFER = 512;
 
+/**
+ * Resolve the context window of the first classifier model in the chain
+ * that exists in the registry. Used to compute prompt budgets before
+ * the API-key-gated fallback loop runs.
+ * Falls back to 128_000 if none are found.
+ */
+export function resolveClassifierContextWindow(
+	classifierModelRefsInput: string | string[],
+	modelRegistry: ExtensionContext["modelRegistry"],
+): number {
+	const refs = Array.isArray(classifierModelRefsInput)
+		? classifierModelRefsInput
+		: [classifierModelRefsInput];
+	for (const ref of refs) {
+		try {
+			const { provider, modelId } = parseCanonicalModelRef(ref);
+			const model = modelRegistry.find(provider, modelId);
+			if (model?.contextWindow) return model.contextWindow;
+		} catch {
+			// skip
+		}
+	}
+	return 128_000;
+}
+
 export const runClassifier = async (
 	classifierModelRefsInput: string | string[],
 	modelRegistry: ExtensionContext["modelRegistry"],
@@ -24,8 +49,8 @@ export const runClassifier = async (
 	debug = false,
 	toolCounts?: Record<string, number>,
 	pitfalls?: string,
+	contextWindow?: number,
 ): Promise<{ tier: RouterTier; reasoning: string } | undefined> => {
-	// Normalize to array (backward compat: single string → array)
 	const classifierModelRefs = Array.isArray(classifierModelRefsInput)
 		? classifierModelRefsInput
 		: [classifierModelRefsInput];
@@ -36,9 +61,16 @@ export const runClassifier = async (
 		);
 	}
 
+	const resolvedContextWindow = contextWindow
+		?? resolveClassifierContextWindow(classifierModelRefs, modelRegistry);
+
 	const classifierContext: Context = {
 		messages: [
-			{ role: "user", content: buildClassifierPrompt(context, currentPhase, toolCounts, pitfalls), timestamp: Date.now() },
+			{
+				role: "user",
+				content: buildClassifierPrompt(context, currentPhase, toolCounts, pitfalls, resolvedContextWindow),
+				timestamp: Date.now(),
+			},
 		],
 	};
 
