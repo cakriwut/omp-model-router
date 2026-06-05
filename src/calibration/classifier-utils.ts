@@ -29,10 +29,57 @@ function extractTextOnly(msg: Message): string {
 	return extractText(msg, TEXT_ONLY);
 }
 
-/** Max chars per message in the classifier context */
+/** Max chars per message in the classifier context (hard cap, applied after shake) */
 const MAX_MSG_CHARS = 300;
 /** Max total chars for the history section */
 const MAX_HISTORY_CHARS = 1500;
+/** Minimum chars saved before a block is worth eliding */
+const SHAKE_MIN_SAVINGS = 80;
+/** Max chars of the last user message fed to the classifier */
+const MAX_PROMPT_CHARS = 600;
+
+// ─── Shake: strip heavy structural blobs before classifier sees them ──────────
+
+/**
+ * Replace fenced code blocks and top-level XML blocks in `text` with a
+ * token-cheap size annotation.  Preserves surrounding prose — the intent
+ * signal the classifier actually needs — and only elides structural blobs.
+ *
+ * Mirrors the region-detection logic in OMP's shake.ts without the
+ * persistence machinery: pure string mutation, no I/O, no allocation beyond
+ * the output string.
+ *
+ * @param text    Raw message text (already tool-call-stripped)
+ * @param budget  Hard char cap applied after elision (default: MAX_MSG_CHARS)
+ */
+export function shakeForClassifier(text: string, budget = MAX_MSG_CHARS): string {
+	let out = text;
+
+	// 1. Fenced code blocks: ``` ... ``` and ~~~ ... ~~~
+	//    Only closed (terminated) fences — open fences are likely still streaming.
+	out = out.replace(
+		/^(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n\1[ \t]*$/gm,
+		(match) => {
+			const saved = match.length;
+			if (saved - SHAKE_MIN_SAVINGS < 0) return match;
+			const approxTokens = Math.round(saved / 4);
+			return `[code block ~${approxTokens} tokens elided]`;
+		},
+	);
+
+	// 2. Top-level XML-ish blocks: <tag ...>...</tag>  (single-line open/close ignored)
+	out = out.replace(
+		/<([A-Za-z][A-Za-z0-9_-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g,
+		(match) => {
+			const saved = match.length;
+			if (saved - SHAKE_MIN_SAVINGS < 0) return match;
+			const approxTokens = Math.round(saved / 4);
+			return `[xml block ~${approxTokens} tokens elided]`;
+		},
+	);
+
+	return out.length > budget ? out.slice(0, budget) : out;
+}
 
 
 /**
@@ -57,7 +104,7 @@ export function getConversationSummary(context: Context, maxTurns = 6): string {
 		if (msg.role === "assistant") {
 			const text = extractTextOnly(msg).trim();
 			if (!text) continue; // skip assistant messages that are only tool calls
-			const truncated = text.slice(0, MAX_MSG_CHARS);
+			const truncated = shakeForClassifier(text, MAX_MSG_CHARS);
 			if (totalChars + truncated.length > MAX_HISTORY_CHARS) break;
 			entries.unshift(`[assistant]: ${truncated}`);
 			totalChars += truncated.length;
@@ -68,7 +115,7 @@ export function getConversationSummary(context: Context, maxTurns = 6): string {
 		if (msg.role === "user") {
 			const text = extractTextOnly(msg).trim();
 			if (!text) continue;
-			const truncated = text.slice(0, MAX_MSG_CHARS);
+			const truncated = shakeForClassifier(text, MAX_MSG_CHARS);
 			if (totalChars + truncated.length > MAX_HISTORY_CHARS) break;
 			entries.unshift(`[user]: ${truncated}`);
 			totalChars += truncated.length;
@@ -86,7 +133,7 @@ export function buildClassifierPrompt(
 	toolCounts?: Record<string, number>,
 	pitfalls?: string,
 ): string {
-	const promptText = getLastUserText(context);
+	const promptText = shakeForClassifier(getLastUserText(context), MAX_PROMPT_CHARS);
 	const historyText = getConversationSummary(context, 6);
 
 	// Phase 2: tool-activity summary line (≤20 tokens, sorted by count desc)
