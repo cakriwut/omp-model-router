@@ -33,4 +33,4 @@ yarn-error.log*
 
 # OS files
 .DS_Store
-Thumbs.db
+Thumbs.dbgraphify-out/
