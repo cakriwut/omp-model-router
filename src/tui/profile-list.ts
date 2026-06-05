@@ -12,6 +12,7 @@ import type { RouterConfig, RouterProfile, RouterTier } from "../types";
 import type { CalibrationConfig } from "../calibration/types";
 import { ProfileEditorComponent } from "./profile-editor";
 import { ClassifierSettingsComponent } from "./classifier-settings";
+import { shortenModelRef } from "../ui/theme.js";
 
 export type ProfileListResult =
 	| { action: "activate"; profile: string }
@@ -34,18 +35,6 @@ export interface ProfileListInlineOptions {
 }
 
 const NARROW_THRESHOLD = 80;
-
-/**
- * Strip provider prefix and shorten a model id for display in tier badges.
- * `amazon-bedrock/global.anthropic.claude-opus-4-7` → `claude-opus-4-7`.
- */
-function shortModel(model: string | undefined): string {
-	if (!model) return "—";
-	// Drop provider prefix at the first slash, then drop dotted namespace.
-	const afterSlash = model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : model;
-	const afterDot = afterSlash.includes(".") ? afterSlash.slice(afterSlash.lastIndexOf(".") + 1) : afterSlash;
-	return afterDot;
-}
 
 /**
  * Truncate to `max` cells, appending `…` if shortened. Returns input unchanged when within budget.
@@ -240,15 +229,15 @@ export class ProfileListComponent implements Component {
 			const nameWidth = this.#filtered.reduce((w, e) => Math.max(w, e.name.length), 0);
 			const modelBudget = narrow ? 8 : 14;
 			const hWidth = this.#filtered.reduce(
-				(w, e) => Math.max(w, ellipsize(shortModel(e.profile.high?.model), modelBudget).length),
+				(w, e) => Math.max(w, ellipsize(e.profile.high?.model ? shortenModelRef(e.profile.high.model) : "—", modelBudget).length),
 				0,
 			);
 			const mWidth = this.#filtered.reduce(
-				(w, e) => Math.max(w, ellipsize(shortModel(e.profile.medium?.model), modelBudget).length),
+				(w, e) => Math.max(w, ellipsize(e.profile.medium?.model ? shortenModelRef(e.profile.medium.model) : "—", modelBudget).length),
 				0,
 			);
 			const lWidth = this.#filtered.reduce(
-				(w, e) => Math.max(w, ellipsize(shortModel(e.profile.low?.model), modelBudget).length),
+				(w, e) => Math.max(w, ellipsize(e.profile.low?.model ? shortenModelRef(e.profile.low.model) : "—", modelBudget).length),
 				0,
 			);
 
@@ -367,9 +356,9 @@ export class ProfileListComponent implements Component {
 		const nameRaw = entry.name + padding(Math.max(0, nameWidth - entry.name.length));
 		const name = isCursor ? t.fg("accent", nameRaw) : nameRaw;
 
-		const h = ellipsize(shortModel(entry.profile.high?.model), modelBudget);
-		const m = ellipsize(shortModel(entry.profile.medium?.model), modelBudget);
-		const l = ellipsize(shortModel(entry.profile.low?.model), modelBudget);
+		const h = ellipsize(entry.profile.high?.model ? shortenModelRef(entry.profile.high.model) : "—", modelBudget);
+		const m = ellipsize(entry.profile.medium?.model ? shortenModelRef(entry.profile.medium.model) : "—", modelBudget);
+		const l = ellipsize(entry.profile.low?.model ? shortenModelRef(entry.profile.low.model) : "—", modelBudget);
 		const hPad = padding(Math.max(0, hWidth - h.length));
 		const mPad = padding(Math.max(0, mWidth - m.length));
 		const lPad = padding(Math.max(0, lWidth - l.length));

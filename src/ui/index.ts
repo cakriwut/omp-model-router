@@ -1,5 +1,6 @@
 export {
 	shortenModelId,
+	shortenModelRef,
 	THINKING_COLOR,
 	THINKING_ICON,
 	PROFILE_PALETTE,

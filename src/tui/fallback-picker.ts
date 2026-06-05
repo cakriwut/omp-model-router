@@ -1,29 +1,9 @@
-import type { Component, TUI, SelectListTheme, SymbolTheme, Tab } from "@oh-my-pi/pi-tui";
+import type { Component, TUI, Tab } from "@oh-my-pi/pi-tui";
 import { Input, SelectList, TabBar, fuzzyFilter, replaceTabs, truncateToWidth, matchesKey } from "@oh-my-pi/pi-tui";
 import type { KeybindingsManager, Theme } from "@oh-my-pi/pi-coding-agent";
+import { buildSelectListTheme } from "./shared.js";
+import { shortenModelRef } from "../ui/theme.js";
 
-/** Build a SelectListTheme from a Theme instance (avoids relying on uninitialized module global). */
-function buildSelectListTheme(theme: Theme): SelectListTheme {
-	const preset = theme.getSymbolPreset();
-	const symbols: SymbolTheme = {
-		cursor: theme.nav.cursor,
-		inputCursor: preset === "ascii" ? "|" : "\u258f",
-		boxRound: theme.boxRound,
-		boxSharp: theme.boxSharp,
-		table: theme.boxSharp,
-		quoteBorder: theme.md.quoteBorder,
-		hrChar: theme.md.hrChar,
-		spinnerFrames: theme.getSpinnerFrames("activity"),
-	};
-	return {
-		selectedPrefix: (text: string) => theme.fg("accent", text),
-		selectedText: (text: string) => theme.fg("accent", text),
-		description: (text: string) => theme.fg("muted", text),
-		scrollInfo: (text: string) => theme.fg("muted", text),
-		noMatch: (text: string) => theme.fg("muted", text),
-		symbols,
-	};
-}
 
 export interface SelectItem {
 	value: string;
@@ -121,7 +101,7 @@ export class FallbackPickerComponent implements Component {
 		}
 
 		const lines: string[] = [];
-		const primaryShortName = this.#getShortName(this.#primaryRef);
+		const primaryShortName = shortenModelRef(this.#primaryRef);
 		const tierLabel = `Pick fallbacks for ${this.#currentTier.toUpperCase()}`;
 		const primaryInfo = `(primary: ${primaryShortName})`;
 		const padding = Math.max(1, width - tierLabel.length - primaryInfo.length);
@@ -257,17 +237,11 @@ export class FallbackPickerComponent implements Component {
 		
 		const sorted = Array.from(this.#selected.entries())
 			.sort((a, b) => a[1] - b[1])
-			.map(([ref]) => this.#getShortName(ref));
+			.map(([ref]) => shortenModelRef(ref));
 		
 		return `Selected: ${this.#selected.size} fallback${this.#selected.size === 1 ? "" : "s"} · ${sorted.join(", ")}`;
 	}
 
-	#getShortName(modelRef: string): string {
-		// Extract short name: take the last segment after "/" and remove version suffixes
-		const parts = modelRef.split("/");
-		const id = parts.length > 1 ? parts[parts.length - 1] : parts[0];
-		return id.replace(/-v\d+:\d+$/, "");
-	}
 
 	#applyFilters(): void {
 		// Filter out primary model

@@ -303,8 +303,6 @@ const routerExtension = (pi: ExtensionAPI) => {
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
-		state.lastExtensionContext = ctx;
-
 		// Re-activate the correct session scope (handles sub-agent context switches)
 		const sessionId = ctx.sessionManager.getSessionId();
 		if (sessionId !== state.activeSessionId) {
@@ -377,7 +375,7 @@ const routerExtension = (pi: ExtensionAPI) => {
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
-		state.lastExtensionContext = ctx;
+		const endSessionId = ctx.sessionManager.getSessionId();
 		state.isStreaming = false;
 		if (state.routerEnabled && ctx.model?.provider !== "router") {
 			const routerModel = ctx.modelRegistry.find(
@@ -396,8 +394,8 @@ const routerExtension = (pi: ExtensionAPI) => {
 
 		// Release the context reference — it holds the full session tree (messages,
 		// sessionManager, modelRegistry). Keeping it past turn_end prevents GC of the
-		// prior turn's message set. The reference is re-assigned at turn_start.
-		state.lastExtensionContext = undefined;
+		// prior turn's message set.
+		state.clearSessionContext(endSessionId);
 	});
 
 	// session_end is not a standard extension event; instead merge calibration

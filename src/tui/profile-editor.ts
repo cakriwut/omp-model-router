@@ -5,6 +5,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { RouterProfile, RouterTier } from "../types";
 import { ModelPickerComponent } from "./model-picker";
 import { FallbackPickerComponent } from "./fallback-picker";
+import { shortenModelRef } from "../ui/theme.js";
 
 const TIERS: readonly RouterTier[] = ["high", "medium", "low"] as const;
 const THINKING_CYCLE: readonly ThinkingLevel[] = [
@@ -173,7 +174,7 @@ export class ProfileEditorComponent implements Component {
 		// fallbacks
 		const fb = cfg.fallbacks;
 		if (!fb || fb.length === 0) return "(none configured) ⚠";
-		const shorts = fb.map((ref) => shortName(ref));
+		const shorts = fb.map((ref) => shortenModelRef(ref));
 		return `${fb.length} models: ${shorts.join(", ")}`;
 	}
 
@@ -363,17 +364,6 @@ export class ProfileEditorComponent implements Component {
 	}
 }
 
-/**
- * Strip provider prefix from a model ref for compact display:
- *   "amazon-bedrock/global.anthropic.claude-opus-4-7" → "claude-opus-4-7"
- *   "openai/gpt-4-turbo"                              → "gpt-4-turbo"
- */
-function shortName(ref: string): string {
-	const slash = ref.lastIndexOf("/");
-	const tail = slash >= 0 ? ref.slice(slash + 1) : ref;
-	const dot = tail.lastIndexOf(".");
-	return dot >= 0 ? tail.slice(dot + 1) : tail;
-}
 
 /**
  * Factory matching the `ctx.ui.custom` signature. Builds a component bound to

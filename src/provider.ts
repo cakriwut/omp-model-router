@@ -437,6 +437,11 @@ export const registerRouterProvider = (
 			const stream = new AssistantMessageEventStream();
 
 			(async () => {
+				// ── Snapshot session-local values synchronously before any await ───────────────
+				// These are hoisted above the try so the finally block can reference them.
+				const _snapSessionId = state.activeSessionId;
+				const sessionScope = _snapSessionId ? state.getSessionScope(_snapSessionId) : state.scope;
+				const sessionCtx = _snapSessionId ? state.getSessionContext(_snapSessionId) : undefined;
 				try {
 					if (!state.currentModelRegistry) {
 						throw new Error(
@@ -471,18 +476,18 @@ export const registerRouterProvider = (
 						? loadPitfalls(state.currentCwd, state.currentConfig.pitfallsPath)
 						: undefined;
 
-					const { scopedPin, floor } = resolveEffectivePin(state.scope, state.currentConfig);
+					const { scopedPin, floor } = resolveEffectivePin(sessionScope, state.currentConfig);
 					const decision = await resolveRouting(
 						{
 							context,
-							previousDecision: state.lastDecision,
+							previousDecision: sessionScope.lastDecision,
 							pinnedTier: scopedPin,
 							floor,
 							isBudgetExceeded,
 							modelRegistry: state.currentModelRegistry,
-							lastExtensionContext: state.lastExtensionContext,
+							lastExtensionContext: sessionCtx,
 							calibration: state.calibration,
-							scope: state.scope,
+							scope: sessionScope,
 							state: state,
 						},
 						{
@@ -501,17 +506,17 @@ export const registerRouterProvider = (
 
 					// (auto-upgrade is now handled via setScopedPin in index.ts tool_execution_end)
 
-					state.lastDecision = decision;
+					sessionScope.lastDecision = decision;
 					actions.recordDebugDecision(decision);
 
 					// Track routing decision (tier counter)
-					state.recordRoutingDecision(decision.tier);
+					sessionScope.tierCounter[decision.tier]++;
 
 					// Spawn async classifier for calibration telemetry (fire-and-forget)
-					spawnClassifierForTurn(state, state.currentConfig, decision.tier, context);
+					spawnClassifierForTurn(state, state.currentConfig, decision.tier, context, sessionScope);
 
-					if (state.lastExtensionContext) {
-						actions.updateStatus(state.lastExtensionContext);
+					if (sessionCtx) {
+						actions.updateStatus(sessionCtx);
 					}
 
 					// ── Build fallback model chain ────────────────────────────────────
@@ -855,8 +860,8 @@ export const registerRouterProvider = (
 					});
 					stream.end();
 				} finally {
-					if (state.lastExtensionContext) {
-						actions.updateStatus(state.lastExtensionContext);
+					if (sessionCtx) {
+						actions.updateStatus(sessionCtx);
 					}
 					actions.persistState();
 				}

@@ -16,10 +16,9 @@ import { isRouterTier } from "../config";
 import {
 	extractText,
 	getLastUserText,
-	getRecentUserText,
 } from "../utils/messages.js";
 
-export { getLastUserText, getRecentUserText };
+export { getLastUserText };
 
 const TEXT_ONLY: { includeThinking: false; includeToolCalls: false } = {
 	includeThinking: false,

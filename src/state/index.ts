@@ -90,7 +90,56 @@ export class RouterState {
 	currentConfig: RouterConfig = FALLBACK_CONFIG;
 	currentModelRegistry: ExtensionContext["modelRegistry"] | undefined;
 	currentCwd = process.cwd();
-	lastExtensionContext: ExtensionContext | undefined;
+
+	/**
+	 * Per-session ExtensionContext references, keyed by sessionId.
+	 * Populated in turn_start, cleared in turn_end.
+	 * Using a Map instead of a single field prevents parallel sub-agents
+	 * from clobbering each other's context reference.
+	 */
+	private sessionContexts = new Map<string, ExtensionContext>();
+
+	/** Store ctx for the given session (called from turn_start). */
+	setSessionContext(sessionId: string, ctx: ExtensionContext): void {
+		this.sessionContexts.set(sessionId, ctx);
+	}
+
+	/** Release ctx for the given session (called from turn_end). */
+	clearSessionContext(sessionId: string): void {
+		this.sessionContexts.delete(sessionId);
+	}
+
+	/** Get ctx for a specific session (used by provider.ts at routing time). */
+	getSessionContext(sessionId: string): ExtensionContext | undefined {
+		return this.sessionContexts.get(sessionId);
+	}
+
+	/** Get scope for a specific session without changing activeSessionId. */
+	getSessionScope(sessionId: string): SessionScope {
+		const s = this.sessionScopes.get(sessionId);
+		if (s) return s;
+		// Fallback: activate and return (should not normally happen)
+		this.activateSession(sessionId);
+		return this.sessionScopes.get(sessionId)!;
+	}
+
+	/** Get ctx for the currently active session (backward-compat helper). */
+	get lastExtensionContext(): ExtensionContext | undefined {
+		const key = this.activeSessionId ?? "__default__";
+		return this.sessionContexts.get(key);
+	}
+
+	/** Set ctx for the currently active session (backward-compat for tests and callers). */
+	set lastExtensionContext(ctx: ExtensionContext | undefined) {
+		// Use activeSessionId if available, otherwise use a stable fallback key
+		// so tests that set lastExtensionContext before activateSession still work.
+		const key = this.activeSessionId ?? "__default__";
+		if (ctx) {
+			this.sessionContexts.set(key, ctx);
+		} else {
+			this.sessionContexts.delete(key);
+		}
+	}
 
 	// ─── Router lifecycle ────────────────────────────────────────────────
 	routerEnabled = false;

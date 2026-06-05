@@ -10,32 +10,9 @@ import {
 	truncateToWidth,
 } from "@oh-my-pi/pi-tui";
 import type { KeybindingsManager, ModelRegistry, Theme } from "@oh-my-pi/pi-coding-agent";
-import type { SelectListTheme, SymbolTheme } from "@oh-my-pi/pi-tui";
+import { buildSelectListTheme } from "./shared.js";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { RouterTier } from "../types";
-
-/** Build a SelectListTheme from a Theme instance (avoids relying on uninitialized module global). */
-function buildSelectListTheme(theme: Theme): SelectListTheme {
-	const preset = theme.getSymbolPreset();
-	const symbols: SymbolTheme = {
-		cursor: theme.nav.cursor,
-		inputCursor: preset === "ascii" ? "|" : "▏",
-		boxRound: theme.boxRound,
-		boxSharp: theme.boxSharp,
-		table: theme.boxSharp,
-		quoteBorder: theme.md.quoteBorder,
-		hrChar: theme.md.hrChar,
-		spinnerFrames: theme.getSpinnerFrames("activity"),
-	};
-	return {
-		selectedPrefix: (text: string) => theme.fg("accent", text),
-		selectedText: (text: string) => theme.fg("accent", text),
-		description: (text: string) => theme.fg("muted", text),
-		scrollInfo: (text: string) => theme.fg("muted", text),
-		noMatch: (text: string) => theme.fg("muted", text),
-		symbols,
-	};
-}
 
 /** A single model entry shown in the picker. */
 export interface ModelItem {

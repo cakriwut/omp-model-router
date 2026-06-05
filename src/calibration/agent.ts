@@ -5,6 +5,7 @@ import type { ClassifierPollResult } from "./types";
 import type { RouterTier } from "../types";
 import { parseCanonicalModelRef, isRouterTier } from "../config";
 import { parseClassifierOutput } from "./classifier-utils";
+import { shortenModelRef } from "../ui/theme.js";
 let piSubagentsAvailable = false;
 let Agent: any = undefined;
 let get_subagent_result: any = undefined;
@@ -173,7 +174,7 @@ async function spawnViaSubagent(
 	prompt: string,
 ): Promise<string | undefined> {
 	try {
-		const shortName = classifierModelRef.split('/').pop()?.split('.').pop()?.replace(/-v\d+:\d+$/, '') || classifierModelRef;
+		const shortName = shortenModelRef(classifierModelRef);
 		console.log(`⚡ classifier → ${shortName} (async·telemetry)`);
 
 		const result = await Agent({
@@ -246,9 +247,7 @@ async function spawnViaStreamSimple(
 			};
 
 			const agentId = `classifier-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-			const shortName =
-				classifierModelRef.split("/").pop()?.split(".").pop()?.replace(/-v\d+:\d+$/, "") ||
-				classifierModelRef;
+			const shortName = shortenModelRef(classifierModelRef);
 
 			if (debug) {
 				console.log(`  ✓ Success: spawning ${shortName} (async·telemetry)`);

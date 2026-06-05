@@ -2,24 +2,8 @@ import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { RouterState } from "../state";
 import type { Actions } from "./shared";
 import { profileNames, resolveProfileName } from "../config";
-import { formatThinkingSummary, formatModelRef } from "../ui";
+import { formatThinkingSummary, formatModelRef, formatScopedPin } from "../ui";
 import { getCurrentVersion } from "../version-check";
-import { DEFAULT_PIN_TIMEOUT_MS } from "../routing/pin";
-
-/** Format scoped pin status for display. */
-const formatScopedPin = (state: RouterState): string => {
-	const pin = state.scope.scopedPin;
-	if (!pin) {
-		const floor = state.currentConfig.defaultPin ?? "auto";
-		return floor === "auto" ? "none (heuristic free)" : `none (default: ${floor})`;
-	}
-	const timeout = state.currentConfig.pinTimeout ?? DEFAULT_PIN_TIMEOUT_MS;
-	const remaining = timeout - (Date.now() - pin.setAt);
-	if (remaining <= 0) return "expired";
-	const secs = Math.ceil(remaining / 1000);
-	const ttl = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
-	return `${pin.tier} [${pin.source}] (expires in ${ttl})`;
-};
 
 export const handleStatus = (
 	state: RouterState,
@@ -35,7 +19,7 @@ export const handleStatus = (
 		updateLine,
 		`Router enabled: ${state.routerEnabled ? "yes" : "off"}`,
 		`Selected profile: ${state.selectedProfile}`,
-		`Scoped pin: ${formatScopedPin(state)}`,
+		`Scoped pin: ${formatScopedPin(state.scope, state.currentConfig)}`,
 		`Thinking overrides: ${formatThinkingSummary(state.thinkingByProfile)}`,
 		`Widget: ${state.widgetEnabled ? "on" : "off"}`,
 		`Phase bias: ${state.currentConfig.phaseBias}`,

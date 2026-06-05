@@ -57,6 +57,16 @@ export const shortenModelId = (provider: string, modelId: string): string => {
 	return stripped || result || modelId;
 };
 
+/**
+ * Shorten a full `provider/modelId` ref string for compact display.
+ * Splits on the first `/` then delegates to `shortenModelId`.
+ */
+export const shortenModelRef = (ref: string): string => {
+	const slash = ref.indexOf("/");
+	if (slash < 0) return shortenModelId("", ref);
+	return shortenModelId(ref.slice(0, slash), ref.slice(slash + 1));
+};
+
 // ─── Thinking level → theme ───────────────────────────────────────────────────
 
 export const THINKING_COLOR: Partial<Record<ThinkingLevel, ThemeColor>> = {

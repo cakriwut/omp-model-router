@@ -23,6 +23,8 @@ import {
 import type { TraceRecord } from "./types";
 import { getLastUserText, buildClassifierPrompt } from "./classifier-utils";
 import { loadPitfalls } from "./pitfalls";
+import { countWords } from "../routing/text.js";
+import { shortenModelRef } from "../ui/theme.js";
 import { getCurrentVersion } from "../version-check";
 
 /**
@@ -144,8 +146,13 @@ export function spawnClassifierForTurn(
 	config: RouterConfig,
 	heuristicTier: RouterTier,
 	context: Context,
+	sessionScope?: import("../state").SessionScope,
 ): void {
 	if (!config.calibration?.enabled || !state.calibration) return;
+
+	// Resolve session scope: use the explicitly passed one (parallel-safe) or
+	// fall back to state.scope (backward compat for tests / non-parallel callers).
+	const scope = sessionScope ?? state.scope;
 
 	const cal = state.calibration;
 	if (cal.pendingAgentId) return; // skip if already pending
@@ -153,24 +160,23 @@ export function spawnClassifierForTurn(
 
 	// Dedup: skip if we already spawned an async classifier for this user message.
 	// Key = String(userMessagesSeen) — coarse, once-per-user-message granularity.
-	// Applies in all calibration modes (telemetry + adaptive).
-	const asyncKey = String(state.userMessagesSeen);
-	if (state.lastAsyncClassifierKey === asyncKey) return;
+	// Uses the SESSION-SCOPED counter so parallel sub-agents each have their own
+	// dedup gate and cannot clobber each other's state.
+	const asyncKey = String(scope.userMessagesSeen);
+	if (scope.lastAsyncClassifierKey === asyncKey) return;
 
 	// Skip async spawn in adaptive mode when sync classifier already ran this turn.
-	// (Redundant with the dedup above on subsequent turns, but kept as a fast-path
-	// guard for the first turn of a new user message before the key is set.)
-	if (config.calibration.mode === "adaptive" && state.lastDecision?.syncClassifierRan) {
+	if (config.calibration.mode === "adaptive" && scope.lastDecision?.syncClassifierRan) {
 		return;
 	}
-	const ctx = state.lastExtensionContext;
+	const ctx = state.getSessionContext(scope.sessionId);
 	if (!ctx) return;
 
 	// ── Extract all needed primitives NOW, before entering the async closure ──
 	// Nothing from context, ctx, or state should be captured by the closure.
 	// Each of these holds (directly or transitively) the full session tree.
 	const userPrompt = getLastUserText(context);
-	const decision = state.lastDecision;
+	const decision = scope.lastDecision; // use session-scoped decision, not state.lastDecision
 	const pitfalls = loadPitfalls(state.currentCwd, config.pitfallsPath);
 	const classifierPrompt = buildClassifierPrompt(
 		context,
@@ -204,7 +210,8 @@ export function spawnClassifierForTurn(
 	cal.pendingAgentId = trackingId;
 	// Mark this user message as having an async classifier spawned.
 	// Set synchronously (before the promise) so re-entrant calls are blocked immediately.
-	state.lastAsyncClassifierKey = asyncKey;
+	// Write to scope (not state) so parallel sub-agents each have their own gate.
+	scope.lastAsyncClassifierKey = asyncKey;
 
 	if (debugEnabled) {
 		notifyFn(
@@ -333,8 +340,7 @@ export function spawnClassifierForTurn(
 
 				// Badge-style log with decision (always shown)
 				const refForLabel = Array.isArray(classifierModelRef) ? classifierModelRef[0] : classifierModelRef;
-				const shortName = refForLabel
-					?.split('/').pop()?.split('.').pop()?.replace(/-v\d+:\d+$/, '') || 'classifier';
+				const shortName = refForLabel ? shortenModelRef(refForLabel) : 'classifier';
 				const agreed = heuristicTierFinal === verdict.tier;
 				console.log(`⚡ classifier → ${shortName} (async·${calibrationMode}) → ${verdict.tier} ${agreed ? '✓' : '✗'}`);
 
@@ -411,7 +417,7 @@ function writeCompletedTrace(
 		timestamp: Date.now(),
 		prompt: cal.pendingPrompt ?? "",
 		promptFeatures: {
-			wordCount: (cal.pendingPrompt ?? "").split(/\s+/).filter(Boolean).length,
+			wordCount: countWords(cal.pendingPrompt ?? ""),
 			toolResultCount: cal.pendingToolResultCount ?? 0,
 			hasImages: false,
 			matchedKeywords: [],
@@ -454,7 +460,7 @@ function writePendingAsFailed(
 		timestamp: Date.now(),
 		prompt: cal.pendingPrompt ?? "",
 		promptFeatures: {
-			wordCount: (cal.pendingPrompt ?? "").split(/\s+/).filter(Boolean).length,
+			wordCount: countWords(cal.pendingPrompt ?? ""),
 			toolResultCount: cal.pendingToolResultCount ?? 0,
 			hasImages: false,
 			matchedKeywords: [],

@@ -80,31 +80,6 @@ export function getLastUserText(context: Context, opts?: ExtractOptions): string
 	return "";
 }
 
-/**
- * Get the N most recent user messages, joined by `\n---\n`.
- *
- * @deprecated Prefer `getConversationSummary` from classifier-utils for
- * classifier inputs; kept here for backward compat with legacy call sites.
- */
-export function getRecentUserText(
-	context: Context,
-	count: number,
-	opts?: ExtractOptions,
-): string {
-	const userMsgs: string[] = [];
-	for (
-		let i = context.messages.length - 1;
-		i >= 0 && userMsgs.length < count;
-		i--
-	) {
-		const msg = context.messages[i];
-		if (msg.role === "user") {
-			const text = extractText(msg, opts).trim();
-			if (text) userMsgs.unshift(text);
-		}
-	}
-	return userMsgs.join("\n---\n");
-}
 
 // ─── Tool-mix extraction (Phase 2: classifier-tool-mix-signal) ───────────────
 

@@ -5,6 +5,7 @@
 import { type Context, streamSimple } from "@oh-my-pi/pi-ai";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { parseCanonicalModelRef } from "../config";
+import { shortenModelRef } from "../ui/theme.js";
 import { buildClassifierPrompt, parseClassifierOutput } from "../calibration/classifier-utils";
 import type { RouterTier, RouterPhase } from "../types";
 
@@ -74,7 +75,7 @@ export const runClassifier = async (
 			}
 			const headers = model.headers;
 			// Badge-style log: ⚡ classifier → nova-micro (sync·adaptive)
-			const shortName = modelId.split('.').pop()?.replace(/-v\d+:\d+$/, '') || modelId;
+			const shortName = shortenModelRef(classifierModelRef);
 			if (debug) {
 				console.log(`⚡ classifier → ${shortName} (sync·adaptive)`);
 			}

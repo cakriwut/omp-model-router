@@ -188,10 +188,13 @@ export const resolveRouting = async (
 			);
 			if (lapsed) {
 				// Bust classifier cache — routing context has changed.
-				if (input.state) {
-					input.state.lastClassifierKey = undefined;
-					input.state.lastClassifierVerdict = undefined;
-					input.state.classifierTurnsSinceRun = 0;
+				// Prefer input.scope (session-local snapshot); fall back to state.scope for
+				// backward compat with tests that pass state but not scope.
+				const bustScope = input.scope ?? input.state?.scope;
+				if (bustScope) {
+					bustScope.lastClassifierKey = undefined;
+					bustScope.lastClassifierVerdict = undefined;
+					bustScope.classifierTurnsSinceRun = 0;
 				}
 				// Re-route freely (no pin) using the shadow decision already computed.
 				decision = shadowDecision;
@@ -242,11 +245,13 @@ export const resolveRouting = async (
 					);
 					decision.isContextTriggered = true;
 					// Cache bust: routing context changed, force classifier re-eval on next eligible turn.
-					if (input.state) {
-						const s = input.state.scope;
-						s.lastClassifierKey = undefined;
-						s.lastClassifierVerdict = undefined;
-						s.classifierTurnsSinceRun = 0;
+					// Prefer input.scope (session-local snapshot); fall back to state.scope for
+					// backward compat with tests that pass state but not scope.
+					const bustScope2 = input.scope ?? input.state?.scope;
+					if (bustScope2) {
+						bustScope2.lastClassifierKey = undefined;
+						bustScope2.lastClassifierVerdict = undefined;
+						bustScope2.classifierTurnsSinceRun = 0;
 					}
 				}
 			}
@@ -258,7 +263,12 @@ export const resolveRouting = async (
 	//    Skip entirely in sub-agent sessions: the parent already classified the
 	//    user request, and running a blocking LLM call before every tool-loop
 	//    turn inside a parallel task wastes 10-20s and can freeze sub-agents.
-	const isSubAgent = (input.state?.scope?.parentSessionId) !== undefined;
+	//    Use input.scope (session-local snapshot) so parallel sub-agents each
+	//    check their own parentSessionId, not the shared active scope.
+	//    Fall back to input.state?.scope for backward compatibility with tests
+	//    that pass state but not scope.
+	const resolvedScope = input.scope ?? input.state?.scope;
+	const isSubAgent = (resolvedScope?.parentSessionId) !== undefined;
 	let syncClassifierRan = false;
 	let verdict: { tier: RouterTier; reasoning: string } | undefined;
 	if (
@@ -271,7 +281,9 @@ export const resolveRouting = async (
 		// ── Compute classifier signature (Phase 1 cache key) ──────────────
 		const lastUserText = getLastUserText(input.context) ?? "";
 		// Monotonic user-message counter on scope — incremented by turn_start.
-		const scope = input.state?.scope;
+		// Always use input.scope (session-local snapshot) — never input.state.scope
+		// which reflects whichever sub-agent last ran turn_start.
+		const scope = resolvedScope;
 		const userMsgIndex = scope?.userMessagesSeen ?? 0;
 		// Phase 2: tool-mix bucket extends the cache key
 		const { counts: toolCounts } = extractRecentToolCalls(input.context);
