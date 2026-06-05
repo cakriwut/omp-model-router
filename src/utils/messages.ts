@@ -2,7 +2,7 @@
  * Shared message text extraction utilities.
  *
  * Consolidates three near-duplicate implementations that previously lived in
- * routing.ts, calibration/classifier-utils.ts, and context-compression.ts.
+ * routing.ts and calibration/classifier-utils.ts.
  */
 
 import type { Context, Message } from "@oh-my-pi/pi-ai";

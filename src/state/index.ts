@@ -9,8 +9,6 @@ import type {
 	RouterTier,
 	RoutingDecision,
 	CustomSessionEntry,
-	CompressionStats,
-	CompressionCheckpoint,
 	EmbargoEntry,
 	EmbargoConfig,
 	ScopedPin,
@@ -30,20 +28,8 @@ export interface SessionScope {
 	sessionId: string;
 	parentSessionId?: string;
 	accumulatedCost: number;
-	accumulatedOriginalTokens: number;
-	accumulatedCompressedTokens: number;
-	accumulatedTokensSaved: number;
-	accumulatedCacheReadTokens: number;
-	compressionRequestCount: number;
-	compressionTotalOriginalChars: number;
-	compressionTotalCompressedChars: number;
 	debugHistory: RoutingDecision[];
 	lastDecision: RoutingDecision | undefined;
-	lastTurnTimestamp?: number;
-	currentCheckpoint?: CompressionCheckpoint;
-	/** Frozen compression block — messages stored as JSON string to avoid holding large
-	 *  message arrays in memory across turns. Deserialize only when needed for the next turn. */
-	frozenCompressionBlock?: { messagesJson: string; stats: CompressionStats };
 	isStreaming: boolean;
 	/** Routing decision counts per tier */
 	tierCounter: TierCounter;
@@ -58,8 +44,7 @@ export interface SessionScope {
 	classifierTurnsSinceRun: number;
 	/**
 	 * Monotonic count of user messages seen in this session.
-	 * Used as part of the classifier cache key — survives TOON compression
-	 * (which can shrink context.messages, making a live message-count non-monotonic).
+	 * Used as part of the classifier cache key.
 	 */
 	userMessagesSeen: number;
 	/** Session entry id of the last user message we counted — prevents double-counting in tool loops. */
@@ -227,13 +212,6 @@ export class RouterState {
 				sessionId,
 				parentSessionId,
 				accumulatedCost: isSibling ? previousScope.accumulatedCost : 0,
-				accumulatedOriginalTokens: isSibling ? previousScope.accumulatedOriginalTokens : 0,
-				accumulatedCompressedTokens: isSibling ? previousScope.accumulatedCompressedTokens : 0,
-				accumulatedTokensSaved: isSibling ? previousScope.accumulatedTokensSaved : 0,
-				accumulatedCacheReadTokens: isSibling ? previousScope.accumulatedCacheReadTokens : 0,
-				compressionRequestCount: isSibling ? previousScope.compressionRequestCount : 0,
-				compressionTotalOriginalChars: isSibling ? previousScope.compressionTotalOriginalChars : 0,
-				compressionTotalCompressedChars: isSibling ? previousScope.compressionTotalCompressedChars : 0,
 				debugHistory: isSibling ? previousScope.debugHistory : [],
 				lastDecision: isSibling ? previousScope.lastDecision : undefined,
 				isStreaming: false,
@@ -360,15 +338,12 @@ export class RouterState {
 	 * Called when a sub-agent completes (`agent_end` event).
 	 *
 	 * **Merged fields** (summed into parent):
-	 *   accumulatedCost, accumulatedOriginalTokens, accumulatedCompressedTokens,
-	 *   accumulatedTokensSaved, accumulatedCacheReadTokens,
-	 *   compressionRequestCount, compressionTotalOriginalChars,
-	 *   compressionTotalCompressedChars, tierCounter (element-wise),
+	 *   accumulatedCost, tierCounter (element-wise),
 	 *   modelCosts (by model key — see {@link mergeModelCosts}).
 	 *
 	 * **Skipped fields** (parent retains its own values):
 	 *   debugHistory, lastDecision — parent's own routing trace.
-	 *   isStreaming, lastTurnTimestamp, currentCheckpoint — per-session ephemeral state.
+	 *   isStreaming — per-session ephemeral state.
 	 *   sessionId, parentSessionId — identity fields.
 	 *
 	 * If `child.parentSessionId` is `undefined` or the parent scope no longer
@@ -386,13 +361,6 @@ export class RouterState {
 			if (parent) {
 				// ── numeric sums ─────────────────────────────────────────────
 				parent.accumulatedCost               += child.accumulatedCost;
-				parent.accumulatedOriginalTokens     += child.accumulatedOriginalTokens;
-				parent.accumulatedCompressedTokens   += child.accumulatedCompressedTokens;
-				parent.accumulatedTokensSaved        += child.accumulatedTokensSaved;
-				parent.accumulatedCacheReadTokens    += child.accumulatedCacheReadTokens;
-				parent.compressionRequestCount       += child.compressionRequestCount;
-				parent.compressionTotalOriginalChars += child.compressionTotalOriginalChars;
-				parent.compressionTotalCompressedChars += child.compressionTotalCompressedChars;
 				// ── struct sum ───────────────────────────────────────────────
 				parent.tierCounter.high   += child.tierCounter.high;
 				parent.tierCounter.medium += child.tierCounter.medium;
@@ -400,7 +368,7 @@ export class RouterState {
 				// ── map merge ────────────────────────────────────────────────
 				this.mergeModelCosts(parent.modelCosts, child.modelCosts);
 				// SKIP: debugHistory, lastDecision — parent retains its own routing trace.
-				// SKIP: isStreaming, lastTurnTimestamp, currentCheckpoint — per-session ephemeral state.
+				// SKIP: isStreaming — per-session ephemeral state.
 				// SKIP: sessionId, parentSessionId — identity fields.
 			}
 		}
@@ -446,46 +414,21 @@ export class RouterState {
 	/**
 	 * Aggregate token counts across all active session scopes.
 	 *
-	 * Two complementary views are returned:
-	 *
-	 * **Scope-level** — sourced from the per-scope `accumulated*` fields.
-	 * These are maintained by the compression pipeline and the stream-completion
-	 * handler; they capture original/compressed/saved/cacheRead token volumes
-	 * for context-window management purposes.
-	 *
-	 * **Model-level** — sourced from `scope.modelCosts`, which is populated by
+	 * Sourced from `scope.modelCosts`, which is populated by
 	 * `recordModelCost` on each LLM stream completion. This is the authoritative
-	 * source for billable input/output tokens and cache-write tokens, which are
-	 * not tracked at the scope level.
-	 *
-	 * The two views are intentionally separate: scope-level tokens reflect
-	 * context management accounting; model-level tokens reflect API billing.
-	 * Do not add them together — they measure different things.
+	 * source for billable input/output tokens and cache-write tokens.
 	 *
 	 * Child sessions that have already been finalized via `finalizeChildSession`
 	 * are rolled up into their parent scope before this method is called, so
 	 * the result already includes sub-agent spend.
 	 */
-	totalTokens(): TotalTokens {
-		let originalTokens = 0;
-		let compressedTokens = 0;
-		let tokensSaved = 0;
-		let cacheReadTokens = 0;
+	totalTokens() {
 		let inputTokens = 0;
 		let outputTokens = 0;
 		let modelCacheReadTokens = 0;
 		let cacheWriteTokens = 0;
 
 		for (const scope of this.sessionScopes.values()) {
-			// Scope-level accounting
-			originalTokens   += scope.accumulatedOriginalTokens;
-			compressedTokens += scope.accumulatedCompressedTokens;
-			tokensSaved      += scope.accumulatedTokensSaved;
-			cacheReadTokens  += scope.accumulatedCacheReadTokens;
-
-			// Model-level billing (per-model entries may span multiple scopes
-			// when sub-agents are in flight; sum across all scopes here so we
-			// don't depend on rollup having already completed for in-flight children)
 			for (const entry of scope.modelCosts.values()) {
 				inputTokens          += entry.inputTokens;
 				outputTokens         += entry.outputTokens;
@@ -495,17 +438,10 @@ export class RouterState {
 		}
 
 		return {
-			// Scope-level (context management accounting)
-			originalTokens,
-			compressedTokens,
-			tokensSaved,
-			cacheReadTokens,
-			// Model-level (API billing)
 			inputTokens,
 			outputTokens,
 			modelCacheReadTokens,
 			cacheWriteTokens,
-			// Derived
 			totalBillableInputTokens: inputTokens + modelCacheReadTokens + cacheWriteTokens,
 		};
 	}
@@ -514,27 +450,6 @@ export class RouterState {
 
 	get accumulatedCost(): number { return this.scope.accumulatedCost; }
 	set accumulatedCost(v: number) { this.scope.accumulatedCost = v; }
-
-	get accumulatedOriginalTokens(): number { return this.scope.accumulatedOriginalTokens; }
-	set accumulatedOriginalTokens(v: number) { this.scope.accumulatedOriginalTokens = v; }
-
-	get accumulatedCompressedTokens(): number { return this.scope.accumulatedCompressedTokens; }
-	set accumulatedCompressedTokens(v: number) { this.scope.accumulatedCompressedTokens = v; }
-
-	get accumulatedTokensSaved(): number { return this.scope.accumulatedTokensSaved; }
-	set accumulatedTokensSaved(v: number) { this.scope.accumulatedTokensSaved = v; }
-
-	get accumulatedCacheReadTokens(): number { return this.scope.accumulatedCacheReadTokens; }
-	set accumulatedCacheReadTokens(v: number) { this.scope.accumulatedCacheReadTokens = v; }
-
-	get compressionRequestCount(): number { return this.scope.compressionRequestCount; }
-	set compressionRequestCount(v: number) { this.scope.compressionRequestCount = v; }
-
-	get compressionTotalOriginalChars(): number { return this.scope.compressionTotalOriginalChars; }
-	set compressionTotalOriginalChars(v: number) { this.scope.compressionTotalOriginalChars = v; }
-
-	get compressionTotalCompressedChars(): number { return this.scope.compressionTotalCompressedChars; }
-	set compressionTotalCompressedChars(v: number) { this.scope.compressionTotalCompressedChars = v; }
 
 	get debugHistory(): RoutingDecision[] { return this.scope.debugHistory; }
 	set debugHistory(v: RoutingDecision[]) { this.scope.debugHistory = v; }
@@ -545,16 +460,9 @@ export class RouterState {
 	get isStreaming(): boolean { return this.scope.isStreaming; }
 	set isStreaming(v: boolean) { this.scope.isStreaming = v; }
 
-	get currentCheckpoint(): CompressionCheckpoint | undefined { return this.scope.currentCheckpoint; }
-	set currentCheckpoint(v: CompressionCheckpoint | undefined) { this.scope.currentCheckpoint = v; }
-	get frozenCompressionBlock(): SessionScope["frozenCompressionBlock"] { return this.scope.frozenCompressionBlock; }
-	set frozenCompressionBlock(v: SessionScope["frozenCompressionBlock"]) { this.scope.frozenCompressionBlock = v; }
-
-	get lastTurnTimestamp(): number | undefined { return this.scope.lastTurnTimestamp; }
-	set lastTurnTimestamp(v: number | undefined) { this.scope.lastTurnTimestamp = v; }
-
 	get tierCounter(): TierCounter { return this.scope.tierCounter; }
 	get modelCosts(): Map<string, ModelCostEntry> { return this.scope.modelCosts; }
+
 
 	// ─── Classifier cache accessors (scope-delegating) ───────────────────
 	get lastClassifierKey(): string | undefined { return this.scope.lastClassifierKey; }

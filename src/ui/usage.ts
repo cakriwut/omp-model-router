@@ -5,31 +5,6 @@ import type {
 } from "../types";
 import type { TierCounter, ModelCostEntry } from "../state";
 
-export interface CompressionDiagnostic {
-	mode: "progressive" | "static" | "default";
-	/** Progressive mode: context tokens estimate vs threshold. */
-	contextTokens?: number;
-	contextThresholdTokens?: number;
-	/** Progressive mode: seconds since last turn vs timeout. */
-	secondsSinceLastTurn?: number;
-	timeThresholdSeconds?: number;
-	/** Static mode: current turn vs freezeAfter. */
-	currentTurn?: number;
-	freezeAfter?: number;
-	/** Default mode: messages in history vs keepLastN. */
-	messageCount?: number;
-	keepLastN?: number;
-}
-
-export interface CompressionUsageInput {
-	enabled: boolean;
-	requestCount: number;
-	totalOriginalChars: number;
-	totalCompressedChars: number;
-	/** Live diagnostic info shown when no compression has happened yet. */
-	diagnostic?: CompressionDiagnostic;
-}
-
 export interface ModelRegistryLookup {
 	find(provider: string, modelId: string): { cost?: unknown } | undefined;
 }
@@ -52,13 +27,8 @@ export interface UsageReportInput {
 	accumulatedCost?: number;
 	/** Sum of accumulatedCost across all active session scopes (root + in-flight children). For report display only — budget enforcement is per-session. */
 	treeCost?: number;
-	accumulatedOriginalTokens?: number;
-	accumulatedCompressedTokens?: number;
-	accumulatedTokensSaved?: number;
-	accumulatedCacheReadTokens?: number;
 	maxSessionBudget?: number;
 	modelRegistry: ModelRegistryLookup;
-	compression?: CompressionUsageInput;
 	calibration?: CalibrationUsageInput;
 }
 
@@ -192,77 +162,12 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 
 	const lines = [headerLine, ...(treeCostLine ? [treeCostLine] : []), barLine, labelLine, "", ...modelLines];
 	if (lastDecision) {
-		const triggerSuffix = lastDecision.compressionTriggerReason 
-			? ` [${lastDecision.compressionTriggerReason === 'context_size' ? '⟨size⟩' : '⟨expiry⟩'}]`
-			: (lastDecision.compressionCacheHit ? ' [cached]' : '');
-		lines.push(
-			"",
-			`Last: ${tierColor(lastDecision.tier, lastDecision.tier)} → ${lastDecision.targetProvider}/${lastDecision.targetModelId} (${lastDecision.thinking})${triggerSuffix}`,
-		);
+	lines.push(
+		"",
+		`Last: ${tierColor(lastDecision.tier, lastDecision.tier)} → ${lastDecision.targetProvider}/${lastDecision.targetModelId} (${lastDecision.thinking})`,
+	);
 	}
 
-	// ── Compression stats ──────────────────────────────────────────────
-	const comp = opts.compression;
-	if (comp?.enabled) {
-		lines.push("");
-		if (comp.requestCount > 0) {
-			const savingsPct = comp.totalOriginalChars > 0
-				? Math.round((1 - comp.totalCompressedChars / comp.totalOriginalChars) * 100)
-				: 0;
-			// Estimate token savings (conservative: 4 chars/token)
-			const savedTokens = Math.round((comp.totalOriginalChars - comp.totalCompressedChars) / 4);
-			const savedK = (savedTokens / 1000).toFixed(1);
-			lines.push(
-				`  ${theme.fg("accent", "TOON")}    ${comp.requestCount} requests compressed | ${theme.fg("success", `↓${savingsPct}%`)} smaller | est. ~${savedK}k tokens saved`,
-			);
-		} else {
-			const d = comp.diagnostic;
-			const tag = `  ${theme.fg("accent", "TOON")}    `;
-			if (!d) {
-				lines.push(`${tag}enabled (no compressions yet)`);
-			} else if (d.mode === "progressive") {
-				const ctxNow = d.contextTokens ?? 0;
-				const ctxMax = d.contextThresholdTokens ?? 0;
-				const ctxKNow = (ctxNow / 1000).toFixed(1);
-				const ctxKMax = (ctxMax / 1000).toFixed(1);
-				const elapsed = d.secondsSinceLastTurn ?? 0;
-				const maxElapsed = d.timeThresholdSeconds ?? 0;
-				lines.push(
-					`${tag}enabled — progressive mode (no triggers yet)`,
-					`         context ${ctxKNow}k / ${ctxKMax}k tokens · cache ${elapsed}s / ${maxElapsed}s timeout`,
-				);
-			} else if (d.mode === "static") {
-				const turn = d.currentTurn ?? 0;
-				const freeze = d.freezeAfter ?? 0;
-				lines.push(
-					`${tag}enabled — static mode (freezes at turn ${freeze})`,
-					`         current turn ${turn} / ${freeze} — compression freezes when reached`,
-				);
-			} else {
-				const msgs = d.messageCount ?? 0;
-				const keep = d.keepLastN ?? 4;
-				lines.push(
-					`${tag}enabled — default mode (compresses when history > keepLastN)`,
-					`         ${msgs} messages in history · keepLastN=${keep} (need at least ${keep + 1})`,
-				);
-			}
-		}
-	}
-
-	// ── Accumulated token metrics ──────────────────────────────────────
-	if (opts.accumulatedOriginalTokens || opts.accumulatedTokensSaved || opts.accumulatedCacheReadTokens) {
-		lines.push("");
-		const tokenSavings = opts.accumulatedTokensSaved || 0;
-		const cacheTokens = opts.accumulatedCacheReadTokens || 0;
-		if (tokenSavings > 0) {
-			const savingsK = (tokenSavings / 1000).toFixed(1);
-			lines.push(`  ${theme.fg("accent", "Savings")} ~${savingsK}k tokens from TOON compression`);
-		}
-		if (cacheTokens > 0) {
-			const cacheK = (cacheTokens / 1000).toFixed(1);
-			lines.push(`  ${theme.fg("accent", "Cache")} 📦${cacheK}k tokens read from cache`);
-		}
-	}
 
 	// ── Calibration stats ──────────────────────────────────────────────
 	if (opts.calibration) {

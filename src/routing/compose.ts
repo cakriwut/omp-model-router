@@ -236,7 +236,7 @@ export const resolveRouting = async (
 						decision.phase,
 						promoted.fits
 							? `Context (${tokens} tok) exceeds ${decision.tier} capacity (${promoted.fromCapacity} tok). Promoted ${decision.tier}→${promoted.tier} (cap ${promoted.toCapacity}).`
-							: `Context (${tokens} tok) overflows every tier; ${promoted.tier} has biggest capacity (${promoted.toCapacity} tok) — compression required.`,
+							: `Context (${tokens} tok) overflows every tier; ${promoted.tier} has biggest capacity (${promoted.toCapacity} tok).`,
 						config.thinkingOverrides,
 						false,
 					);
@@ -270,8 +270,7 @@ export const resolveRouting = async (
 	) {
 		// ── Compute classifier signature (Phase 1 cache key) ──────────────
 		const lastUserText = getLastUserText(input.context) ?? "";
-		// Monotonic user-message counter on scope — incremented by turn_start,
-		// never rolls back under TOON compression (unlike counting role==="user" in messages).
+		// Monotonic user-message counter on scope — incremented by turn_start.
 		const scope = input.state?.scope;
 		const userMsgIndex = scope?.userMessagesSeen ?? 0;
 		// Phase 2: tool-mix bucket extends the cache key

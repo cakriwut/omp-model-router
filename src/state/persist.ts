@@ -69,10 +69,6 @@ export const buildPersistedState = (
 	lastDecision: state.lastDecision,
 	lastNonRouterModel: state.lastNonRouterModel,
 	accumulatedCost: state.accumulatedCost,
-	accumulatedOriginalTokens: state.accumulatedOriginalTokens,
-	accumulatedCompressedTokens: state.accumulatedCompressedTokens,
-	accumulatedTokensSaved: state.accumulatedTokensSaved,
-	accumulatedCacheReadTokens: state.accumulatedCacheReadTokens,
 	timestamp: Date.now(),
 });
 

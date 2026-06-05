@@ -1,22 +1,22 @@
 # @cakriwut/omp-model-router
 
-Cost-optimized model routing for Oh-My-Pi — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Optionally compresses conversation history using TOON format to reduce input tokens. Integrates with RTK (Rust Token Killer) for 60-90% token savings on tool outputs. **NEW**: Classifier prompt cache eliminates ~80% of redundant LLM classifier calls in tool loops; tool-mix bucket signal enables mid-loop phase-transition detection.
+Cost-optimized model routing for Oh-My-Pi — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Integrates with RTK (Rust Token Killer) for 60-90% token savings on tool outputs. **NEW**: Classifier prompt cache eliminates ~80% of redundant LLM classifier calls in tool loops; tool-mix bucket signal enables mid-loop phase-transition detection.
 
 ## Structure
 
 ```
 src/
 ├── index.ts              # Extension entry point + lifecycle hooks
-├── commands.ts           # /router commands (usage, profile, pin, etc.)
+├── commands/             # /router subcommands (usage, profile, pin, etc.)
 ├── config.ts             # Config loading + validation
-├── routing.ts            # Classification heuristic (High/Medium/Low)
+├── routing/              # Classification heuristic (High/Medium/Low)
 ├── provider.ts           # Model provider integration
-├── state.ts              # Session state + budget tracking
-├── ui.ts                 # Status widget rendering
-├── context-compression.ts # TOON history compression
-├── rtk-integration.ts     # RTK (Rust Token Killer) integration
-├── version-check.ts      # Auto-upgrade detection
+├── state/                # Session state + budget tracking
+├── ui/                   # Status widget rendering
+├── calibration/          # LLM classifier + calibration matrix
+├── utils/                # Shared utilities (message helpers, etc.)
 ├── constants.ts          # Shared constants
+└── types.ts              # Type definitions
 
 test/                     # Test suite (bun test)
 ```
@@ -27,7 +27,6 @@ test/                     # Test suite (bun test)
 - **Tool-Mix Bucket Signal**: Detects mid-loop phase transitions (exploration → implementation) and re-routes appropriately; injects `read×4 edit×3 …` activity summary into classifier prompt
 - **Cost Optimization**: Automatically selects cheaper models for simple tasks
 - **Model Fallback Chain**: Automatically retries fallback models when primary fails
-- **History Compression (TOON)**: Compresses old conversation history, saving 30–50% of input tokens
 - **RTK Integration**: Reduces tool output tokens by 60-90% (requires `rtk` binary)
 - **Budget Tracking**: Enforces session budgets and downgrades tiers when exceeded
 - **Debug Logging**: Detailed fallback attempt logging when `debug: true`
@@ -62,12 +61,10 @@ Then in OMP: `/reload`
 **Dev installs won't support `/router update`** — see troubleshooting section below.
 ## Usage
 
-```bash
 /router                     # Show current router status
-/router usage               # Show model usage, cost, and compression stats
+/router usage               # Show model usage and cost
 /router profile hybrid      # Switch to hybrid profile
 /router pin high            # Force high tier
-/router set compression on  # Enable TOON history compression
 /router set budget 3.0      # Set session budget to $3.00
 /router help                # Show all subcommands
 ```
@@ -87,16 +84,7 @@ Config file: `~/.omp/agent/model-router.json`
   "classifierCache": {
     "ttlTurns": 20
   },
-  "historyCompression": {
-    "enabled": true,
-    "keepLastN": 4,
-    "progressive": {
-      "enabled": true,
-      "maxCheckpointAge": 50,
-      "maxCheckpointSize": 200000
-    },
-    "excludeModels": ["kimi", "nova"]
-  },
+  "rules": [
     { "matches": ["deploy", "production"], "tier": "high" },
     { "matches": ["changelog", "summarize"], "tier": "low" }
   ],
@@ -269,7 +257,6 @@ This test catches:
 - Boolean fields not flowing through
 - Number fields being dropped
 - String fields being lost
-- Nested objects (`historyCompression`, `progressive`) being incomplete
 - **Arbitrary new fields being preserved** (future-proofing test)
 
 **Quick verification** before assuming wiring works:
@@ -339,7 +326,6 @@ If you see `source=none` for a session you expected to be a child, the harness h
 Open work for future contributors:
 
 - **Thread D:** Decide whether `maxSessionBudget` is per-session or per-agent-tree. Each session currently checks only its own `accumulatedCost`; in-flight sub-agent spend is invisible to the parent until `agent_end`.
-- **Thread E:** Move `frozenCompressionBlock` from `RouterState` (shared) into `SessionScope` (per-session) to prevent cross-session compression-cache pollution in multi-agent runs.
 
 
 ## Publish

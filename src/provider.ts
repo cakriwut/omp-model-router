@@ -21,10 +21,6 @@ import {
 	hasImageAttachment,
 } from "./routing";
 import type { RouterState } from "./state";
-import {
-	resolveCompressionConfig,
-	applyCompression,
-} from "./context-compression";
 import { spawnClassifierForTurn } from "./calibration/hooks";
 import { loadPitfalls } from "./calibration/pitfalls";
 import {
@@ -608,9 +604,8 @@ export const registerRouterProvider = (
 						);
 						continue;
 					}
-						// Hoisted so the catch block (probe-retry path) can access them
+						// Hoisted so the catch block (probe-retry path) can access it
 						let effectiveContext: typeof context = context;
-						let finalContext: typeof context = context;
 						try {
 							// Auto-truncation if picked model has smaller context window
 							const targetLimit = targetModel.contextWindow || 128_000;
@@ -619,106 +614,6 @@ export const registerRouterProvider = (
 									? truncateContext(context, targetLimit)
 									: context;
 
-						// ── History compression (TOON) ───────────────────────────────
-						const compressionCfg = resolveCompressionConfig(
-							state.currentConfig.historyCompression,
-							state.currentConfig.profiles[model.id]?.historyCompression,
-						);
-						const now = Date.now();
-						
-						const compressionResult = compressionCfg
-							? applyCompression({
-									context: effectiveContext,
-									config: compressionCfg,
-									contextWindow: targetLimit,
-									targetProvider,
-									targetModelId,
-									lastTurnTimestamp: state.lastTurnTimestamp,
-									currentCheckpoint: state.currentCheckpoint,
-									// Deserialize frozen block on use — scope stores as JSON string
-									frozenBlock: state.frozenCompressionBlock
-										? { messages: JSON.parse(state.frozenCompressionBlock.messagesJson), stats: state.frozenCompressionBlock.stats }
-										: undefined,
-									now,
-							  })
-							: {
-									context: effectiveContext,
-									stats: undefined,
-									triggerReason: null,
-									checkpointReused: false,
-									checkpointExpired: false,
-							  };
-						
-						finalContext = compressionResult.context;
-						const turnNumber = effectiveContext.messages.length;
-						
-						// ── Update state and decision based on compression result ────
-						if (compressionResult.stats) {
-							decision.compression = compressionResult.stats;
-							decision.compressionTriggerReason = compressionResult.triggerReason ?? undefined;
-							
-							state.compressionTotalOriginalChars += compressionResult.stats.originalChars;
-							state.compressionTotalCompressedChars += compressionResult.stats.compressedChars;
-							state.compressionRequestCount++;
-							
-							state.accumulatedOriginalTokens += compressionResult.stats.estimatedOriginalTokens ?? 0;
-							state.accumulatedCompressedTokens += compressionResult.stats.estimatedCompressedTokens ?? 0;
-							state.accumulatedTokensSaved += compressionResult.stats.estimatedTokensSaved ?? 0;
-							
-							// Debug logging
-							if (state.currentConfig.debug && compressionResult.triggerReason) {
-								const compressionDebugData = {
-									reason: compressionResult.triggerReason,
-									contextTokens: compressionResult.stats.estimatedOriginalTokens ?? 0,
-									threshold: compressionCfg?.progressive?.contextThreshold
-										? Math.floor((compressionCfg.progressive.contextThreshold) * targetLimit)
-										: 'N/A',
-									timeSinceLastTurn: state.lastTurnTimestamp
-										? Math.floor((now - state.lastTurnTimestamp) / 1000)
-										: 'N/A',
-									timeThreshold: compressionCfg?.progressive?.timeThreshold ?? 'N/A',
-									turnNumber,
-									messageCount: effectiveContext.messages.length,
-								};
-								
-								console.log('[ROUTER] Compression triggered:', compressionDebugData);
-								// TODO: Debug logging to session - API not available yet
-								// if (state.currentConfig.debugVerbose && state.lastExtensionContext) {
-								// 	state.lastExtensionContext.sessionManager.appendCustomEntry('router:compression-trigger', compressionDebugData);
-								// }
-							}
-						}
-						
-						// ── Update checkpoints ───────────────────────────────────────
-						if (compressionResult.newCheckpoint) {
-							state.currentCheckpoint = compressionResult.newCheckpoint;
-						} else if (compressionResult.checkpointExpired) {
-							state.currentCheckpoint = undefined;
-							if (state.currentConfig.debug) {
-								console.log('[ROUTER] Checkpoint expired:', {
-									reason: compressionResult.triggerReason === 'cache_expiry' ? 'age' : 'size',
-								});
-							}
-						}
-						
-						if (compressionResult.checkpointReused) {
-							decision.compressionCacheHit = true;
-						}
-						
-						// ── Static/dynamic mode: update frozen block ─────────────────
-						if (compressionCfg?.freezeAfter !== undefined && 
-						    turnNumber === compressionCfg.freezeAfter && 
-						    compressionResult.stats) {
-							const frozenMessages = compressionResult.context.messages.slice(0, -(compressionCfg.keepLastN ?? 4));
-							// Serialize to JSON — avoids holding Message[] in scope across turns
-							state.frozenCompressionBlock = {
-								messagesJson: JSON.stringify(frozenMessages),
-								stats: compressionResult.stats,
-							};
-						}
-						
-						// Update last turn timestamp for cache expiry detection
-						state.lastTurnTimestamp = now;
 
 						const thinkingOverride = actions.getThinkingOverride(
 							model.id,
@@ -743,7 +638,7 @@ export const registerRouterProvider = (
 						// 	}
 						// }
 
-						const delegatedStream = streamSimple(targetModel, sanitizeContext(finalContext), {
+						const delegatedStream = streamSimple(targetModel, sanitizeContext(effectiveContext), {
 							...options,
 							apiKey,
 							headers: targetModel.headers,
@@ -772,7 +667,6 @@ export const registerRouterProvider = (
 								const u = event.message.usage;
 								const cost = u?.cost?.total ?? 0;
 								state.accumulatedCost += cost;
-								state.accumulatedCacheReadTokens += u?.cacheRead ?? 0;
 								decision.usage = {
 									inputTokens:
 										(decision.usage?.inputTokens ?? 0) + (u?.input ?? 0),
@@ -846,12 +740,12 @@ export const registerRouterProvider = (
 								if (state.currentConfig.debug) {
 									console.log(`[model-router] probe succeeded — retrying ${modelRef}`);
 								}
-								// Retry using hoisted finalContext (set before the try block)
+								// Retry using hoisted effectiveContext (set before the try block)
 								const retryIdleMs = resolveStreamIdleTimeout(
 									state.currentConfig.streamIdleTimeoutMs,
 									targetProvider,
 								);
-								const retryContext = sanitizeContext(finalContext);
+								const retryContext = sanitizeContext(effectiveContext);
 								try {
 									const retryStream = streamSimple(targetModel, retryContext, {
 										...options,
@@ -872,7 +766,6 @@ export const registerRouterProvider = (
 											const u = event.message.usage;
 											const cost = u?.cost?.total ?? 0;
 											state.accumulatedCost += cost;
-											state.accumulatedCacheReadTokens += u?.cacheRead ?? 0;
 											decision.usage = {
 												inputTokens: (decision.usage?.inputTokens ?? 0) + (u?.input ?? 0),
 												outputTokens: (decision.usage?.outputTokens ?? 0) + (u?.output ?? 0),

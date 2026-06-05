@@ -43,55 +43,6 @@ export interface RoutedTierConfig {
 	fallbacks?: string[];
 }
 
-export interface HistoryCompressionConfig {
-	/** Enable TOON compression of message history before sending to the LLM. */
-	enabled: boolean;
-	/**
-	 * Number of recent messages to keep as native JSON turns.
-	 * All older messages are compressed into a single prepended user message.
-	 * Must be >= 1 (the latest user message is always kept). Default: 4.
-	 */
-	keepLastN?: number;
-	/**
-	 * List of model patterns to exclude from compression.
-	 * When the resolved target model matches any pattern, compression is skipped.
-	 * Supports substring matching (e.g. "kimi" matches "moonshotai.kimi-k2.5").
-	 */
-	excludeModels?: string[];
-	/**
-	 * Turn number after which compression is frozen (static TOON mode).
-	 * When set, compression is applied only up to this turn, then reused for all subsequent turns.
-	 */
-	freezeAfter?: number;
-	/**
-	 * Progressive TOON configuration: compress only when beneficial (context approaching limit OR cache expiry).
-	 * When enabled, overrides freezeAfter and uses intelligent checkpointing instead.
-	 */
-	progressive?: {
-		/** Enable progressive TOON mode. Default: false. */
-		enabled: boolean;
-		/**
-		 * Context size threshold as fraction of model window. Compression triggers when context >= this.
-		 * 0.0-1.0; default: 0.8 (80%).
-		 */
-		contextThreshold?: number;
-		/**
-		 * Time threshold in seconds. Compression triggers if gap since last turn >= this.
-		 * Used to detect cache expiry. Default: 300 (5 minutes).
-		 */
-		timeThreshold?: number;
-		/**
-		 * Maximum age of a checkpoint in turns before forcing refresh.
-		 * Prevents stale checkpoints from being reused indefinitely. Default: 50.
-		 */
-		maxCheckpointAge?: number;
-		/**
-		 * Maximum context size in tokens before forcing checkpoint refresh.
-		 * Prevents bloated checkpoints from being reused. Default: 200000.
-		 */
-		maxCheckpointSize?: number;
-	};
-}
 export interface EmbargoEntry {
 	/** The model ref being embargoed (e.g. "anthropic/claude-sonnet-4-5"). */
 	modelRef: string;
@@ -135,50 +86,11 @@ export interface AutoUpgradeConfig {
 	tools?: string[];
 }
 
-/**
- * Frozen TOON checkpoint created when progressive compression triggers.
- * Reused between triggers to maximize cache hit rate on frozen block.
- */
-export interface CompressionCheckpoint {
-	/** Frozen TOON text block (immutable across subsequent turns). */
-	frozenBlock: string;
-	/** Checkpoint metadata for tracking. */
-	metadata: {
-		/** Turn number when checkpoint was created. */
-		turn: number;
-		/** Character range of frozen content [start, end). */
-		range: [number, number];
-		/** Compression statistics. */
-		stats: CompressionStats;
-		/** Trigger reason: "context_size" or "cache_expiry". */
-		triggerReason: "context_size" | "cache_expiry";
-		/** Timestamp when checkpoint was created (epoch ms). */
-		timestamp: number;
-	};
-}
-
-
-export interface CompressionStats {
-	/** Number of messages that were compressed into the TOON block. */
-	compressedMessages: number;
-	/** Character count of the original JSON representation of compressed messages. */
-	originalChars: number;
-	/** Character count of the TOON block (including the wrapper text). */
-	compressedChars: number;
-	/** Estimated tokens in original context before compression. */
-	estimatedOriginalTokens?: number;
-	/** Estimated tokens in compressed context after TOON encoding. */
-	estimatedCompressedTokens?: number;
-	/** Estimated tokens saved by compression. */
-	estimatedTokensSaved?: number;
-}
 
 export interface RouterProfile {
 	high: RoutedTierConfig;
 	medium: RoutedTierConfig;
 	low: RoutedTierConfig;
-	/** Per-profile compression config. Overrides the global RouterConfig setting. */
-	historyCompression?: HistoryCompressionConfig;
 }
 
 export interface RouterConfig {
@@ -186,7 +98,7 @@ export interface RouterConfig {
 	routerEnabled?: boolean;
 	defaultProfile?: string;
 	debug?: boolean;
-	/** Opt-in for verbose session JSONL logging (compression triggers, etc). Default: false. */
+	/** Opt-in for verbose session JSONL logging. Default: false. */
 	debugVerbose?: boolean;
 	/** Maximum number of routing decisions to keep in debugHistory. Default: 12. */
 	debugHistoryLimit?: number;
@@ -195,8 +107,6 @@ export interface RouterConfig {
 	largeContextThreshold?: number;
 	maxSessionBudget?: number;
 	rules?: RoutingRule[];
-	/** Global history compression config. Can be overridden per-profile. */
-	historyCompression?: HistoryCompressionConfig;
 	profiles: Record<string, RouterProfile>;
 	/** Auto-upgrade tier when the same tool fails consecutively. */
 	autoUpgrade?: AutoUpgradeConfig;
@@ -289,9 +199,6 @@ export interface RoutingDecision {
 	isRuleMatched?: boolean;
 	isEmbargoed?: boolean;
 	embargoTimeRemaining?: number;
-	compression?: CompressionStats;
-	compressionTriggerReason?: "context_size" | "cache_expiry";
-	compressionCacheHit?: boolean;
 	/** True when the synchronous classifier ran (or returned a cache hit) this turn.
 	 *  Set by resolveRouting; read by spawnClassifierForTurn to suppress redundant async spawn. */
 	syncClassifierRan?: boolean;
@@ -313,17 +220,8 @@ export interface RouterPersistedState {
 	lastNonRouterModel?: string;
 	// ─── Per-session accumulated cost (backward compat) ──────────────
 	accumulatedCost?: number;
-	accumulatedOriginalTokens?: number;
-	accumulatedCompressedTokens?: number;
-	accumulatedTokensSaved?: number;
 	accumulatedCacheReadTokens?: number;
 	timestamp: number;
-	// ─── Progressive TOON state ───────────────────────────────────────
-	compressionRequestCount?: number;
-	compressionTotalOriginalChars?: number;
-	compressionTotalCompressedChars?: number;
-	currentCheckpoint?: CompressionCheckpoint;
-	lastTurnTimestamp?: number;
 }
 
 export interface ConfigLoadResult {

@@ -21,7 +21,7 @@ import {
 } from "./calibration/hooks";
 import { checkForUpdate } from "./version-check";
 import { registerRtkIntegration } from "./rtk-integration";
-import { setScopedPin } from "./routing/pin";
+import { setScopedPin, clearScopedPin, clearSystemPin } from "./routing/pin";
 
 const routerExtension = (pi: ExtensionAPI) => {
 	pi.setLabel("Model Router");
@@ -191,6 +191,12 @@ const routerExtension = (pi: ExtensionAPI) => {
 		state.activateSession(sessionId, sessionParent, sessionParent ? "header" : "none");
 
 		state.restoreFromSession(ctx);
+		// Scoped pins are session-scoped and must not survive into a new conversation.
+		// activateSession() only creates a fresh scope for brand-new session IDs; if
+		// OMP reuses the same ID (e.g. reload within the same process), the existing
+		// scope — including any rule/heuristic/classifier pin from a previous run —
+		// would otherwise persist here. Clear it unconditionally on every session_start.
+		clearScopedPin(state.scope);
 
 		await actions.ensureValidActiveRouterProfile(ctx);
 
@@ -257,6 +263,9 @@ const routerExtension = (pi: ExtensionAPI) => {
 		state.activateSession(sessionId, sessionParent, sessionParent ? "header" : "none");
 
 		state.restoreFromSession(ctx);
+		// On branch: clear rule/heuristic/classifier pins (stale phase inference);
+		// preserve user-set pins since those represent explicit user intent.
+		clearSystemPin(state.scope);
 
 		await actions.ensureValidActiveRouterProfile(ctx);
 
@@ -319,7 +328,7 @@ const routerExtension = (pi: ExtensionAPI) => {
 		}
 
 		// Increment userMessagesSeen when a new user-role message arrives.
-		// Checked via session entry id (survives TOON compression; message count can decrease).
+		// Checked via session entry id (survives message count can decrease).
 		try {
 			const branch = ctx.sessionManager.getBranch();
 			// Walk from the end; find the most recent user-role message entry

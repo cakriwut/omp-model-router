@@ -84,18 +84,6 @@
       }
     }
   },
-  "historyCompression": {
-    "enabled": true,
-    "keepLastN": 4,
-    "progressive": {
-      "enabled": true,
-      "contextThreshold": 0.8,
-      "timeThreshold": 300,
-      "maxCheckpointAge": 50,
-      "maxCheckpointSize": 200000
-    },
-    "excludeModels": ["kimi", "deepseek", "nova"]
-  },
   "autoUpgrade": {
     "enabled": true,
     "threshold": 2,
@@ -110,4 +98,5 @@
     "traceEnabled": false,
     "useGlobalPrior": true,
     "globalPriorWeight": 0.1
+  }
 }

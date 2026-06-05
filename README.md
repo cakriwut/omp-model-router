@@ -1,7 +1,6 @@
 # @cakriwut/omp-model-router
 
-Cost-optimized model routing for [Oh-My-Pi](https://github.com/can1357/oh-my-pi) — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Optionally compresses conversation history using [TOON format](https://github.com/toon-format/toon) to reduce input tokens.
-
+Cost-optimized model routing for [Oh-My-Pi](https://github.com/can1357/oh-my-pi) — routes prompts to cheap/mid/expensive models based on task complexity. Tracks per-turn and session costs. Integrates with RTK (Rust Token Killer) for 60-90% token savings on tool outputs.
 
 > **Note**: This is a TypeScript source package for Oh-My-Pi extensions. Users need the OMP environment with `@oh-my-pi/pi-coding-agent` installed.
 
@@ -20,21 +19,12 @@ Cost-optimized model routing for [Oh-My-Pi](https://github.com/can1357/oh-my-pi)
 ### 💰 Cost Optimization
 - **Session budget tracking**: Enforce max spend per session
 - **Automatic downgrade**: Exceeds budget? Router demotes to cheaper tiers
-- **Real-time usage display**: See per-model usage, cost breakdowns, and compression savings via `/router usage`
+- **Real-time usage display**: See per-model usage and cost breakdowns via `/router usage`
 
-### 📦 History Compression (TOON)
-- **Progressive mode** (default): Compresses only when triggers fire:
-  - **Context size trigger**: Fires when context >= 80% of model's window
-  - **Cache expiry trigger**: Fires 5 minutes after last turn (prevents prompt cache expiry)
-- **Smart TOON history exclusion**: When sessions are reconstructed from JSONL with TOON-compressed history, the compression trigger excludes the already-compressed history from token estimation, preventing double-compression on the first message
-- **Frozen checkpoints**: Freeze compressed blocks at turn 5 to reuse across turns (reduces compression overhead)
-- **Model exclusions**: Skip compression for models that don't benefit (e.g., Kimi, Nova)
-- **Token savings**: 30–50% reduction in input tokens for long sessions
-- **Debug logging**: When `debug: true`, compression triggers are persisted to session JSONL for auditability
 ### 🔍 Observability
-- **Status widget**: Live display of current profile, tier, model, and compression state
-- **Usage reports**: Detailed per-model usage, cost, TOON compression stats, and cache metrics
-- **Debug mode**: Session-persisted logs for compression triggers (reviewable via JSONL)
+- **Status widget**: Live display of current profile, tier, and model
+- **Usage reports**: Detailed per-model usage and cost metrics
+- **Debug mode**: Session-persisted logs for routing decisions
 - **Cost tracking**: Accumulated session cost vs budget with visual progress bar
 
 ---
@@ -90,15 +80,6 @@ Create or edit `~/.omp/agent/model-router.json`:
   "defaultProfile": "auto",
   "debug": false,
   "maxSessionBudget": 2.0,
-  "historyCompression": {
-    "enabled": true,
-    "keepLastN": 4,
-    "progressive": {
-      "enabled": true,
-      "contextThreshold": 0.8,
-      "timeThreshold": 300
-    },
-    "excludeModels": ["kimi", "nova"]
   "rules": [
     {
       "matches": ["deploy", "production", "release"],
@@ -139,25 +120,17 @@ Create or edit `~/.omp/agent/model-router.json`:
 | `calibration.enabled` | Enable calibration system | `false` |
 | `calibration.mode` | `"telemetry"` (data only) or `"adaptive"` (controls routing) | `"telemetry"` |
 | `calibration.classifierModel` | Model for LLM classifier (e.g., `anthropic/claude-3-haiku-20240307`) | - |
-| `historyCompression.enabled` | Enable TOON compression | `true` |
-| `historyCompression.progressive.enabled` | Use progressive mode (trigger-based) | `true` |
-| `historyCompression.progressive.contextThreshold` | Context size trigger (0.0-1.0) | `0.8` (80%) |
-| `historyCompression.progressive.timeThreshold` | Cache expiry trigger (seconds) | `300` (5 min) |
 | `rules` | Array of keyword → tier mappings | `[]` |
-
 ---
 
 ## Usage Commands
 
-```bash
 /router                     # Show current router status
-/router usage               # Show model usage, cost, and compression stats
-/router profile hybrid      # Switch to hybrid profile  
+/router usage               # Show model usage and cost
+/router profile hybrid      # Switch to hybrid profile
 /router pin high            # Force high tier (all prompts use high until unpinned)
 /router pin off             # Remove tier pin
 /router set thinking high min   # Override thinking level for high tier
-/router set compression on  # Enable TOON compression
-/router set compression off # Disable TOON compression
 /router set budget 3.0      # Set session budget to $3.00
 /router reset               # Reset to config defaults (clears pins, thinking overrides)
 /router widget on           # Show status widget
@@ -175,67 +148,8 @@ Router: auto                       $0.1234 / $2.00
   MEDIUM  claude-sonnet-4-5                      25x   $0.0350
   LOW     claude-haiku-4-5                       11x   $0.0084
 
-Savings ~15432 tokens from TOON compression
-Cache 📦8241 tokens read from cache
-
-TOON: 8 compressions, frozen at turn 5
-  Turn 12 → 145K to 98K (-47K)
-  Turn 15 → 165K to 112K (-53K)
-  ...
-
 Last: medium → anthropic/claude-sonnet-4-5 (thinking: medium)
 ```
-
----
-
-## How Progressive TOON Compression Works
-
-Progressive mode compresses **only when triggers fire**, avoiding unnecessary overhead.
-
-### Trigger 1: Context Size
-Fires when `contextTokens >= 0.8 * modelContextWindow`
-
-**Example**: For a model with 200k context window, triggers at ~160k tokens.
-
-### Trigger 2: Cache Expiry
-Fires when time since last turn >= 300 seconds (5 minutes).
-
-**Purpose**: Anthropic's prompt cache expires after 5 minutes. Compressing before expiry keeps the compressed block cached, avoiding full recomputation.
-
-### Debug Logging
-
-When `debug: true`, compression triggers are persisted to session JSONL:
-
-```json
-{
-  "type": "custom",
-  "customType": "router:compression-trigger",
-  "data": {
-    "reason": "cache-expiry",
-    "contextTokens": 165432,
-    "threshold": 160000,
-    "timeSinceLastTurn": 310,
-    "timeThreshold": 300,
-    "turnNumber": 15,
-    "messageCount": 30
-  }
-}
-```
-
-**To review logs**:
-
-```bash
-jq 'select(.customType == "router:compression-trigger")' \
-  ~/.omp/agent/sessions/<workspace>/<session-id>/0-*.jsonl
-```
-
-### Frozen Checkpoints
-
-At turn 5 (configurable), the router creates a **frozen checkpoint** — a TOON-compressed block that is reused across subsequent turns without re-compressing. This reduces CPU overhead while maintaining cache benefits.
-
-**Widget displays:**
-- `[toon]` flag when compression is applied
-- 📦 icon with cached token count when cache hits
 
 ---
 
@@ -352,19 +266,6 @@ When `debug: true`, calibration emits messages like:
 To hide these messages: set `"debug": false` and run `/reload`.
 
 
-## Usage Commands
-
-```bash
-/router                     # Show current router status
-/router usage               # Show model usage, cost, and compression stats
-/router profile hybrid      # Switch to hybrid profile  
-/router pin high            # Force high tier
-/router set compression on  # Enable TOON history compression
-/router set budget 3.0      # Set session budget to $3.00
-/router help                # Show all subcommands
-```
-
----
 
 ## Development
 
@@ -437,85 +338,29 @@ gh release create v0.5.1 --generate-notes
 
 ---
 
-## Recent Fixes
-
-### Early Compression Fix (2026-05-30)
-**Bug**: TOON compression triggered after just 2 turns (4 messages) instead of waiting for progressive thresholds (80% context OR 5min idle).
-
-**Root Cause**: `FALLBACK_CONFIG` was missing the `historyCompression` field, causing eager compression mode to activate by default.
-
-**Fix**: Added `historyCompression` defaults with `progressive.enabled: true` to `FALLBACK_CONFIG`.
-
-**Files Changed**:
-- `src/config.ts`: Added default `historyCompression` with progressive mode
-- `test/early-compression-bug.test.ts`: Regression test
-- `docs/EARLY_COMPRESSION_FIX.md`: Full analysis
-
-
-### Session-Scoped Metrics (2026-05-30)
-**Bug**: `/router usage` showed accumulated savings from **previous sessions** even when the current session had no compressions yet.
-
-**Fix**: Accumulated metrics (`accumulatedTokensSaved`, `accumulatedCost`, etc.) are now **truly session-scoped** — they reset to 0 on each new session and are NOT restored from persisted state.
-
-**Files Changed**:
-- `src/state.ts`: Removed restore + persist for accumulated metrics
-- `src/types.ts`: Removed accumulated fields from `RouterPersistedState`
-- `test/session-scoped-metrics.test.ts`: Added regression test
-
-### Debug Session Logging (2026-05-30)
-**Enhancement**: Compression trigger debug logs are now **persisted to session JSONL** (as `router:compression-trigger` custom entries) instead of only appearing in ephemeral console output.
-
-**Benefits**:
-- ✅ **Auditability**: Full history of when compression triggered
-- ✅ **Persistent**: Logs survive process restart
-- ✅ **Reviewable**: Use `jq` to extract and analyze compression behavior post-session
-
-**Files Changed**:
-- `src/provider.ts`: Added `ctx.sessionManager.appendCustomEntry` for compression triggers
-- `test/compression-trigger.test.ts`: Added test for session logging
-- `docs/DEBUG_SESSION_LOGGING.md`: Full documentation
-
----
-
 ## Project Structure
 
 ```
 src/
 ├── index.ts              # Extension entry point + lifecycle hooks
-├── commands.ts           # /router commands (usage, profile, pin, etc.)
+├── commands/             # /router subcommands (usage, profile, pin, etc.)
 ├── config.ts             # Config loading + validation
-├── routing.ts            # Classification heuristic (High/Medium/Low)
-├── provider.ts           # Model provider integration + compression triggers
-├── state.ts              # Session state + budget tracking
-├── ui.ts                 # Status widget rendering + usage reports
-├── context-compression.ts # TOON history compression
-├── version-check.ts      # Auto-upgrade detection
+├── routing/              # Classification heuristic (High/Medium/Low)
+├── provider.ts           # Model provider integration
+├── state/                # Session state + budget tracking
+├── ui/                   # Status widget rendering + usage reports
+├── calibration/          # LLM classifier + calibration matrix
+├── utils/                # Shared utilities (message helpers, etc.)
 ├── constants.ts          # Shared constants
 └── types.ts              # Type definitions
 
-test/                     # Test suite (252 tests, bun test)
-docs/                     # Implementation docs and fix explanations
+test/                     # Test suite (~370 tests, bun test)
+docs/                     # Implementation docs
 ```
 
 ---
 
 ## Troubleshooting
-
-### "Compression never triggers"
-1. Check `debug: true` is enabled in config
-2. Verify `historyCompression.progressive.enabled: true`
-3. Check session JSONL for `router:compression-trigger` entries:
-   ```bash
-   jq 'select(.customType == "router:compression-trigger")' ~/.omp/agent/sessions/<workspace>/<session-id>/0-*.jsonl
-   ```
-4. If no entries, compression hasn't triggered (context not large enough, or < 5 minutes since last turn)
-
-### "Usage shows incorrect savings"
-This was fixed in v0.2.2. Upgrade to the latest version:
-```bash
-cd omp-model-router && git pull && bun install && bun run deploy:dev
-/reload  # in OMP
-```
 
 ### "Router not active"
 1. Check `routerEnabled: true` in config
@@ -533,7 +378,7 @@ MIT © Riwut Libinuko
 
 ## Related Documentation
 
-- `docs/SESSION_SCOPED_METRICS_FIX.md` - Accumulated metrics bug fix
-- `docs/DEBUG_SESSION_LOGGING.md` - Session logging implementation
-- `docs/COMPRESSION_TRIGGER_FIX.md` - Compression trigger behavior explanation
-- `AUTO_UPGRADE_FEATURE.md` - Auto-upgrade mechanism details
+- `docs/FALLBACK_TESTING_GUIDE.md` - Model fallback chain testing
+- `docs/BEST_PRACTICES_AUDIT.md` - OMP extension compliance report
+- `docs/RTK_INTEGRATION.md` - RTK token optimization setup
+- `docs/CALIBRATION_DESIGN.md` - Calibration system design

@@ -113,43 +113,6 @@ describe("Config Field Preservation", () => {
 			}
 		});
 
-		it("preserves nested object fields (historyCompression)", () => {
-			const tmpDir = mkdtempSync(join(tmpdir(), "config-test-"));
-			try {
-				mkdirSync(join(tmpDir, ".omp"), { recursive: true });
-				
-				const config = {
-					profiles: FALLBACK_CONFIG.profiles,
-					historyCompression: {
-						enabled: true,
-						keepLastN: 8,
-						progressive: {
-							enabled: true,
-							contextThreshold: 0.7,
-							timeThreshold: 600,
-							maxCheckpointAge: 30,
-							maxCheckpointSize: 150000,
-						},
-						excludeModels: ["gpt-4", "claude-opus"],
-					},
-				};
-				writeFileSync(
-					join(tmpDir, ".omp", "model-router.json"),
-					JSON.stringify(config),
-				);
-
-				const loaded = loadRouterConfig(tmpDir);
-				
-				expect(loaded.config.historyCompression?.enabled).toBe(true);
-				expect(loaded.config.historyCompression?.keepLastN).toBe(8);
-				expect(loaded.config.historyCompression?.progressive?.enabled).toBe(true);
-				expect(loaded.config.historyCompression?.progressive?.maxCheckpointAge).toBe(30);
-				expect(loaded.config.historyCompression?.progressive?.maxCheckpointSize).toBe(150000);
-				expect(loaded.config.historyCompression?.excludeModels).toEqual(["gpt-4", "claude-opus"]);
-			} finally {
-				rmSync(tmpDir, { recursive: true, force: true });
-			}
-		});
 	});
 
 	describe("Future-proofing: new fields automatically flow through", () => {

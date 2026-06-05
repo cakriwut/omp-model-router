@@ -22,8 +22,6 @@ export const handleSet = (
 			"  debugVerbose <on|off>          Verbose debug (session JSONL logging)",
 			"  debugHistoryLimit <int>        Max routing decisions to keep (default: 12)",
 			"  defaultProfile <name>          Default profile name",
-			"  compression <on|off>           Enable/disable TOON compression",
-			"  compression.keepLastN <int>    Messages to keep uncompressed",
 			"",
 			"Profile keys (dot-path):",
 			"  <profile>.<tier>.model <ref>         Primary model",

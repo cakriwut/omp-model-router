@@ -86,7 +86,6 @@ const getDecisionFlags = (decision: RoutingDecision): string[] => {
 	if (decision.isContextTriggered) flags.push("ctx");
 	if (decision.isBudgetForced) flags.push("budget");
 	if (decision.isRuleMatched) flags.push("rule");
-	if (decision.compression) flags.push("toon");
 	return flags;
 };
 
@@ -128,7 +127,6 @@ export const buildStatusText = (
 	lastDecision: RoutingDecision | undefined,
 	lastNonRouterModel: string | undefined,
 	isStreaming: boolean,
-	compressionEnabled = false,
 ): string => {
 	const pinSuffix = activePin ? theme.fg("accent", ` ⬣${activePin}`) : "";
 
@@ -158,8 +156,7 @@ export const buildStatusText = (
 				theme,
 			) + pinSuffix + theme.fg("dim", "  routing…");
 		}
-		const toonWait = compressionEnabled ? theme.fg("dim", " ⟨toon⟩") : "";
-	return theme.fg("accent", profileText) + pinSuffix + toonWait + theme.fg("dim", "  waiting…");
+	return theme.fg("accent", profileText) + pinSuffix + theme.fg("dim", "  waiting…");
 	}
 
 	const thinking = getEffectiveThinking(
@@ -200,11 +197,9 @@ export const buildStatusText = (
 		);
 	}
 
-	const toonTag = compressionEnabled ? theme.fg("dim", " ⟨toon⟩") : "";
 	return (
 		theme.fg("accent", profileText) +
 		pinSuffix +
-		toonTag +
 		"  " +
 		theme.fg(thinkingColor, modelText) +
 		costText +
@@ -244,8 +239,7 @@ export const updateStatus = (
 
 		if (!lastDecision || !matchesProfile || !matchesPin) {
 			segments = [{ text: `⬡ ${selectedProfile}`, palette: PROFILE_PALETTE }];
-			const toonRouting = currentConfig.historyCompression?.enabled ? theme.fg("dim", " ⟨toon⟩") : "";
-			suffix = pinSuffix + toonRouting + theme.fg("dim", "  routing…");
+			suffix = pinSuffix + theme.fg("dim", "  routing…");
 		} else {
 			const thinking = getEffectiveThinking(thinkingByProfile, selectedProfile, lastDecision);
 			const thinkingColor = THINKING_COLOR[thinking] ?? "muted";
@@ -263,8 +257,7 @@ export const updateStatus = (
 				{ text: "  ", palette: PROFILE_PALETTE },
 				{ text: `${thinkingIcon} ${shortModel}`, palette: tierPalette },
 			];
-			const toonStreamTag = currentConfig.historyCompression?.enabled ? theme.fg("dim", " ⟨toon⟩") : "";
-			suffix = pinSuffix + toonStreamTag + costText + flagText;
+			suffix = pinSuffix + costText + flagText;
 		}
 
 		if (activeShimmerWidget) {
@@ -295,7 +288,6 @@ export const updateStatus = (
 		lastDecision,
 		lastNonRouterModel,
 		false,
-		currentConfig.historyCompression?.enabled ?? false,
 	);
 	ctx.ui.setStatus("router", text);
 

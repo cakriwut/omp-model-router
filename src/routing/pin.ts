@@ -136,6 +136,23 @@ export function clearScopedPin(scope: SessionScope): void {
 }
 
 /**
+ * Clear only system-set (rule / heuristic / classifier) pins.
+ * User-set pins (`source === "user"`) survive — they represent explicit user intent
+ * that should carry across conversation branches.
+ *
+ * Used on session_branch: the branch is a continuation of the same conversation,
+ * so user intent is preserved, but auto-detected phase pins are stale.
+ *
+ * @param scope  The active session scope (mutated in place).
+ */
+export function clearSystemPin(scope: SessionScope): void {
+	if (scope.scopedPin && scope.scopedPin.source !== "user") {
+		scope.scopedPin = undefined;
+		scope.lastDecision = undefined;
+	}
+}
+
+/**
  * Increment (or reset) the override-pressure counter on a system pin.
  *
  * Called each turn a system pin is active, with the tier the heuristic

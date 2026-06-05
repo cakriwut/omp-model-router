@@ -14,8 +14,6 @@ export {
 export { buildStatusText, updateStatus } from "./status";
 export {
 	renderUsageReport,
-	type CompressionDiagnostic,
-	type CompressionUsageInput,
 	type UsageReportInput,
 	type ModelRegistryLookup,
 	type CalibrationUsageInput,

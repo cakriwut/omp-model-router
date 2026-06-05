@@ -37,8 +37,7 @@ describe("sibling carry-forward", () => {
 		// Sub-agent session activates with parent
 		state.activateSession("child-1", "parent-1", "header");
 		state.accumulatedCost = 1.5;
-		state.scope.accumulatedOriginalTokens = 10000;
-		state.scope.accumulatedCacheReadTokens = 5000;
+		state.scope.tierCounter = { high: 2, medium: 5, low: 3 };
 		state.scope.tierCounter = { high: 2, medium: 5, low: 3 };
 
 		// OMP rotates sessionId (e.g. system-reminder) — same parent
@@ -46,8 +45,7 @@ describe("sibling carry-forward", () => {
 
 		// Cost should be carried forward, not reset
 		expect(state.accumulatedCost).toBe(1.5);
-		expect(state.scope.accumulatedOriginalTokens).toBe(10000);
-		expect(state.scope.accumulatedCacheReadTokens).toBe(5000);
+		expect(state.scope.tierCounter).toEqual({ high: 2, medium: 5, low: 3 });
 		expect(state.scope.tierCounter).toEqual({ high: 2, medium: 5, low: 3 });
 	});
 
@@ -88,24 +86,6 @@ describe("sibling carry-forward", () => {
 		expect(state.accumulatedCost).toBe(0);
 	});
 
-	test("carry-forward includes compression counters", () => {
-		const state = createState();
-
-		state.activateSession("child-1", "parent-1", "header");
-		state.scope.compressionRequestCount = 3;
-		state.scope.compressionTotalOriginalChars = 50000;
-		state.scope.compressionTotalCompressedChars = 25000;
-		state.scope.accumulatedCompressedTokens = 8000;
-		state.scope.accumulatedTokensSaved = 4000;
-
-		state.activateSession("child-2", "parent-1", "header");
-
-		expect(state.scope.compressionRequestCount).toBe(3);
-		expect(state.scope.compressionTotalOriginalChars).toBe(50000);
-		expect(state.scope.compressionTotalCompressedChars).toBe(25000);
-		expect(state.scope.accumulatedCompressedTokens).toBe(8000);
-		expect(state.scope.accumulatedTokensSaved).toBe(4000);
-	});
 
 	test("carry-forward includes modelCosts map", () => {
 		const state = createState();

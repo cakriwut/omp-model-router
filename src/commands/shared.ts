@@ -22,8 +22,6 @@ export const SET_KEYS = [
 	"contextThreshold",
 	"debug",
 	"defaultProfile",
-	"compression",
-	"compression.keepLastN",
 ] as const;
 
 export const resolveConfigValue = (
@@ -44,8 +42,6 @@ export const resolveConfigValue = (
 		case "contextThreshold":    return raw.largeContextThreshold;
 		case "debug":               return raw.debug;
 		case "defaultProfile":      return raw.defaultProfile;
-		case "compression":         return (raw.historyCompression as Record<string, unknown> | undefined)?.enabled;
-		case "compression.keepLastN": return (raw.historyCompression as Record<string, unknown> | undefined)?.keepLastN;
 		default:                    return undefined;
 	}
 };
@@ -103,19 +99,6 @@ export const applyConfigUpdate = (
 			const profiles = raw.profiles as Record<string, unknown> | undefined;
 			if (!profiles?.[value]) return `Unknown profile: "${value}"`;
 			raw.defaultProfile = value;
-			return null;
-		}
-		case "compression": {
-			if (value !== "on" && value !== "off") return 'compression must be "on" or "off"';
-			if (!raw.historyCompression) raw.historyCompression = {};
-			(raw.historyCompression as Record<string, unknown>).enabled = value === "on";
-			return null;
-		}
-		case "compression.keepLastN": {
-			const n = parseInt(value, 10);
-			if (isNaN(n) || n < 1) return "compression.keepLastN must be an integer >= 1";
-			if (!raw.historyCompression) raw.historyCompression = {};
-			(raw.historyCompression as Record<string, unknown>).keepLastN = n;
 			return null;
 		}
 		default:

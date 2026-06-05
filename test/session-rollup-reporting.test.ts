@@ -91,7 +91,7 @@ function makeState(): RouterState {
 			},
 		},
 		defaultProfile: "auto",
-		historyCompression: undefined,
+		// historyCompression removed
 	};
 	state.selectedProfile = "auto";
 	state.activateSession("test-session");
@@ -214,29 +214,6 @@ describe("handleUsage — data-source selection (Thread A)", () => {
 		expect(notified[0]).toContain("0.2500");
 	});
 
-	test("2.6 compression stats: from in-memory scope in primary path", async () => {
-		const state = makeState();
-		seedModelCost(state, {
-			model: "openai/gpt-4o", tier: "high",
-			invocations: 2, inputTokens: 500, outputTokens: 100,
-			cacheReadTokens: 0, cacheWriteTokens: 0, cost: 0.03,
-		});
-
-		// Enable compression in config so the stats section renders
-		state.currentConfig = {
-			...state.currentConfig,
-			historyCompression: { enabled: true, keepLastN: 4 },
-		};
-		// Simulate 3 compressions having occurred
-		state.compressionRequestCount = 3;
-		state.compressionTotalOriginalChars = 40000;
-		state.compressionTotalCompressedChars = 20000;
-
-		const { ctx, notified } = makeCtx();
-		await handleUsage(state)([], ctx);
-
-		// renderUsageReport renders "N requests compressed" when requestCount > 0
-		expect(notified[0]).toContain("3 requests compressed");
-	});
+	// Compression tests removed — historyCompression field deleted
 
 });

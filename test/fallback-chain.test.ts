@@ -42,7 +42,7 @@ describe("Fallback Chain — Config Structure", () => {
 				},
 			},
 		},
-		historyCompression: { enabled: false },
+		// No historyCompression or other removed fields
 	};
 
 	it("parses fallback arrays from config", () => {

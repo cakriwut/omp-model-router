@@ -1,8 +1,7 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { RouterState, ModelCostEntry } from "../state";
 import { parseCanonicalModelRef, ROUTER_TIERS } from "../config";
-import { resolveCompressionConfig } from "../context-compression";
-import { renderUsageReport, type CompressionDiagnostic } from "../ui";
+import { renderUsageReport } from "../ui";
 
 export const handleUsage = (
 	state: RouterState,
@@ -142,58 +141,6 @@ export const handleUsage = (
 	reportTotalCost   = sessionTotalCost;
 	}
 
-	// ── Resolve effective compression config + live diagnostic ─────────
-	const compressionCfg = resolveCompressionConfig(
-		state.currentConfig.historyCompression,
-		profile.historyCompression,
-	);
-
-	let diagnostic: CompressionDiagnostic | undefined;
-	if (compressionCfg?.enabled && state.compressionRequestCount === 0) {
-		// Resolve high-tier context window (same logic as provider.ts)
-		let contextWindow = 1_000_000;
-		try {
-			const { provider, modelId } = parseCanonicalModelRef(profile.high.model);
-			const m = ctx.modelRegistry.find(provider, modelId);
-			if (m?.contextWindow) contextWindow = m.contextWindow;
-		} catch {
-			/* ignore */
-		}
-
-		if (compressionCfg.progressive?.enabled) {
-			const ctxThreshold = compressionCfg.progressive.contextThreshold ?? 0.8;
-			const timeThresholdSeconds = compressionCfg.progressive.timeThreshold ?? 300;
-			// Approximate current context tokens from accumulated stats.
-			// On a fresh session with 0 compressions the input tokens are unknown
-			// here, so we report 0 — accurate enough as a "we are well under".
-			const ctxTokens = state.accumulatedOriginalTokens || 0;
-			const sinceLast = state.lastTurnTimestamp
-				? Math.floor((Date.now() - state.lastTurnTimestamp) / 1000)
-				: 0;
-			diagnostic = {
-				mode: "progressive",
-				contextTokens: ctxTokens,
-				contextThresholdTokens: Math.floor(ctxThreshold * contextWindow),
-				secondsSinceLastTurn: sinceLast,
-				timeThresholdSeconds,
-			};
-		} else if (compressionCfg.freezeAfter !== undefined) {
-			diagnostic = {
-				mode: "static",
-				currentTurn: state.debugHistory.length,
-				freezeAfter: compressionCfg.freezeAfter,
-			};
-		} else {
-			// Default mode: compresses when message count > keepLastN
-			diagnostic = {
-				mode: "default",
-				messageCount: state.debugHistory.length,
-				keepLastN: compressionCfg.keepLastN ?? 4,
-			};
-		}
-	}
-
-	// (tier derivation is inside the else branch above)
 
 	const report = renderUsageReport({
 		theme: ctx.ui.theme,
@@ -204,19 +151,8 @@ export const handleUsage = (
 		lastDecision: state.lastDecision,
 		accumulatedCost: reportTotalCost,
 		treeCost: state.totalCost,
-		accumulatedOriginalTokens: state.accumulatedOriginalTokens,
-		accumulatedCompressedTokens: state.accumulatedCompressedTokens,
-		accumulatedTokensSaved: state.accumulatedTokensSaved,
-		accumulatedCacheReadTokens: state.accumulatedCacheReadTokens,
 		maxSessionBudget: state.currentConfig.maxSessionBudget,
 		modelRegistry: ctx.modelRegistry,
-		compression: {
-			enabled: compressionCfg?.enabled ?? false,
-			requestCount: state.compressionRequestCount,
-			totalOriginalChars: state.compressionTotalOriginalChars,
-			totalCompressedChars: state.compressionTotalCompressedChars,
-			diagnostic,
-		},
 		calibration: state.calibration
 			? {
 					mode: state.currentConfig.calibration?.mode ?? "telemetry",

@@ -48,7 +48,6 @@ export const handleStatus = (
 		`Last non-router model: ${formatModelRef(state.lastNonRouterModel)}`,
 		`Debug: ${state.debugEnabled ? "on" : "off"}`,
 		`Debug history: ${state.debugHistory.length} decisions`,
-		`History compression: ${state.currentConfig.historyCompression?.enabled ? `on (keepLastN: ${state.currentConfig.historyCompression.keepLastN ?? 4})` : "off"}`,
 	];
 	if (state.lastDecision) {
 		lines.push(

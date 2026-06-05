@@ -139,18 +139,16 @@ export const registerCommands = (
 				case "set": {
 					const setPrefix = subArgs[0] ?? "";
 					if (!hasTrailingSpace || subArgs.length <= 1) {
-						const SET_KEY_LIST = [
-							"routerEnabled",
-							"phaseBias",
-							"budget",
-							"contextThreshold",
-							"debug",
-							"debugVerbose",
-							"debugHistoryLimit",
-							"defaultProfile",
-							"compression",
-							"compression.keepLastN",
-						];
+					const SET_KEY_LIST = [
+						"routerEnabled",
+						"phaseBias",
+						"budget",
+						"contextThreshold",
+						"debug",
+						"debugVerbose",
+						"debugHistoryLimit",
+						"defaultProfile",
+					];
 						const items = SET_KEY_LIST.filter((k) => k.startsWith(setPrefix)).map(
 							(k) => ({ value: `set ${k}`, label: k }),
 						);
@@ -161,8 +159,7 @@ export const registerCommands = (
 					if (
 						setKey === "routerEnabled" ||
 						setKey === "debug" ||
-						setKey === "debugVerbose" ||
-						setKey === "compression"
+						setKey === "debugVerbose"
 					) {
 						const items = ["on", "off"]
 							.filter((v) => v.startsWith(valPrefix))

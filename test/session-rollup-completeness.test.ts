@@ -48,40 +48,21 @@ function entry(overrides: Partial<ModelCostEntry> & { model: string; tier: strin
 
 describe("3.x finalizeChildSession rollup completeness", () => {
 	// 3.1 — All 8 numeric fields roll up (parent N + child M)
-	test("3.1: all 8 numeric fields sum from child into parent", () => {
+	// Updated: removed fields (accumulatedOriginalTokens, accumulatedCompressedTokens, accumulatedTokensSaved, accumulatedCacheReadTokens) no longer exist
+	// This test now verifies that cost rollup still works for remaining fields
+	test("3.1: accumulatedCost rolls up from child into parent", () => {
 		const { state, map } = makeState();
 		state.activateSession("parent-1", undefined, "none");
 		const parent = map.get("parent-1")!;
 		parent.accumulatedCost = 1;
-		parent.accumulatedOriginalTokens = 100;
-		parent.accumulatedCompressedTokens = 80;
-		parent.accumulatedTokensSaved = 20;
-		parent.accumulatedCacheReadTokens = 50;
-		parent.compressionRequestCount = 2;
-		parent.compressionTotalOriginalChars = 1000;
-		parent.compressionTotalCompressedChars = 800;
 
 		state.activateSession("child-1", "parent-1", "header");
 		const child = map.get("child-1")!;
 		child.accumulatedCost = 0.5;
-		child.accumulatedOriginalTokens = 40;
-		child.accumulatedCompressedTokens = 30;
-		child.accumulatedTokensSaved = 10;
-		child.accumulatedCacheReadTokens = 25;
-		child.compressionRequestCount = 1;
-		child.compressionTotalOriginalChars = 400;
-		child.compressionTotalCompressedChars = 320;
 
 		state.finalizeChildSession("child-1");
 
 		expect(parent.accumulatedCost).toBeCloseTo(1.5, 9);
-		expect(parent.accumulatedOriginalTokens).toBe(140);
-		expect(parent.accumulatedCompressedTokens).toBe(110);
-		expect(parent.accumulatedTokensSaved).toBe(30);
-		expect(parent.accumulatedCacheReadTokens).toBe(75);
-		expect(parent.compressionRequestCount).toBe(3);
-		expect(parent.compressionTotalOriginalChars).toBe(1400);
-		expect(parent.compressionTotalCompressedChars).toBe(1120);
 	});
 
 	// 3.2 — tierCounter element-wise sum
@@ -245,23 +226,19 @@ describe("3.x finalizeChildSession rollup completeness", () => {
 		const { state, map } = makeState();
 		state.activateSession("parent", undefined, "none");
 		const parent = map.get("parent")!;
-		parent.compressionRequestCount = 1;
 		parent.modelCosts.set("m-p", entry({ model: "m-p", tier: "high", invocations: 1 }));
 
 		state.activateSession("child", "parent", "header");
 		const child = map.get("child")!;
-		child.compressionRequestCount = 1;
 		child.modelCosts.set("m-c", entry({ model: "m-c", tier: "medium", invocations: 1 }));
 
 		state.activateSession("grandchild", "child", "header");
 		const grandchild = map.get("grandchild")!;
-		grandchild.compressionRequestCount = 1;
 		grandchild.modelCosts.set("m-gc", entry({ model: "m-gc", tier: "low", invocations: 1 }));
 
 		state.finalizeChildSession("grandchild");
 		state.finalizeChildSession("child");
 
-		expect(parent.compressionRequestCount).toBe(3);
 		expect(parent.modelCosts.has("m-p")).toBe(true);
 		expect(parent.modelCosts.has("m-c")).toBe(true);
 		expect(parent.modelCosts.has("m-gc")).toBe(true);
@@ -271,13 +248,6 @@ describe("3.x finalizeChildSession rollup completeness", () => {
 	test("3.10: regression guard — every SessionScope field is merged or skipped", () => {
 		const MERGED_FIELDS: Record<string, true> = {
 			accumulatedCost: true,
-			accumulatedOriginalTokens: true,
-			accumulatedCompressedTokens: true,
-			accumulatedTokensSaved: true,
-			accumulatedCacheReadTokens: true,
-			compressionRequestCount: true,
-			compressionTotalOriginalChars: true,
-			compressionTotalCompressedChars: true,
 			tierCounter: true,
 			modelCosts: true,
 		};
@@ -289,7 +259,6 @@ describe("3.x finalizeChildSession rollup completeness", () => {
 			isStreaming: true,
 			lastTurnTimestamp: true,
 			currentCheckpoint: true,
-			frozenCompressionBlock: true,
 			scopedPin: true,
 			lastClassifierKey: true,
 			lastClassifierVerdict: true,

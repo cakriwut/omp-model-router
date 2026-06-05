@@ -30,15 +30,6 @@ export const FALLBACK_CONFIG: RouterConfig = {
 			low: { model: "anthropic/claude-haiku-4-5", thinking: "low" as ThinkingLevel },
 		},
 	},
-	historyCompression: {
-		enabled: true,
-		keepLastN: 4,
-		progressive: {
-			enabled: true,
-			contextThreshold: 0.8,
-			timeThreshold: 300,
-		},
-	},
 	calibration: {
 		enabled: false,
 		mode: "telemetry",
@@ -123,12 +114,11 @@ export const mergeConfig = (
 				...(existing?.low ?? FALLBACK_CONFIG.profiles.auto.low),
 				...(nextProfile.low ?? {}),
 			},
-			historyCompression: nextProfile.historyCompression ?? existing?.historyCompression,
 		};
 	}
 	// IMPORTANT: this uses spread so new optional top-level fields in RouterConfig
 	// flow through automatically. If you add a field that needs deep-merge (like
-	// profiles or historyCompression), add it explicitly AFTER the spread.
+	// profiles), add it explicitly AFTER the spread.
 	// See AGENTS.md "Pitfalls > Adding a new top-level field to RouterConfig".
 	return {
 		...base,
@@ -314,7 +304,6 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 				"low",
 				warnings,
 			),
-			historyCompression: profile?.historyCompression,
 		};
 	}
 
@@ -435,8 +424,6 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 		routerEnabled: typeof raw.routerEnabled === "boolean" ? raw.routerEnabled : undefined,
 		// String fields with validation
 		classifierModel,
-		// historyCompression: pass through raw (already validated structurally)
-		historyCompression: raw.historyCompression,
 	};
 
 	return {
