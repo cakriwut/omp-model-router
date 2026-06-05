@@ -15,6 +15,7 @@ import { handleReload } from "./reload";
 import { handleUpdate } from "./update";
 import { handleHelp } from "./help";
 import { handleEmbargo } from "./embargo";
+import { handleLog } from "./log";
 
 export { resolveConfigValue, applyConfigUpdate, SET_KEYS } from "./shared";
 export type { Actions } from "./shared";
@@ -52,6 +53,7 @@ export const registerCommands = (
 	const update = handleUpdate(state);
 	const embargo = handleEmbargo(state);
 	const help = handleHelp;
+	const log = handleLog(state);
 
 	const SUBCOMMANDS = [
 		"status",
@@ -68,6 +70,7 @@ export const registerCommands = (
 		"help",
 		"update",
 		"embargo",
+		"log",
 	];
 
 	pi.registerCommand("router", {
@@ -220,6 +223,9 @@ export const registerCommands = (
 				case "usage":
 					await usage(subArgs, ctx);
 					break;
+			case "log":
+				await log(subArgs, ctx);
+				break;
 				case "calibrate": {
 					// Dynamic import: calibrate CLI is optional and heavyweight — only load when used
 					const { runCalibrate } = await import("../cli/calibrate/calibrate");
