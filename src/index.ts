@@ -325,6 +325,10 @@ const routerExtension = (pi: ExtensionAPI) => {
 			state.activateSession(sessionId, resolvedParent, source);
 		}
 
+		// Store ctx so provider.ts can resolve getArtifactsDir() for prompt logging.
+		// Cleared in turn_end via state.clearSessionContext(endSessionId).
+		state.setSessionContext(sessionId, ctx);
+
 		// Increment userMessagesSeen when a new user-role message arrives.
 		// Checked via session entry id (survives message count can decrease).
 		try {
