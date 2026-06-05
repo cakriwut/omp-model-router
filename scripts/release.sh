@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Release omp-model-router: test gate → version bump → tag → publish
+# Release omp-model-router: test gate → version bump → tag → push
+# npm publish + GitHub release happen in CI (release.yml)
 set -euo pipefail
 
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,66 +42,17 @@ git tag "v$NEW_VERSION"
 echo "✓ Tagged v$NEW_VERSION"
 echo
 
-# 4. Publish to npm (using riwut/cakriwut token from Doppler)
-echo "▸ Publishing to npm as cakriwut..."
-if command -v doppler &>/dev/null; then
-  # Try riwut token first (Automation token, no OTP), then cakriwut token
-  PUBLISH_TOKEN=$(doppler secrets get NPM_TOKEN_RIWUT --project dev-console-personal --config dev --plain 2>/dev/null || \
-                  doppler secrets get NPM_TOKEN_CAKRIWUT --project dev-console-personal --config dev --plain 2>/dev/null || \
-                  echo "")
-  if [ -n "$PUBLISH_TOKEN" ]; then
-    echo "  Using npm token from Doppler"
-    if ! NPM_TOKEN="$PUBLISH_TOKEN" npm publish; then
-      echo "❌ npm publish failed"
-      echo "To retry manually:"
-      echo "  NPM_TOKEN=\$(doppler secrets get NPM_TOKEN_RIWUT --project dev-console-personal --config dev --plain) npm publish"
-      echo "  git push && git push --tags"
-      exit 1
-    fi
-  else
-    echo "⚠️  No npm token found in Doppler, using current NPM_TOKEN"
-    if ! npm publish; then
-      echo "❌ npm publish failed"
-      echo "To retry manually:"
-      echo "  git push && git push --tags && npm publish"
-      exit 1
-    fi
-  fi
-else
-  echo "⚠️  Doppler not found, using current NPM_TOKEN from environment"
-  if ! npm publish; then
-    echo "❌ npm publish failed"
-    echo "To retry manually:"
-      echo "  git push && git push --tags && npm publish"
-    exit 1
-  fi
-fi
-echo "✓ Published @cakriwut/omp-model-router@$NEW_VERSION to npm"
-echo
-
-# 5. Push to git
+# 4. Push to git (triggers release.yml which handles npm publish + GitHub release)
 echo "▸ Pushing to git..."
 git push && git push --tags
 echo "✓ Pushed to remote"
 echo
 
-# 6. Create GitHub release
-echo "▸ Creating GitHub release..."
-if command -v gh &>/dev/null; then
-  gh release create "v$NEW_VERSION" \
-    --title "v$NEW_VERSION" \
-    --generate-notes
-  echo "✓ Created GitHub release v$NEW_VERSION"
-else
-  echo "⚠️  'gh' not found, skipping GitHub release creation"
-  echo "   Create manually at: https://github.com/cakriwut/omp-model-router/releases/new?tag=v$NEW_VERSION"
-fi
+echo "🎉 Release v$NEW_VERSION initiated!"
 echo
-
-echo "🎉 Release v$NEW_VERSION complete!"
+echo "CI will:"
+echo "  • Run tests"
+echo "  • Publish @cakriwut/omp-model-router@$NEW_VERSION to npm"
+echo "  • Create GitHub release with auto-generated notes"
 echo
-echo "Users can now install with:"
-echo "  ~/.omp/agent/extensions/model-router/package.json:"
-echo "    \"@cakriwut/omp-model-router\": \"^$NEW_VERSION\""
-echo
-echo "Then: cd ~/.omp/agent/extensions/model-router && npm install"
+echo "Monitor: https://github.com/cakriwut/omp-model-router/actions"
