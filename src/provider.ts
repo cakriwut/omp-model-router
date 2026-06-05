@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
 	streamSimple,
 	type Api,
@@ -21,7 +22,6 @@ import {
 	hasImageAttachment,
 } from "./routing";
 import type { RouterState } from "./state";
-import { spawnClassifierForTurn } from "./calibration/hooks";
 import { loadPitfalls } from "./calibration/pitfalls";
 import {
 	StatusAwareError,
@@ -476,33 +476,41 @@ export const registerRouterProvider = (
 						? loadPitfalls(state.currentCwd, state.currentConfig.pitfallsPath)
 						: undefined;
 
-					const { scopedPin, floor } = resolveEffectivePin(sessionScope, state.currentConfig);
-					const decision = await resolveRouting(
-						{
-							context,
-							previousDecision: sessionScope.lastDecision,
-							pinnedTier: scopedPin,
-							floor,
-							isBudgetExceeded,
-							modelRegistry: state.currentModelRegistry,
-							lastExtensionContext: sessionCtx,
-							calibration: state.calibration,
-							scope: sessionScope,
-							state: state,
-						},
-						{
-							profileName: model.id,
-							profile,
-							thinkingOverrides: state.thinkingByProfile[model.id],
-							phaseBias: state.currentConfig.phaseBias ?? 0.5,
-							rules: state.currentConfig.rules,
-							classifierModel: effectiveClassifierModel,
-							debug: state.currentConfig.debug,
-							calibrationConfig: state.currentConfig.calibration,
-							pinConfig: { pinTimeout: state.currentConfig.pinTimeout, defaultPin: state.currentConfig.defaultPin, pinPressureThreshold: state.currentConfig.pinPressureThreshold },
-							pitfalls: pitfalls || undefined,
-						},
-					);
+				const { scopedPin, floor } = resolveEffectivePin(sessionScope, state.currentConfig);
+				const traceEnabled = !!state.currentConfig.calibration?.traceEnabled;
+				const artifactsDir = (traceEnabled && sessionCtx)
+					? (sessionCtx.sessionManager as any).getArtifactsDir?.() ?? null
+					: null;
+				const promptLogPath: string | undefined = typeof artifactsDir === "string" && artifactsDir
+					? join(artifactsDir, "classifierPrompt.jsonl")
+					: undefined;
+				const decision = await resolveRouting(
+					{
+						context,
+						previousDecision: sessionScope.lastDecision,
+						pinnedTier: scopedPin,
+						floor,
+						isBudgetExceeded,
+						modelRegistry: state.currentModelRegistry,
+						lastExtensionContext: sessionCtx,
+						calibration: state.calibration,
+						scope: sessionScope,
+						state: state,
+					},
+					{
+						profileName: model.id,
+						profile,
+						thinkingOverrides: state.thinkingByProfile[model.id],
+						phaseBias: state.currentConfig.phaseBias ?? 0.5,
+						rules: state.currentConfig.rules,
+						classifierModel: effectiveClassifierModel,
+						debug: state.currentConfig.debug,
+						calibrationConfig: state.currentConfig.calibration,
+						pinConfig: { pinTimeout: state.currentConfig.pinTimeout, defaultPin: state.currentConfig.defaultPin, pinPressureThreshold: state.currentConfig.pinPressureThreshold },
+						pitfalls: pitfalls || undefined,
+						promptLogPath,
+					},
+				);
 
 					// (auto-upgrade is now handled via setScopedPin in index.ts tool_execution_end)
 
@@ -512,8 +520,7 @@ export const registerRouterProvider = (
 					// Track routing decision (tier counter)
 					sessionScope.tierCounter[decision.tier]++;
 
-					// Spawn async classifier for calibration telemetry (fire-and-forget)
-					spawnClassifierForTurn(state, state.currentConfig, decision.tier, context, sessionScope, decision.toolBucket);
+					// Classifier now runs synchronously in resolveRouting (sync-classifier-only)
 
 					if (sessionCtx) {
 						actions.updateStatus(sessionCtx);

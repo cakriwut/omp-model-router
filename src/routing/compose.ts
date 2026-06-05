@@ -21,6 +21,8 @@ import { updateCalibrationMatrix } from "../calibration/session";
 import { setScopedPin, incrementPinPressure, DEFAULT_PIN_PRESSURE_THRESHOLD } from "./pin";
 import { hasImageAttachment } from "./text";
 import { decideRouting, buildRoutingDecision, phaseForTier } from "./heuristic";
+import { appendPromptRecord } from "../calibration/trace.js";
+import { buildClassifierPrompt } from "../calibration/classifier-utils.js";
 
 // ─── Model-capacity-aware tier promotion ─────────────────────────────────────
 
@@ -131,6 +133,8 @@ export interface RoutingConfig {
 	 * Loaded by the caller (provider.ts) via loadPitfalls() so FS concerns stay out of compose.
 	 */
 	pitfalls?: string;
+	/** Path to classifierPrompt.jsonl for logging full prompts+verdicts. Only written on fresh sync calls. */
+	promptLogPath?: string;
 }
 
 /**
@@ -269,7 +273,6 @@ export const resolveRouting = async (
 	//    that pass state but not scope.
 	const resolvedScope = input.scope ?? input.state?.scope;
 	const isSubAgent = (resolvedScope?.parentSessionId) !== undefined;
-	let syncClassifierRan = false;
 	let bucket: string | undefined;
 	let verdict: { tier: RouterTier; reasoning: string } | undefined;
 	if (
@@ -302,8 +305,14 @@ export const resolveRouting = async (
 		if (cacheHit && scope) {
 			verdict = scope.lastClassifierVerdict;
 			scope.classifierTurnsSinceRun += 1;
-			syncClassifierRan = true; // suppress redundant async spawn in adaptive mode
 		} else {
+			const classifierSpawnTime = Date.now();
+			const builtPrompt = buildClassifierPrompt(
+				input.context,
+				decision.phase,
+				toolCounts,
+				config.pitfalls,
+			);
 			const { runClassifier } = await import("./index.js");
 			verdict = await runClassifier(
 				config.classifierModel,
@@ -314,11 +323,28 @@ export const resolveRouting = async (
 				toolCounts,
 				config.pitfalls,
 			);
-			syncClassifierRan = true;
 			if (verdict && scope) {
 				scope.lastClassifierKey = sig;
 				scope.lastClassifierVerdict = verdict;
 				scope.classifierTurnsSinceRun = 0;
+			}
+			// Write prompt log on fresh call (not cache hit)
+			if (config.promptLogPath) {
+				const refForModel = Array.isArray(config.classifierModel)
+					? config.classifierModel[0]
+					: config.classifierModel;
+				appendPromptRecord(config.promptLogPath, {
+					timestamp:    new Date().toISOString(),
+					turnIndex:    input.calibration?.turnsProcessed ?? 0,
+					userMsgIndex: resolvedScope?.userMessagesSeen ?? 0,
+					bucket,
+					model:        refForModel ?? "unknown",
+					heuristicTier: decision.tier,
+					verdict:      verdict ?? null,
+					error:        verdict ? undefined : "no-verdict",
+					latencyMs:    Date.now() - classifierSpawnTime,
+					prompt:       builtPrompt,
+				});
 			}
 		}
 
@@ -357,7 +383,6 @@ export const resolveRouting = async (
 		}
 	}
 	
-	decision.syncClassifierRan = syncClassifierRan;
 
 	// 4. Image attachment upgrade — find lowest tier that supports images
 	if (hasImageAttachment(input.context)) {

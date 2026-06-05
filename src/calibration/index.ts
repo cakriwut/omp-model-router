@@ -1,4 +1,4 @@
-// Calibration system — async LLM classifier with confusion-matrix learning
+// Calibration system — sync LLM classifier with confusion-matrix learning
 
 export type {
 	SessionCalibration,
@@ -6,7 +6,6 @@ export type {
 	TraceRecord,
 	CalibrationConfig,
 	TierIndex,
-	ClassifierPollResult,
 } from "./types";
 
 export {
@@ -26,12 +25,6 @@ export {
 	resetGlobalCalibration,
 	cancelPendingSave,
 } from "./global";
-
-export {
-	spawnClassifierAgent,
-	pollClassifierResult,
-	abandonClassifier,
-} from "./agent";
 
 export {
 	openTraceFile,

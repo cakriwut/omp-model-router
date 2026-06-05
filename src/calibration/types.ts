@@ -1,4 +1,4 @@
-import type { RouterTier, RouterPhase } from "../types";
+import type { RouterTier } from "../types";
 
 /**
  * Session-scoped calibration state
@@ -23,35 +23,6 @@ export interface SessionCalibration {
 
 	/** Count of user turns (not assistant) */
 	turnsProcessed: number;
-
-	/** Pending background classifier agent ID (if any) */
-	pendingAgentId?: string;
-
-	/** Heuristic tier for pending agent (to compare when result arrives) */
-	pendingHeuristicTier?: RouterTier;
-
-	/** Heuristic phase + reasoning captured at spawn time (for trace) */
-	pendingHeuristicPhase?: RouterPhase;
-	pendingHeuristicReasoning?: string;
-	pendingRuleMatched?: boolean;
-
-	/** Captured user prompt at spawn time (truncated 500 chars) */
-	pendingPrompt?: string;
-	/** Count of toolResult messages in context at spawn time */
-	pendingToolResultCount?: number;
-	pendingTurnIndex?: number;
-
-	/** Spawn timestamp for latency measurement */
-	pendingSpawnTime?: number;
-
-	/** Full classifier prompt string built at spawn time (for prompt log) */
-	pendingClassifierPrompt?: string;
-	/** Tool-mix bucket at spawn time (for prompt log) */
-	pendingBucket?: string;
-	/** User message index at spawn time (for prompt log) */
-	pendingUserMsgIndex?: number;
-	/** Path to classifierPrompt.jsonl in session artifact dir (if traceEnabled) */
-	promptLogPath?: string;
 
 	/** Path to trace JSONL file (if traceEnabled) */
 	traceFilePath?: string;
@@ -165,23 +136,3 @@ export interface CalibrationConfig {
  * Helper type for tier indexing
  */
 export type TierIndex = 0 | 1 | 2;
-
-/**
- * Result of polling a background classifier agent
- */
-export interface ClassifierPollResult {
-	/** Whether the agent has finished */
-	ready: boolean;
-
-	/** LLM verdict (if ready) */
-	verdict?: {
-		tier: RouterTier;
-		reasoning: string;
-	};
-
-	/** Latency in ms (if ready) */
-	latencyMs?: number;
-
-	/** Error message (if failed) */
-	error?: string;
-}

@@ -291,8 +291,7 @@ describe("Classifier prompt cache (Phase 1)", () => {
 
 		const decision = await resolveRouting(input, baseRoutingConfig);
 
-		// On HIT, syncClassifierRan is true — suppresses redundant async spawn in adaptive mode
-		expect((decision as any).syncClassifierRan).toBe(true);
+		// syncClassifierRan field removed (sync-classifier-only — no async path to suppress)
 		// runClassifier was NOT called — it was a cache hit
 		expect(runClassifierCallCount).toBe(0);
 	});

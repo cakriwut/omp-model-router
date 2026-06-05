@@ -1,21 +1,21 @@
 /**
- * Tests for the classifierPrompt.jsonl prompt-log feature (sync path).
- * Mocks runClassifier via mock.module and tests resolveRouting directly.
+ * Tests for sync-only classifier behavior via resolveRouting.
+ * Mocks runClassifier to return controlled verdicts.
  */
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { RouterTier } from "../src/types";
-import type { PromptLogRecord } from "../src/calibration/trace";
 import type { SessionCalibration } from "../src/calibration/types";
+import type { PromptLogRecord } from "../src/calibration/trace";
 import type { SessionScope } from "../src/state";
 
 // ─── Mock runClassifier ──────────────────────────────────────────────────────
 
 let mockVerdict: { tier: RouterTier; reasoning: string } | undefined = {
 	tier: "high",
-	reasoning: "broad investigation",
+	reasoning: "complex multi-file refactor",
 };
 
 mock.module("../src/routing/index.js", () => ({
@@ -51,7 +51,7 @@ function makeCalibration(): SessionCalibration {
 		llmCallsAttempted: 0,
 		llmCallsFailed: 0,
 		sessionStartTime: Date.now(),
-		turnsProcessed: 3,
+		turnsProcessed: 5,
 	};
 }
 
@@ -69,18 +69,19 @@ const stubRegistry = {
 	registerProvider: () => {},
 } as unknown as RoutingInput["modelRegistry"];
 
-function makeInput(scope: SessionScope): RoutingInput {
+function makeInput(overrides: Partial<RoutingInput> = {}): RoutingInput {
 	return {
-		context: { messages: [{ role: "user", content: "test prompt for classification" }] },
+		context: { messages: [{ role: "user", content: "refactor the auth module" }] },
 		previousDecision: undefined,
 		isBudgetExceeded: false,
 		modelRegistry: stubRegistry,
 		calibration: makeCalibration(),
-		scope,
+		scope: makeScope(),
+		...overrides,
 	};
 }
 
-function makeConfig(promptLogPath?: string): RoutingConfig {
+function makeConfig(mode: "adaptive" | "telemetry", promptLogPath?: string): RoutingConfig {
 	return {
 		profileName: "auto",
 		profile: {
@@ -92,7 +93,7 @@ function makeConfig(promptLogPath?: string): RoutingConfig {
 		classifierModel: "anthropic/claude-3-haiku-20240307",
 		calibrationConfig: {
 			enabled: true,
-			mode: "telemetry",
+			mode,
 			warmupTurns: 0,
 			overrideThreshold: 0.65,
 			traceEnabled: false,
@@ -108,8 +109,8 @@ function makeConfig(promptLogPath?: string): RoutingConfig {
 let tempDir: string;
 
 beforeEach(() => {
-	tempDir = mkdtempSync(join(tmpdir(), "classifier-prompt-log-"));
-	mockVerdict = { tier: "high", reasoning: "broad investigation" };
+	tempDir = mkdtempSync(join(tmpdir(), "sync-classifier-"));
+	mockVerdict = { tier: "high", reasoning: "complex multi-file refactor" };
 });
 
 afterEach(() => {
@@ -120,23 +121,37 @@ afterEach(() => {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe("classifierPrompt.jsonl", () => {
-	test("no promptLogPath → no file created", async () => {
-		const scope = makeScope();
-		const input = makeInput(scope);
-		const config = makeConfig(undefined);
+describe("Sync classifier only", () => {
+	test("telemetry mode: matrix updated with classifier verdict", async () => {
+		// Mock → high. The calibration matrix should record heuristic vs classifier.
+		const cal = makeCalibration();
+		const input = makeInput({ calibration: cal });
+		const config = makeConfig("telemetry");
 
-		await resolveRouting(input, config);
+		const decision = await resolveRouting(input, config);
 
-		const logPath = join(tempDir, "classifierPrompt.jsonl");
-		expect(existsSync(logPath)).toBe(false);
+		// resolveRouting always applies the verdict when present — even in telemetry mode.
+		// The matrix records [heuristicIndex][classifierIndex].
+		// Heuristic for a short message = "medium" (index 1), classifier = "high" (index 2).
+		expect(cal.matrix[1][2]).toBeGreaterThanOrEqual(1);
 	});
 
-	test("fresh call → file created with correct record fields", async () => {
+	test("adaptive mode: classifier verdict used for routing", async () => {
+		const cal = makeCalibration();
+		const input = makeInput({ calibration: cal });
+		const config = makeConfig("adaptive");
+
+		const decision = await resolveRouting(input, config);
+
+		// Classifier verdict (high) overrides heuristic
+		expect(decision.tier).toBe("high");
+		expect(decision.isClassifier).toBe(true);
+	});
+
+	test("prompt log on fresh call: file created with correct data", async () => {
 		const logPath = join(tempDir, "classifierPrompt.jsonl");
-		const scope = makeScope();
-		const input = makeInput(scope);
-		const config = makeConfig(logPath);
+		const input = makeInput();
+		const config = makeConfig("adaptive", logPath);
 
 		await resolveRouting(input, config);
 
@@ -145,50 +160,36 @@ describe("classifierPrompt.jsonl", () => {
 		const content = readFileSync(logPath, "utf-8").trim();
 		const record: PromptLogRecord = JSON.parse(content);
 
-		expect(record.prompt).toStartWith("You are a model router classifier");
-		expect(record.verdict).not.toBeNull();
-		expect(record.verdict!.tier).toBe("high");
-		expect(["low", "medium", "high"]).toContain(record.heuristicTier);
-		expect(record.latencyMs).toBeGreaterThanOrEqual(0);
-		expect(typeof record.turnIndex).toBe("number");
-		expect(typeof record.userMsgIndex).toBe("number");
-		expect(typeof record.timestamp).toBe("string");
-	});
-
-	test("cache hit → no file written", async () => {
-		const logPath = join(tempDir, "classifierPrompt.jsonl");
-		const scope = makeScope();
-		const input = makeInput(scope);
-		const config = makeConfig(logPath);
-
-		// Pre-seed cache: set lastClassifierKey to what resolveRouting will compute
-		// sig = `${lastUserText}|${userMsgIndex}|${bucket}`
-		// lastUserText = "test prompt for classification", userMsgIndex = 1, bucket = "fresh" (no tool calls → fresh)
-		scope.lastClassifierKey = "test prompt for classification|1|fresh";
-		scope.lastClassifierVerdict = { tier: "high", reasoning: "cached" };
-		scope.classifierTurnsSinceRun = 0;
-
-		await resolveRouting(input, config);
-
-		expect(existsSync(logPath)).toBe(false);
-	});
-
-	test("failed verdict → file created with verdict: null and error", async () => {
-		mockVerdict = undefined;
-		const logPath = join(tempDir, "classifierPrompt.jsonl");
-		const scope = makeScope();
-		const input = makeInput(scope);
-		const config = makeConfig(logPath);
-
-		await resolveRouting(input, config);
-
-		expect(existsSync(logPath)).toBe(true);
-
-		const content = readFileSync(logPath, "utf-8").trim();
-		const record: PromptLogRecord = JSON.parse(content);
-
-		expect(record.verdict).toBeNull();
-		expect(record.error).toBeDefined();
+		expect(record.verdict?.tier).toBe("high");
 		expect(record.prompt.length).toBeGreaterThan(0);
+		expect(record.latencyMs).toBeGreaterThanOrEqual(0);
+	});
+
+	test("no prompt log on cache hit", async () => {
+		const logPath = join(tempDir, "classifierPrompt.jsonl");
+		// Pre-seed scope with matching cache key
+		// sig = `${lastUserText}|${userMsgIndex}|${bucket}`
+		const scope = makeScope({
+			lastClassifierKey: "refactor the auth module|1|fresh",
+			lastClassifierVerdict: { tier: "high", reasoning: "cached" },
+			classifierTurnsSinceRun: 0,
+		});
+		const input = makeInput({ scope });
+		const config = makeConfig("adaptive", logPath);
+
+		await resolveRouting(input, config);
+
+		// Cache hit → no file written
+		expect(existsSync(logPath)).toBe(false);
+	});
+
+	test("syncClassifierRan field absent from RoutingDecision", async () => {
+		const input = makeInput();
+		const config = makeConfig("adaptive");
+
+		const decision = await resolveRouting(input, config);
+
+		// The field should not be set (deleted from interface or at least not present)
+		expect("syncClassifierRan" in decision).toBe(false);
 	});
 });

@@ -56,15 +56,15 @@ describe("Classifier Badge Logging", () => {
 		expect(resultBadge).toBe("⚡ classifier → nova-micro (sync·adaptive) → high");
 	});
 
-	test("formats async telemetry badge correctly", () => {
+	test("formats sync telemetry badge correctly", () => {
 		const shortName = "nova-micro";
-		const spawnBadge = `⚡ classifier → ${shortName} (async·telemetry)`;
-		const agreeBadge = `⚡ classifier → ${shortName} (async·telemetry) → medium ✓`;
-		const disagreeBadge = `⚡ classifier → ${shortName} (async·telemetry) → low ✗`;
+		const spawnBadge = `⚡ classifier → ${shortName} (sync·telemetry)`;
+		const agreeBadge = `⚡ classifier → ${shortName} (sync·telemetry) → medium ✓`;
+		const disagreeBadge = `⚡ classifier → ${shortName} (sync·telemetry) → low ✗`;
 
-		expect(spawnBadge).toBe("⚡ classifier → nova-micro (async·telemetry)");
-		expect(agreeBadge).toBe("⚡ classifier → nova-micro (async·telemetry) → medium ✓");
-		expect(disagreeBadge).toBe("⚡ classifier → nova-micro (async·telemetry) → low ✗");
+		expect(spawnBadge).toBe("⚡ classifier → nova-micro (sync·telemetry)");
+		expect(agreeBadge).toBe("⚡ classifier → nova-micro (sync·telemetry) → medium ✓");
+		expect(disagreeBadge).toBe("⚡ classifier → nova-micro (sync·telemetry) → low ✗");
 	});
 
 	test("badge format matches router badge style", () => {
@@ -84,8 +84,8 @@ describe("Classifier Badge Logging", () => {
 		console.log("=== Classifier Badge Examples ===");
 		console.log("⚡ classifier → nova-micro (sync·adaptive)");
 		console.log("⚡ classifier → nova-micro (sync·adaptive) → high");
-		console.log("⚡ classifier → haiku (async·telemetry) → medium ✓");
-		console.log("⚡ classifier → haiku (async·telemetry) → low ✗");
+		console.log("⚡ classifier → haiku (sync·telemetry) → medium ✓");
+		console.log("⚡ classifier → haiku (sync·telemetry) → low ✗");
 		
 		expect(logs.length).toBe(5); // title + 4 examples
 		expect(logs[1]).toContain("⚡ classifier");
