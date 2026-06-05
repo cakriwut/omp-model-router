@@ -214,7 +214,12 @@ export interface RouterPersistedState {
 	thinkingByProfile?: RouterThinkingByProfile;
 	debugEnabled?: boolean;
 	widgetEnabled?: boolean;
+	/** Full decision list — present in router-state.json (disk). Absent from session JSONL entries
+	 *  (replaced by debugHistoryCount) to keep session files lean. */
 	debugHistory?: RoutingDecision[];
+	/** Count of decisions written to the paired .debug.jsonl file. Present only in session JSONL
+	 *  entries emitted when debugVerbose=true; never in router-state.json. */
+	debugHistoryCount?: number;
 	lastPhase?: RouterPhase;
 	lastDecision?: RoutingDecision;
 	lastNonRouterModel?: string;

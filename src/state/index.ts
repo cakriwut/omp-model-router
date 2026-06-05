@@ -15,7 +15,7 @@ import type {
 } from "../types";
 import { FALLBACK_CONFIG, resolveProfileName } from "../config";
 import { MAX_DEBUG_HISTORY } from "../constants";
-import { persist, restoreFromSession, buildPersistedState } from "./persist";
+import { persist, restoreFromSession, buildPersistedState, appendDebugEntry } from "./persist";
 
 // ─── Session-scoped cost state ──────────────────────────────────────────────
 
@@ -511,6 +511,7 @@ export class RouterState {
 		const limit = this.currentConfig.debugHistoryLimit ?? MAX_DEBUG_HISTORY;
 		if (this.debugHistory.length >= limit) this.debugHistory.shift();
 		this.debugHistory.push(decision);
+		appendDebugEntry(this, decision);
 	}
 
 	getThinkingOverride(

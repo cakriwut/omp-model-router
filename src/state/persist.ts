@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type {
 	RouterPersistedState,
 	CustomSessionEntry,
+	RoutingDecision,
 } from "../types";
 import { resolveProfileName } from "../config";
 import type { RouterState } from "./index";
@@ -51,6 +52,48 @@ const savePersistentState = (state: RouterPersistedState): void => {
 	}
 };
 
+// ─── Debug file helpers ────────────────────────────────────────────────────
+
+/**
+ * Derive the `.debug.jsonl` path from the current session file path.
+ * Returns `undefined` when sessions are disabled (no session file).
+ */
+const debugFilePath = (state: RouterState): string | undefined => {
+	const sessionFile = state.lastExtensionContext?.sessionManager.sessionFile;
+	if (!sessionFile) return undefined;
+	// Replace trailing .jsonl with .debug.jsonl; handles any extension gracefully.
+	return sessionFile.endsWith(".jsonl")
+		? sessionFile.slice(0, -".jsonl".length) + ".debug.jsonl"
+		: sessionFile + ".debug.jsonl";
+};
+
+/**
+ * Append a single routing decision to the session-paired `.debug.jsonl` file.
+ * Each line is a self-contained JSON object:
+ *   { "turn": <userMessagesSeen>, "ts": <timestamp>, ...RoutingDecision }
+ *
+ * Called from `recordDecision()` at write-time so the file is always current
+ * regardless of whether `debugVerbose` is set. The main session JSONL never
+ * carries `debugHistory` data — only a count reference.
+ */
+export const appendDebugEntry = (
+	state: RouterState,
+	decision: RoutingDecision,
+): void => {
+	const file = debugFilePath(state);
+	if (!file) return;
+	try {
+		const dir = dirname(file);
+		if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+		appendFileSync(
+			file,
+			JSON.stringify({ turn: state.userMessagesSeen, ...decision }) + "\n",
+		);
+	} catch {
+		// Never surface debug write errors to the user.
+	}
+};
+
 // ─── Persistence logic ─────────────────────────────────────────────────────
 
 /** Minimum interval between session entry writes (ms) */
@@ -92,14 +135,21 @@ const persistNow = (state: RouterState): void => {
 	// Save to persistent file (survives session restart)
 	savePersistentState(persisted);
 
-	// Also save to session for intra-session restoration
-	try {
-		state.pi.appendEntry("router-state", persisted);
-	} catch {
-		// Runtime not yet initialized (e.g. memory startup fires before
-		// extensionRunner.initialize wires the real appendEntry). Skip
-		// silently — state will persist on the next successful call.
-		return;
+	// Append a lean router-state entry to the session JSONL when debugVerbose
+	// is enabled. debugHistory is intentionally omitted — decisions are written
+	// individually to the paired .debug.jsonl file by appendDebugEntry(), keeping
+	// the main session file small. Only a count is included so readers can see
+	// how many decisions were made without loading the full history.
+	if (state.currentConfig.debugVerbose) {
+		try {
+			const { debugHistory: _dropped, ...leanPersisted } = persisted;
+			state.pi.appendEntry("router-state", {
+				...leanPersisted,
+				debugHistoryCount: persisted.debugHistory?.length ?? 0,
+			});
+		} catch {
+			// Runtime not yet initialized. Skip silently.
+		}
 	}
 	state.lastPersistedSnapshot = snapshot;
 };
@@ -126,7 +176,13 @@ export const restoreFromSession = (
 	state: RouterState,
 	ctx: ExtensionContext,
 ): void => {
-	state.lastExtensionContext = ctx;
+	// NOTE: lastExtensionContext is intentionally NOT assigned here.
+	// Storing ctx during session_start/branch pins the full ExtensionContext
+	// (including sessionManager with the entire JSONL branch tree) in heap for
+	// the lifetime of the session — on parallel subagent workloads this causes
+	// N × full-context live objects to accumulate simultaneously.
+	// lastExtensionContext is assigned ONLY by turn_start (and cleared by turn_end),
+	// which correctly bounds its lifetime to one turn.
 	state.currentModelRegistry = ctx.modelRegistry;
 	state.currentCwd = ctx.cwd;
 
@@ -154,8 +210,13 @@ export const restoreFromSession = (
 	// (pins, thinking overrides, widget, debug history, cost, etc.)
 	const persistedState = loadPersistentState();
 
-	const entries = ctx.sessionManager.getBranch() as CustomSessionEntry[];
-	const sessionState = entries
+	// Scan only the tail of the branch (last 20 entries) for a router-state
+	// snapshot. Scanning the full branch is O(N) over potentially hundreds of
+	// entries and forces the entire session tree into RAM. The last router-state
+	// entry is always near the tail, so a small tail window is sufficient.
+	const branch = ctx.sessionManager.getBranch() as CustomSessionEntry[];
+	const tail = branch.length > 20 ? branch.slice(-20) : branch;
+	const sessionState = tail
 		.filter(
 			(entry) =>
 				entry.type === "custom" && entry.customType === "router-state",

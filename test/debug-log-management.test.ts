@@ -1,4 +1,7 @@
 import { describe, test, expect } from "bun:test";
+import { existsSync, unlinkSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { RouterState } from "../src/state";
 import type { RouterConfig, RoutingDecision } from "../src/types";
 import { MAX_DEBUG_HISTORY } from "../src/constants";
@@ -36,12 +39,12 @@ describe("Debug log management", () => {
 		const state = new RouterState(mockExtensionAPI);
 		state.currentConfig = mockConfig;
 
-		// Add 20 decisions (more than default limit of 12)
+		// Add 20 decisions (more than default limit of 5)
 		for (let i = 0; i < 20; i++) {
 			state.recordDecision(createMockDecision("medium", Date.now() + i));
 		}
 
-		// Should only keep last 12
+		// Should only keep last 5 (MAX_DEBUG_HISTORY)
 		expect(state.debugHistory.length).toBe(MAX_DEBUG_HISTORY);
 	});
 
@@ -114,24 +117,68 @@ describe("Debug log management", () => {
 		expect(state.debugHistory.length).toBe(0);
 	});
 
-	test("debugVerbose defaults to false (no session JSONL logging)", () => {
-		const state = new RouterState(mockExtensionAPI);
-		state.currentConfig = mockConfig;
-
-		// debugVerbose should be undefined/false by default
-		expect(state.currentConfig.debugVerbose).toBeFalsy();
+	test("debugVerbose defaults to false — session JSONL entry is never written", () => {
+		const written: unknown[] = [];
+		const api: any = { appendEntry: (_type: string, data: unknown) => written.push(data) };
+		const state = new RouterState(api);
+		state.currentConfig = { ...mockConfig, debugVerbose: false };
+		// persist() writes to disk only; no appendEntry call expected
+		state.persist();
+		// Allow debounce to flush (persistNow skips appendEntry when debugVerbose=false)
+		expect(written.length).toBe(0);
 	});
 
-	test("debugVerbose can be enabled for verbose session logging", () => {
-		const state = new RouterState(mockExtensionAPI);
-		state.currentConfig = {
-			...mockConfig,
-			debug: true,
-			debugVerbose: true,
-		};
+	test("debugVerbose=true emits lean entry: debugHistoryCount present, debugHistory absent", () => {
+		const written: any[] = [];
+		const api: any = { appendEntry: (_type: string, data: unknown) => written.push(data) };
+		const state = new RouterState(api);
+		state.currentConfig = { ...mockConfig, debugVerbose: true };
+		state.routerEnabled = true;
 
-		// Both debug and debugVerbose should be enabled
-		expect(state.currentConfig.debug).toBe(true);
-		expect(state.currentConfig.debugVerbose).toBe(true);
+		for (let i = 0; i < 3; i++) {
+			state.recordDecision(createMockDecision("medium", Date.now() + i));
+		}
+		// Force immediate persist (bypass debounce)
+		state.persist();
+
+		expect(written.length).toBe(1);
+		expect(written[0]).toHaveProperty("debugHistoryCount", 3);
+		expect(written[0]).not.toHaveProperty("debugHistory");
+	});
+
+	test("appendDebugEntry writes one line per decision to paired .debug.jsonl", () => {
+		// Set up a temp session file path so debugFilePath returns something real.
+		const sessionFile = join(tmpdir(), `router-test-${Date.now()}.jsonl`);
+		const debugFile = sessionFile.replace(/\.jsonl$/, ".debug.jsonl");
+
+		const api: any = { appendEntry: () => {} };
+		const state = new RouterState(api);
+		state.currentConfig = mockConfig;
+
+		// Inject a mock ctx with a real sessionFile path.
+		state.lastExtensionContext = {
+			sessionManager: { sessionFile },
+		} as any;
+
+		const decisions = [
+			createMockDecision("high", 1000),
+			createMockDecision("low", 2000),
+			createMockDecision("medium", 3000),
+		];
+		for (const d of decisions) state.recordDecision(d);
+
+		expect(existsSync(debugFile)).toBe(true);
+		const lines = readFileSync(debugFile, "utf-8").trim().split("\n");
+		expect(lines.length).toBe(3);
+
+		const parsed = lines.map((l) => JSON.parse(l));
+		expect(parsed[0].tier).toBe("high");
+		expect(parsed[1].tier).toBe("low");
+		expect(parsed[2].tier).toBe("medium");
+		// turn field is userMessagesSeen (0 when no messages seen yet)
+		expect(typeof parsed[0].turn).toBe("number");
+
+		// Cleanup
+		unlinkSync(debugFile);
 	});
 });

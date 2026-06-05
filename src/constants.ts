@@ -1,1 +1,1 @@
-export const MAX_DEBUG_HISTORY = 12;
+export const MAX_DEBUG_HISTORY = 5;
