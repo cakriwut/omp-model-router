@@ -25,6 +25,8 @@ import { getLastUserText, buildClassifierPrompt } from "./classifier-utils";
 import { loadPitfalls } from "./pitfalls";
 import { countWords } from "../routing/text.js";
 import { shortenModelRef } from "../ui/theme.js";
+import { appendPromptRecord } from "./trace.js";
+import { join } from "node:path";
 import { getCurrentVersion } from "../version-check";
 
 /**
@@ -147,6 +149,7 @@ export function spawnClassifierForTurn(
 	heuristicTier: RouterTier,
 	context: Context,
 	sessionScope?: import("../state").SessionScope,
+	bucket?: string,
 ): void {
 	if (!config.calibration?.enabled || !state.calibration) return;
 
@@ -198,12 +201,22 @@ export function spawnClassifierForTurn(
 	cal.pendingHeuristicReasoning = decision?.reasoning ?? "";
 	cal.pendingRuleMatched = decision?.isRuleMatched ?? false;
 	cal.pendingPrompt = truncatePrompt(userPrompt, 500);
+	cal.pendingClassifierPrompt = classifierPrompt;
+	cal.pendingBucket = bucket;
+	cal.pendingUserMsgIndex = scope.userMessagesSeen;
 	cal.pendingToolResultCount = context.messages.filter((m) => m.role === "toolResult").length;
 	cal.pendingTurnIndex = cal.turnsProcessed;
 	cal.pendingSpawnTime = Date.now();
 
 	// Snapshot the trace file path (string — safe to capture)
 	const traceFilePath = traceEnabled ? cal.traceFilePath : undefined;
+	const artifactsDir = traceEnabled
+		? (ctx as any)?.sessionManager?.getArtifactsDir?.() ?? null
+		: null;
+	const promptLogPath: string | undefined = (typeof artifactsDir === "string" && artifactsDir)
+		? join(artifactsDir, "classifierPrompt.jsonl")
+		: undefined;
+	cal.promptLogPath = promptLogPath;
 
 	// Synthetic tracking ID
 	const trackingId = `classifier-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -235,6 +248,31 @@ export function spawnClassifierForTurn(
 	// Does NOT capture: context, ctx, or any object with sessionManager.
 	classifierPromise
 		.then(async (agentId) => {
+			const writePromptLog = (
+				verdict: { tier: RouterTier; reasoning: string } | null,
+				error: string | undefined,
+				latencyMs: number,
+			): void => {
+				const pl = state.calibration?.promptLogPath;
+				const pr = state.calibration?.pendingClassifierPrompt;
+				if (!pl || !pr) return;
+				const refForModel = Array.isArray(classifierModelRef)
+					? classifierModelRef[0]
+					: classifierModelRef;
+				appendPromptRecord(pl, {
+					timestamp:    new Date().toISOString(),
+					turnIndex:    state.calibration?.pendingTurnIndex ?? 0,
+					userMsgIndex: state.calibration?.pendingUserMsgIndex ?? 0,
+					bucket:       state.calibration?.pendingBucket,
+					model:        refForModel ?? "unknown",
+					heuristicTier: (state.calibration?.pendingHeuristicTier ?? "medium") as RouterTier,
+					verdict,
+					error,
+					latencyMs,
+					prompt: pr,
+				});
+			};
+
 			// If calibration was disabled or state reset since spawn, bail
 			if (!state.calibration || state.calibration.pendingAgentId !== trackingId) {
 				return;
@@ -244,6 +282,7 @@ export function spawnClassifierForTurn(
 				// Spawn returned no ID
 				state.calibration.llmCallsFailed++;
 				writePendingAsFailed(state.calibration, "spawn-no-id", 0);
+				writePromptLog(null, "spawn-no-id", 0);
 				clearPending(state.calibration);
 				if (debugEnabled) {
 					notifyFn(
@@ -271,6 +310,7 @@ export function spawnClassifierForTurn(
 					abandonClassifier(agentId);
 					state.calibration.llmCallsFailed++;
 					writePendingAsFailed(state.calibration, "timeout", ageMs);
+					writePromptLog(null, "timeout", ageMs);
 					clearPending(state.calibration);
 					if (debugEnabled) {
 						notifyFn(
@@ -307,6 +347,7 @@ export function spawnClassifierForTurn(
 
 				if (result.error) {
 					state.calibration.llmCallsFailed++;
+					writePromptLog(null, `error:${result.error.slice(0, 60)}`, ageMs);
 					writePendingAsFailed(
 						state.calibration,
 						`error:${result.error.slice(0, 60)}`,
@@ -325,6 +366,7 @@ export function spawnClassifierForTurn(
 				if (!result.verdict || !state.calibration.pendingHeuristicTier) {
 					state.calibration.llmCallsFailed++;
 					writePendingAsFailed(state.calibration, "no-verdict-or-tier", ageMs);
+					writePromptLog(null, "no-verdict-or-tier", ageMs);
 					clearPending(state.calibration);
 					return;
 				}
@@ -333,6 +375,7 @@ export function spawnClassifierForTurn(
 				const verdict = result.verdict;
 
 				updateCalibrationMatrix(state.calibration, heuristicTierFinal, verdict.tier);
+				writePromptLog(verdict, undefined, ageMs);
 
 				if (traceFilePath) {
 					writeCompletedTrace(state.calibration, verdict, ageMs);
@@ -365,6 +408,7 @@ export function spawnClassifierForTurn(
 				state.calibration.llmCallsFailed++;
 
 				const reason = `error:${String(err).slice(0, 40)}`;
+				writePromptLog(null, reason, ageMs);
 				writePendingAsFailed(state.calibration, reason, ageMs);
 				clearPending(state.calibration);
 
@@ -382,6 +426,23 @@ export function spawnClassifierForTurn(
 			}
 
 			state.calibration.llmCallsFailed++;
+			const _pl = state.calibration?.promptLogPath;
+			const _pr = state.calibration?.pendingClassifierPrompt;
+			if (_pl && _pr) {
+				const _ref = Array.isArray(classifierModelRef) ? classifierModelRef[0] : classifierModelRef;
+				appendPromptRecord(_pl, {
+					timestamp: new Date().toISOString(),
+					turnIndex: state.calibration?.pendingTurnIndex ?? 0,
+					userMsgIndex: state.calibration?.pendingUserMsgIndex ?? 0,
+					bucket: state.calibration?.pendingBucket,
+					model: _ref ?? "unknown",
+					heuristicTier: (state.calibration?.pendingHeuristicTier ?? "medium") as RouterTier,
+					verdict: null,
+					error: `spawn-threw:${String(err).slice(0, 40)}`,
+					latencyMs: 0,
+					prompt: _pr,
+				});
+			}
 			writePendingAsFailed(
 				state.calibration,
 				`spawn-threw:${String(err).slice(0, 40)}`,
@@ -496,4 +557,8 @@ function clearPending(cal: import("./types").SessionCalibration): void {
 	cal.pendingToolResultCount = undefined;
 	cal.pendingTurnIndex = undefined;
 	cal.pendingSpawnTime = undefined;
+	cal.pendingClassifierPrompt = undefined;
+	cal.pendingBucket = undefined;
+	cal.pendingUserMsgIndex = undefined;
+	cal.promptLogPath = undefined;
 }

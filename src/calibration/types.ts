@@ -44,6 +44,15 @@ export interface SessionCalibration {
 	/** Spawn timestamp for latency measurement */
 	pendingSpawnTime?: number;
 
+	/** Full classifier prompt string built at spawn time (for prompt log) */
+	pendingClassifierPrompt?: string;
+	/** Tool-mix bucket at spawn time (for prompt log) */
+	pendingBucket?: string;
+	/** User message index at spawn time (for prompt log) */
+	pendingUserMsgIndex?: number;
+	/** Path to classifierPrompt.jsonl in session artifact dir (if traceEnabled) */
+	promptLogPath?: string;
+
 	/** Path to trace JSONL file (if traceEnabled) */
 	traceFilePath?: string;
 }

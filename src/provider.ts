@@ -513,7 +513,7 @@ export const registerRouterProvider = (
 					sessionScope.tierCounter[decision.tier]++;
 
 					// Spawn async classifier for calibration telemetry (fire-and-forget)
-					spawnClassifierForTurn(state, state.currentConfig, decision.tier, context, sessionScope);
+					spawnClassifierForTurn(state, state.currentConfig, decision.tier, context, sessionScope, decision.toolBucket);
 
 					if (sessionCtx) {
 						actions.updateStatus(sessionCtx);

@@ -270,6 +270,7 @@ export const resolveRouting = async (
 	const resolvedScope = input.scope ?? input.state?.scope;
 	const isSubAgent = (resolvedScope?.parentSessionId) !== undefined;
 	let syncClassifierRan = false;
+	let bucket: string | undefined;
 	let verdict: { tier: RouterTier; reasoning: string } | undefined;
 	if (
 		config.classifierModel &&
@@ -287,7 +288,7 @@ export const resolveRouting = async (
 		const userMsgIndex = scope?.userMessagesSeen ?? 0;
 		// Phase 2: tool-mix bucket extends the cache key
 		const { counts: toolCounts } = extractRecentToolCalls(input.context);
-		const bucket = getBucket(toolCounts);
+		bucket = getBucket(toolCounts);
 		const sig = `${lastUserText}|${userMsgIndex}|${bucket}`;
 
 		// ── Cache gate ──────────────────────────────────────────────────────
@@ -417,5 +418,6 @@ export const resolveRouting = async (
 	//    baseline default (replacing the hardcoded 'medium') when routing starts.
 	//    Nothing to do here — floor was already passed as the heuristic default tier.
 
+	decision.toolBucket = bucket;
 	return decision;
 };

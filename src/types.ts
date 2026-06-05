@@ -202,6 +202,8 @@ export interface RoutingDecision {
 	/** True when the synchronous classifier ran (or returned a cache hit) this turn.
 	 *  Set by resolveRouting; read by spawnClassifierForTurn to suppress redundant async spawn. */
 	syncClassifierRan?: boolean;
+	/** Tool-mix bucket computed during routing (carried for tracing/logging) */
+	toolBucket?: string;
 }
 
 export interface RouterPersistedState {

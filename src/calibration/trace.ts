@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { TraceRecord } from "./types";
+import type { RouterTier } from "../types";
 
 const TRACES_DIR = () => join(getAgentDir(), "model-router", "traces");
 
@@ -55,4 +56,29 @@ export function appendTraceRecord(
 export function truncatePrompt(prompt: string, maxLength = 200): string {
 	if (prompt.length <= maxLength) return prompt;
 	return prompt.slice(0, maxLength - 3) + "...";
+}
+
+export interface PromptLogRecord {
+	timestamp: string;
+	turnIndex: number;
+	userMsgIndex: number;
+	bucket: string | undefined;
+	model: string;
+	heuristicTier: RouterTier;
+	verdict: { tier: RouterTier; reasoning: string } | null;
+	error?: string;
+	latencyMs: number;
+	prompt: string;
+}
+
+/**
+ * Append one classifier prompt+verdict record to classifierPrompt.jsonl.
+ * Best-effort: silently swallows write errors.
+ */
+export function appendPromptRecord(path: string, record: PromptLogRecord): void {
+	try {
+		appendFileSync(path, JSON.stringify(record) + "\n", "utf-8");
+	} catch {
+		// best-effort
+	}
 }
