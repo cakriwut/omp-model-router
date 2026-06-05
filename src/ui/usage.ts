@@ -103,7 +103,7 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 			tierColor("high", "█".repeat(highWidth)) +
 			tierColor("medium", "█".repeat(mediumWidth)) +
 			tierColor("low", "█".repeat(lowWidth)) +
-			` ${totalDecisions} decisions`;
+			` ${totalDecisions} routing decisions`;
 		const highPct = Math.round((tierCounts.high / totalDecisions) * 100);
 		const medPct = Math.round((tierCounts.medium / totalDecisions) * 100);
 		const lowPct = Math.round((tierCounts.low / totalDecisions) * 100);
@@ -129,7 +129,7 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 		}
 		labelLine = labelParts.join("");
 	} else {
-		barLine = theme.fg("dim", "░".repeat(BAR_WIDTH)) + " 0 decisions";
+		barLine = theme.fg("dim", "░".repeat(BAR_WIDTH)) + " 0 routing decisions";
 		labelLine = theme.fg("dim", "no routing history");
 	}
 

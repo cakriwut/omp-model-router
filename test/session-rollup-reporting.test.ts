@@ -202,16 +202,21 @@ describe("handleUsage — data-source selection (Thread A)", () => {
 		expect(notified[0]).not.toContain("0.5000");
 	});
 
-	test("2.5 cost total: JSONL total used in fallback path", async () => {
+	test("2.5 cost total: empty scope with no session file shows $0.0000", async () => {
 		const state = makeState();
 		// scope empty: modelCosts empty, accumulatedCost === 0
+		// No session file returned by ctx.sessionManager (getSessionFile not present in mock)
+		// → falls back to in-memory scope, which is empty → $0.0000
 
 		const branch = [makeBranchEntry("anthropic", "claude-haiku-3", 0.25)];
 		const { ctx, notified } = makeCtx(branch);
 
 		await handleUsage(state)([], ctx);
 
-		expect(notified[0]).toContain("0.2500");
+		// No session file → in-memory fallback → accumulatedCost = 0
+		expect(notified[0]).toContain("$0.0000");
+		// Profile model rows still rendered (from profile config)
+		expect(notified[0]).toContain("claude-haiku-3");
 	});
 
 	// Compression tests removed — historyCompression field deleted

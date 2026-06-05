@@ -325,8 +325,7 @@ If you see `source=none` for a session you expected to be a child, the harness h
 
 Open work for future contributors:
 
-- **Thread D:** Decide whether `maxSessionBudget` is per-session or per-agent-tree. Each session currently checks only its own `accumulatedCost`; in-flight sub-agent spend is invisible to the parent until `agent_end`.
-
+- **Thread D:** Decide whether `maxSessionBudget` is per-session or per-agent-tree. Each session currently checks only its own `accumulatedCost` for budget enforcement; in-flight sub-agent spend is invisible to the parent until `agent_end`. Note: `/router usage` now reads the session JSONL tree directly (parent + child `.jsonl` files) and is accurate regardless of `agent_end` timing — this limitation only applies to live budget enforcement during routing, not to the usage report.
 
 ## Publish
 
