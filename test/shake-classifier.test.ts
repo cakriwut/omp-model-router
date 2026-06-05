@@ -211,7 +211,7 @@ describe("buildClassifierPrompt — user message extraction", () => {
 		const prompt = buildClassifierPrompt(ctx);
 		expect(prompt).toContain("<request>implement the auth fix</request>");
 		expect(prompt).not.toContain("some tree");
-		expect(prompt).toContain("[assistant]: Working on it, the fix is straightforward.");
+		expect(prompt).toContain("B: Working on it, the fix is straightforward.");
 	});
 
 	test("tool result content never appears", () => {

@@ -168,6 +168,35 @@ export function shakeForClassifier(text: string, budget: number): string {
 }
 
 /**
+ * Neutralize role-injection tokens that appear inside message content.
+ *
+ * The history section of the classifier prompt uses `[user]:` and `[assistant]:`
+ * as structural delimiters. If those strings appear verbatim inside a message,
+ * the classifier can be tricked into treating injected content as a new turn
+ * (prompt poisoning).
+ *
+ * Strategy: replace `[user]` / `[assistant]` bracket tokens (case-insensitive,
+ * whole-token — not mid-word) with parenthesized equivalents so the classifier
+ * never sees the structural delimiter pattern inside content.
+ *
+ * Covers: [user], [assistant], [User], [ASSISTANT], [User]: ..., etc.
+ * Also neutralizes bare `user:` / `assistant:` at line-start (common injection
+ * form when the attacker omits the brackets).
+ */
+export function sanitizeRoleMarkers(text: string): string {
+	return text
+		// Neutralize any line-start "A:" or "B:" injection that could fake a
+		// history turn (defense-in-depth for the <request> block).
+		// Also covers legacy [user]/[assistant] forms in case they appear in the
+		// live prompt — they are semantically inert against A:/B: delimiters but
+		// best stripped anyway to avoid confusing the model.
+		.replace(/\[(?:user|assistant)\]/gi, (m) => `(${m.slice(1, -1).toLowerCase()})`)
+		.replace(/^(user|assistant)\s*:/gim, (_, role) => `(${role.toLowerCase()}):`)
+		.replace(/^A\s*:/gm, "(A):")
+		.replace(/^B\s*:/gm, "(B):");
+}
+
+/**
  * Truncate `text` to at most `budget` chars, breaking at the last word
  * boundary (space or newline) within the budget. Appends "…" when cut.
  */
@@ -184,10 +213,10 @@ function truncateAtWord(text: string, budget: number): string {
 
 /**
  * Build an interleaved conversation summary for the classifier.
- * Alternates [user] and [assistant] turns — no tool output, no tool results.
+ * Alternates A: (user) and B: (assistant) turns — no tool output, no tool results.
  * User messages: bare prose (XML harness injections stripped entirely).
  * Assistant messages: code/XML elided, prose kept.
- * The current user turn is excluded (shown separately in "User:").
+ * The current user turn is excluded (shown separately in the <request> block).
  */
 export function getConversationSummary(
 	context: Context,
@@ -217,10 +246,10 @@ export function getConversationSummary(
 			if (plain.length < 20) continue;
 			const firstLine = plain.split("\n")[0].toLowerCase();
 			if (/^(please |proceed |let me know|could you |can you provide|i need more|alternatively)/.test(firstLine)) continue;
-			const truncated = shakeForClassifier(plain, maxMsgChars);
+			const truncated = shakeForClassifier(sanitizeRoleMarkers(plain), maxMsgChars);
 			if (!truncated) continue;
 			if (totalChars + truncated.length > maxHistoryChars) break;
-			entries.unshift(`[assistant]: ${truncated}`);
+			entries.unshift(`B: ${truncated}`);
 			totalChars += truncated.length;
 			continue;
 		}
@@ -235,7 +264,7 @@ export function getConversationSummary(
 				continue;
 			}
 			if (totalChars + bare.length > maxHistoryChars) break;
-			entries.unshift(`[user]: ${bare}`);
+			entries.unshift(`A: ${sanitizeRoleMarkers(bare)}`);
 			totalChars += bare.length;
 		}
 	}
@@ -264,7 +293,7 @@ function stripMarkdown(text: string): string {
 		.replace(/\n{3,}/g, "\n\n")
 		// Remove entire lines that start with prompt delimiter keywords — these appear
 		// in assistant reply prose and would confuse the classifier output parser
-		.replace(/^(User|Tier|Reasoning|History|Pitfalls)\s*:.*$/gim, "")
+		.replace(/^(User|Tier|Reasoning|History|Pitfalls|A|B)\s*:.*$/gim, "")
 		// Remove XML-like placeholder tokens e.g. <current message>, <file>, etc.
 		.replace(/<[^>]{1,40}>/g, "")
 		.replace(/\n{3,}/g, "\n\n")
@@ -342,7 +371,7 @@ export function buildClassifierPrompt(
 ): string {
 	const b = computeBudgets(contextWindow);
 
-	const promptText     = stripForUserMessage(getLastUserText(context), b.maxPromptChars);
+	const promptText     = sanitizeRoleMarkers(stripForUserMessage(getLastUserText(context), b.maxPromptChars));
 	const historyText    = getConversationSummary(context, 12, b.maxMsgChars, b.maxHistoryChars);
 	const pitfallsSection = pitfalls ? truncateAtWord(pitfalls, b.maxPitfallsChars) : undefined;
 	const signals        = detectSignals(context);
