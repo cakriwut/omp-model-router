@@ -9,6 +9,128 @@ import {
 import type { Theme, KeybindingsManager } from "@oh-my-pi/pi-coding-agent";
 import type { PromptLogRecord } from "../calibration/trace";
 
+// ─── Session entry (for picker) ───────────────────────────────────────────────
+
+export interface SessionLogEntry {
+	/** Absolute path to classifierPrompt.jsonl */
+	path: string;
+	/** Human-readable label derived from path */
+	label: string;
+	/** Number of records in the file */
+	recordCount: number;
+	/** ISO timestamp of the most recent record, or undefined */
+	lastTimestamp: string | undefined;
+}
+
+// ─── Session Picker Component ─────────────────────────────────────────────────
+
+/**
+ * Simple list picker for available classifier log sessions.
+ * Keys: ↑/↓ navigate · Enter select · ESC cancel
+ */
+export class SessionPickerComponent implements Component {
+	readonly #theme: Theme;
+	readonly #keybindings: KeybindingsManager;
+	readonly #done: (result: SessionLogEntry | undefined) => void;
+	readonly #sessions: SessionLogEntry[];
+	#cursor: number;
+
+	constructor(
+		_tui: TUI,
+		theme: Theme,
+		keybindings: KeybindingsManager,
+		done: (result: SessionLogEntry | undefined) => void,
+		sessions: SessionLogEntry[],
+		currentPath: string | undefined,
+	) {
+		this.#theme = theme;
+		this.#keybindings = keybindings;
+		this.#done = done;
+		this.#sessions = sessions;
+		// Pre-select current session
+		const idx = currentPath ? sessions.findIndex(s => s.path === currentPath) : -1;
+		this.#cursor = idx >= 0 ? idx : 0;
+	}
+
+	invalidate(): void {}
+
+	handleInput(data: string): void {
+		const kb = this.#keybindings;
+
+		if (kb.matches(data, "tui.select.cancel") || matchesKey(data, "q")) {
+			this.#done(undefined);
+			return;
+		}
+		if (kb.matches(data, "tui.select.up")) {
+			if (this.#sessions.length > 0)
+				this.#cursor = (this.#cursor - 1 + this.#sessions.length) % this.#sessions.length;
+			return;
+		}
+		if (kb.matches(data, "tui.select.down")) {
+			if (this.#sessions.length > 0)
+				this.#cursor = (this.#cursor + 1) % this.#sessions.length;
+			return;
+		}
+		if (kb.matches(data, "tui.select.confirm")) {
+			const session = this.#sessions[this.#cursor];
+			if (session) this.#done(session);
+			return;
+		}
+	}
+
+	render(width: number): string[] {
+		const t = this.#theme;
+		const lines: string[] = [];
+
+		const hint = t.fg("muted", "[↑↓ navigate · Enter select · ESC cancel]");
+		lines.push(`🗂  Select Session  ${hint}`);
+		lines.push("");
+
+		if (this.#sessions.length === 0) {
+			lines.push(t.fg("muted", "  (no classifier log sessions found)"));
+			return lines;
+		}
+
+		const maxVisible = 20;
+		const { start, end } = this.#visibleWindow(maxVisible);
+
+		if (start > 0) lines.push(t.fg("muted", "  ▲ more"));
+
+		for (let i = start; i < end; i++) {
+			const s = this.#sessions[i];
+			if (!s) continue;
+			const selected = i === this.#cursor;
+			const cursor = selected ? "❯ " : "  ";
+			const ts = s.lastTimestamp ? formatShortTimestamp(s.lastTimestamp) : "—";
+			const meta = t.fg("muted", `${s.recordCount} entries  ${ts}`);
+			const label = ellipsize(s.label, Math.max(20, width - 32));
+			const line = `${cursor}${label}  ${meta}`;
+			lines.push(selected ? t.fg("accent", line) : line);
+		}
+
+		if (end < this.#sessions.length) lines.push(t.fg("muted", "  ▼ more"));
+
+		lines.push("");
+		lines.push(t.fg("muted", `  ${this.#sessions.length} session(s) found`));
+
+		return lines;
+	}
+
+	#visibleWindow(maxVisible: number): { start: number; end: number } {
+		const total = this.#sessions.length;
+		if (total <= maxVisible) return { start: 0, end: total };
+		const half = Math.floor(maxVisible / 2);
+		let start = this.#cursor - half;
+		if (start < 0) start = 0;
+		let end = start + maxVisible;
+		if (end > total) {
+			end = total;
+			start = Math.max(0, end - maxVisible);
+		}
+		return { start, end };
+	}
+}
+
 /**
  * Split-panel log viewer:
  *  - Left panel: list of log entries (timestamp, tier arrow, latency)
@@ -17,40 +139,69 @@ import type { PromptLogRecord } from "../calibration/trace";
  * Keys:
  *  - ↑/↓: navigate entries in left panel
  *  - j/k or ctrl+d/ctrl+u: scroll right panel
+ *  - s: open session picker (when sessions list is non-empty)
  *  - ESC/q: close
  */
 export class LogViewerComponent implements Component {
 	readonly #theme: Theme;
 	readonly #keybindings: KeybindingsManager;
 	readonly #done: (result: undefined) => void;
-	readonly #records: PromptLogRecord[];
-	readonly #source: string | undefined;
+	readonly #sessions: SessionLogEntry[];
+	#records: PromptLogRecord[];
+	#source: string | undefined;
 	#cursor = 0;
 	#detailScroll = 0;
+	#subView: SessionPickerComponent | undefined;
 
 	constructor(
-		_tui: TUI,
+		tui: TUI,
 		theme: Theme,
 		keybindings: KeybindingsManager,
 		done: (result: undefined) => void,
 		records: PromptLogRecord[],
 		source: string | undefined,
+		sessions: SessionLogEntry[] = [],
 	) {
 		this.#theme = theme;
 		this.#keybindings = keybindings;
 		this.#done = done;
 		this.#records = records;
 		this.#source = source;
+		this.#sessions = sessions;
 	}
 
 	invalidate(): void {}
 
 	handleInput(data: string): void {
+		// Delegate to session picker sub-view when active
+		if (this.#subView) {
+			this.#subView.handleInput(data);
+			return;
+		}
+
 		const kb = this.#keybindings;
 
 		// Close
 		if (kb.matches(data, "tui.select.cancel") || matchesKey(data, "q")) {
 			this.#done(undefined);
+			return;
+		}
+
+		// Open session picker
+		if (matchesKey(data, "s") && this.#sessions.length > 0) {
+			// SessionPickerComponent does not use TUI internally; pass a stub.
+			const stubTui = { requestRender: () => {} } as unknown as TUI;
+			this.#subView = new SessionPickerComponent(
+				stubTui,
+				this.#theme,
+				this.#keybindings,
+				(selected) => {
+					this.#subView = undefined;
+					if (selected) this.#loadSession(selected);
+				},
+				this.#sessions,
+				this.#source,
+			);
 			return;
 		}
 
@@ -82,12 +233,18 @@ export class LogViewerComponent implements Component {
 	}
 
 	render(width: number): string[] {
+		// Delegate to session picker when active
+		if (this.#subView) {
+			return this.#subView.render(width);
+		}
+
 		const t = this.#theme;
 		const lines: string[] = [];
 
 		// Title
 		const title = `📋 Classifier Log (${this.#records.length} entries)`;
-		const hint = t.fg("muted", "[↑↓ navigate · j/k scroll detail · ESC close]");
+		const sessionHint = this.#sessions.length > 0 ? " · s switch session" : "";
+		const hint = t.fg("muted", `[↑↓ navigate · j/k scroll detail${sessionHint} · ESC close]`);
 		lines.push(`${title}  ${hint}`);
 		lines.push("");
 
@@ -162,6 +319,16 @@ export class LogViewerComponent implements Component {
 	}
 
 	// ─── Internals ─────────────────────────────────────────────────────────
+
+	/** Load records from a picked session. Resets cursor and scroll. */
+	#loadSession(session: SessionLogEntry): void {
+		const recs = parseJsonlFile(session.path);
+		// Show newest first, consistent with factory
+		this.#records = recs.slice().reverse();
+		this.#source = session.path;
+		this.#cursor = 0;
+		this.#detailScroll = 0;
+	}
 
 	#visibleWindow(maxVisible: number): { start: number; end: number } {
 		const total = this.#records.length;
@@ -297,11 +464,44 @@ function stripAnsi(str: string): string {
 	return str.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+// ─── Shared JSONL parser ──────────────────────────────────────────────────────
+
+/**
+ * Parse a classifierPrompt.jsonl file into PromptLogRecord[].
+ * Exported so log.ts can reuse without duplicating the parser.
+ */
+export function parseJsonlFile(path: string): PromptLogRecord[] {
+	const { readFileSync } = require("node:fs") as typeof import("node:fs");
+	const records: PromptLogRecord[] = [];
+	try {
+		const content = readFileSync(path, "utf-8");
+		for (const line of content.split("\n")) {
+			if (!line.trim()) continue;
+			try {
+				const parsed: unknown = JSON.parse(line);
+				if (isPromptLogRecord(parsed)) records.push(parsed);
+			} catch {
+				// skip malformed lines
+			}
+		}
+	} catch {
+		// skip unreadable files
+	}
+	return records;
+}
+
+function isPromptLogRecord(rec: unknown): rec is PromptLogRecord {
+	if (!rec || typeof rec !== "object") return false;
+	const r = rec as Record<string, unknown>;
+	return typeof r.timestamp === "string" && "turnIndex" in r && "prompt" in r;
+}
+
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
 export function createLogViewerFactory(
 	records: PromptLogRecord[],
 	source: string | undefined,
+	sessions: SessionLogEntry[] = [],
 ): (
 	tui: TUI,
 	theme: Theme,
@@ -309,5 +509,21 @@ export function createLogViewerFactory(
 	done: (result: undefined) => void,
 ) => LogViewerComponent {
 	return (tui, theme, keybindings, done) =>
-		new LogViewerComponent(tui, theme, keybindings, done, records.slice().reverse(), source);
+		new LogViewerComponent(tui, theme, keybindings, done, records.slice().reverse(), source, sessions);
+}
+
+/**
+ * Factory for SessionPickerComponent matching the ctx.ui.custom signature.
+ */
+export function createSessionPickerFactory(
+	sessions: SessionLogEntry[],
+	currentPath: string | undefined,
+): (
+	tui: TUI,
+	theme: Theme,
+	keybindings: KeybindingsManager,
+	done: (result: SessionLogEntry | undefined) => void,
+) => SessionPickerComponent {
+	return (tui, theme, keybindings, done) =>
+		new SessionPickerComponent(tui, theme, keybindings, done, sessions, currentPath);
 }

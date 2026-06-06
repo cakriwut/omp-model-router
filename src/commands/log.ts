@@ -1,10 +1,10 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, basename, dirname } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, basename, dirname, sep } from "node:path";
 import { homedir } from "node:os";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { RouterState } from "../state";
 import type { PromptLogRecord } from "../calibration/trace";
-import { createLogViewerFactory } from "../tui/log-viewer";
+import { createLogViewerFactory, createSessionPickerFactory, parseJsonlFile, type SessionLogEntry } from "../tui/log-viewer";
 
 /**
  * /router log [--last N] [--prompts] [--text]
@@ -18,6 +18,7 @@ export const handleLog = (
 	const last = parseLastArg(args);
 	const showPrompts = args.includes("--prompts") || args.includes("-p");
 	const forceText = args.includes("--text") || args.includes("-t");
+	const all = args.includes("--all") || args.includes("-a");
 
 	// Try current session's prompt log first
 	const sessionMgr = ctx.sessionManager as { getArtifactsDir?: () => string };
@@ -33,11 +34,12 @@ export const handleLog = (
 		logPath = state.calibration.promptLogPath;
 	}
 
-	// Fallback: scan ~/.omp/agent for any prompt log files
+	// Load records: current session only by default.
+	// --all scans the full ~/.omp/agent tree (legacy behaviour for text mode).
 	let records: PromptLogRecord[] = [];
 	if (logPath) {
 		records = parseJsonlFile(logPath);
-	} else {
+	} else if (all) {
 		const scanDir = join(homedir(), ".omp", "agent");
 		const files = findPromptLogFiles(scanDir);
 		for (const file of files) {
@@ -47,18 +49,48 @@ export const handleLog = (
 	}
 
 	if (records.length === 0) {
-		ctx.ui.notify(
-			"No classifier prompt log entries found.\n" +
-			"Ensure calibration.traceEnabled is true in your config.",
-			"warning",
-		);
+		const tip = logPath
+			? "Ensure calibration.traceEnabled is true in your config."
+			: "No log for current session. Use --all to search all sessions.";
+		ctx.ui.notify(`No classifier prompt log entries found.\n${tip}`, "warning");
 		return;
 	}
 
 	// ── TUI mode: open interactive split-panel viewer ──
 	if (ctx.hasUI && !forceText && !showPrompts) {
+		// When --all is set, show session picker first, then load selected session
+		if (all) {
+			const scanDir = join(homedir(), ".omp", "agent");
+			const sessions = discoverSessions(scanDir, logPath);
+
+			if (sessions.length === 0) {
+				ctx.ui.notify(
+					"No classifier log sessions found.\n" +
+					"Ensure calibration.traceEnabled is true in your config.",
+					"warning",
+				);
+				return;
+			}
+
+			// Open session picker in TUI
+			const selectedSession = await ctx.ui.custom(createSessionPickerFactory(sessions, logPath));
+
+			if (!selectedSession) return;
+
+			// Load the selected session's classifier log
+			const selectedRecords = parseJsonlFile(selectedSession.path);
+			const displayRecords = last > 0 ? selectedRecords.slice(-last) : selectedRecords;
+
+			// Open log viewer with selected session
+			ctx.ui.custom(createLogViewerFactory(displayRecords, selectedSession.path, sessions));
+			return;
+		}
+
+		// Normal path: show current session's log with session picker in viewer
 		const displayRecords = last > 0 ? records.slice(-last) : records;
-		ctx.ui.custom(createLogViewerFactory(displayRecords, logPath));
+		// Discover all available sessions so the viewer can offer a session picker
+		const sessions = discoverSessions(join(homedir(), ".omp", "agent"), logPath);
+		ctx.ui.custom(createLogViewerFactory(displayRecords, logPath, sessions));
 		return;
 	}
 
@@ -155,29 +187,90 @@ function findPromptLogFiles(dir: string): string[] {
 	return results;
 }
 
-function isPromptLogRecord(rec: unknown): rec is PromptLogRecord {
-	if (!rec || typeof rec !== "object") return false;
-	const r = rec as Record<string, unknown>;
-	return typeof r.timestamp === "string" && "turnIndex" in r && "prompt" in r;
+/**
+ * Discover all classifierPrompt.jsonl files under `scanDir` and build
+ * SessionLogEntry descriptors for the TUI session picker.
+ *
+ * Reads the session's JSONL header (in the same directory as classifierPrompt.jsonl)
+ * to extract friendly title, id, and timestamps. Falls back to path-based labels.
+ *
+ * Sorted newest-last-timestamp first. Current session (matching `currentPath`)
+ * is pinned to top.
+ */
+function discoverSessions(
+	scanDir: string,
+	currentPath: string | undefined,
+): SessionLogEntry[] {
+	const paths = findPromptLogFiles(scanDir);
+	const entries: SessionLogEntry[] = [];
+
+	for (const classifierPath of paths) {
+		const recs = parseJsonlFile(classifierPath);
+		const recordCount = recs.length;
+		const lastTimestamp = recordCount > 0 ? recs[recordCount - 1].timestamp : undefined;
+
+		// Try to read the session JSONL header for friendly metadata
+		let sessionId = "";
+		let sessionTitle = "";
+		let sessionTimestamp = "";
+
+		try {
+			const sessionDir = dirname(classifierPath);
+			const sessionFiles = readdirSync(sessionDir);
+			const sessionJsonl = sessionFiles.find(f => f.endsWith(".jsonl") && !f.includes("Debug") && !f.includes("classifier"));
+
+			if (sessionJsonl) {
+				const sessionPath = join(sessionDir, sessionJsonl);
+				const content = readFileSync(sessionPath, "utf-8");
+				const firstLine = content.split("\n")[0];
+
+				if (firstLine) {
+					const header: unknown = JSON.parse(firstLine);
+					if (typeof header === "object" && header !== null) {
+						const h = header as Record<string, unknown>;
+						if (h.type === "session") {
+							sessionId = String(h.id ?? "");
+							sessionTitle = String(h.title ?? "");
+							sessionTimestamp = String(h.timestamp ?? "");
+						}
+					}
+				}
+			}
+		} catch {
+			// Fall back to path-based label if session metadata unavailable
+		}
+
+		// Fallback: use path components as label if no title available
+		if (!sessionTitle) {
+			const parts = classifierPath.split(sep);
+			sessionTitle = parts.slice(-2).join(" / "); // e.g., "sessionId / artifacts"
+		}
+
+		entries.push({
+			path: classifierPath,
+			label: sessionTitle || sessionId || basename(dirname(classifierPath)),
+			recordCount,
+			lastTimestamp: sessionTimestamp || lastTimestamp,
+		});
+	}
+
+	// Sort: most recently active first
+	entries.sort((a, b) => {
+		if (!a.lastTimestamp && !b.lastTimestamp) return 0;
+		if (!a.lastTimestamp) return 1;
+		if (!b.lastTimestamp) return -1;
+		return b.lastTimestamp.localeCompare(a.lastTimestamp);
+	});
+
+	// Move current session to top when present
+	if (currentPath) {
+		const idx = entries.findIndex(e => e.path === currentPath);
+		if (idx > 0) {
+			const [cur] = entries.splice(idx, 1);
+			entries.unshift(cur);
+		}
+	}
+
+	return entries;
 }
 
-function parseJsonlFile(path: string): PromptLogRecord[] {
-	const records: PromptLogRecord[] = [];
-	try {
-		const content = readFileSync(path, "utf-8");
-		for (const line of content.split("\n")) {
-			if (!line.trim()) continue;
-			try {
-				const parsed: unknown = JSON.parse(line);
-				if (isPromptLogRecord(parsed)) {
-					records.push(parsed);
-				}
-			} catch {
-				// skip malformed lines
-			}
-		}
-	} catch {
-		// skip unreadable files
-	}
-	return records;
-}

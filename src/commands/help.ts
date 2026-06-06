@@ -18,6 +18,7 @@ export const handleHelp = async (
 			"  debug <on|off|show|clear>   Control routing debug logging to notifications and history.",
 			"  reload                      Hot-reload the configuration JSON from .omp/model-router.json.",
 			"  set <key> [value]            Get or set config value (writes to model-router.json). Omit value to read.",
+			"  log [--last N] [--all]       Browse classifier prompt log (TUI). --all scans all sessions.",
 			"  calibrate <sub>              Calibration lab harness (analyze | simulate | export | import | reset).",
 			"  help, ?                     Show this help message.",
 			"  update                      Check for and apply extension updates from npm.",
