@@ -478,9 +478,13 @@ export const registerRouterProvider = (
 
 				const { scopedPin, floor } = resolveEffectivePin(sessionScope, state.currentConfig);
 				const traceEnabled = !!state.currentConfig.calibration?.traceEnabled;
-				const artifactsDir = (traceEnabled && sessionCtx)
-					? (sessionCtx.sessionManager as any).getArtifactsDir?.() ?? null
-					: null;
+				// Derive path from session file directly — getArtifactsDir() returns null
+				// before the harness creates the directory (i.e. before first tool call).
+				// sessionFile.slice(0, -6) is the same formula the harness uses internally.
+				const sessionFile = traceEnabled && sessionCtx
+					? (sessionCtx.sessionManager as any).getSessionFile?.() as string | undefined
+					: undefined;
+				const artifactsDir = sessionFile ? sessionFile.slice(0, -6) : null;
 				const promptLogPath: string | undefined = typeof artifactsDir === "string" && artifactsDir
 					? join(artifactsDir, "classifierPrompt.jsonl")
 					: undefined;
