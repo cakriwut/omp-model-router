@@ -49,6 +49,54 @@ function scanFile(path: string, totals: Map<string, ModelCostEntry>): void {
 	}
 }
 
+/**
+ * Scan classifierPrompt.jsonl for classifier model costs.
+ * Each line has { model, verdict: { classifierUsage: { inputTokens, outputTokens, ... , cost } } }.
+ * Returns entries with tier="classifier" pre-set.
+ */
+function scanClassifierLog(path: string, totals: Map<string, ModelCostEntry>): void {
+	try {
+		const lines = readFileSync(path, "utf8").split("\n");
+		for (const line of lines) {
+			if (!line.includes('"classifierUsage"')) continue;
+			let obj: Record<string, unknown>;
+			try {
+				obj = JSON.parse(line) as Record<string, unknown>;
+			} catch {
+				continue;
+			}
+			const model = obj.model;
+			if (typeof model !== "string") continue;
+			const verdict = obj.verdict as Record<string, unknown> | null | undefined;
+			const u = verdict?.classifierUsage as Record<string, number> | null | undefined;
+			if (!u) continue;
+			const cost = u.cost ?? 0;
+			const existing = totals.get(model);
+			if (existing) {
+				existing.invocations++;
+				existing.inputTokens  += u.inputTokens ?? 0;
+				existing.outputTokens += u.outputTokens ?? 0;
+				existing.cacheReadTokens  += u.cacheReadTokens ?? 0;
+				existing.cacheWriteTokens += u.cacheWriteTokens ?? 0;
+				existing.cost += cost;
+			} else {
+				totals.set(model, {
+					model,
+					tier: "classifier",
+					invocations: 1,
+					inputTokens: u.inputTokens ?? 0,
+					outputTokens: u.outputTokens ?? 0,
+					cacheReadTokens: u.cacheReadTokens ?? 0,
+					cacheWriteTokens: u.cacheWriteTokens ?? 0,
+					cost,
+				});
+			}
+		}
+	} catch {
+		// silently swallow errors
+	}
+}
+
 export function scanSessionTree(sessionFile: string): Map<string, ModelCostEntry> {
 	const totals = new Map<string, ModelCostEntry>();
 	scanFile(sessionFile, totals);
@@ -56,9 +104,15 @@ export function scanSessionTree(sessionFile: string): Map<string, ModelCostEntry
 		? sessionFile.slice(0, -".jsonl".length)
 		: sessionFile;
 	if (existsSync(childDir)) {
-		readdirSync(childDir)
-			.filter((f) => f.endsWith(".jsonl"))
-			.forEach((f) => scanFile(join(childDir, f), totals));
+		for (const f of readdirSync(childDir)) {
+			if (!f.endsWith(".jsonl")) continue;
+			const fullPath = join(childDir, f);
+			if (f === "classifierPrompt.jsonl") {
+				scanClassifierLog(fullPath, totals);
+			} else {
+				scanFile(fullPath, totals);
+			}
+		}
 	}
 	return totals;
 }
@@ -110,14 +164,8 @@ export const handleUsage = (
 				entry.tier = resolveModelTier(entry.model, profile);
 			}
 		}
-		// Classifier calls use streamSimple directly — they are never pushed to the host
-		// stream and therefore never appear in the session JSONL. Merge them from the
-		// in-memory modelCosts map, which is populated by recordClassifierCost.
-		for (const [key, entry] of state.modelCosts) {
-			if (entry.tier === "classifier" && !reportModelCosts.has(key)) {
-				reportModelCosts.set(key, { ...entry });
-			}
-		}
+		// Classifier costs are now sourced from classifierPrompt.jsonl (scanned by
+		// scanSessionTree → scanClassifierLog). In-memory merge is no longer needed.
 		reportTotalCost = [...reportModelCosts.values()].reduce((s, e) => s + e.cost, 0);
 	} else {
 		// Fallback: no session file (in-memory mode, tests)
