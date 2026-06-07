@@ -296,7 +296,7 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		expect(runClassifierCallCount).toBe(0);
 	});
 
-	test("T5.7: pinned tier bypasses cache entirely — cache fields remain untouched", async () => {
+	test("T5.7: pinned tier lets classifier run (for pin-pressure), cache may be empty if classifier fails", async () => {
 		const state = new RouterState(mockPi);
 		state.activateSession("test-session");
 		state.currentConfig = {
@@ -310,18 +310,20 @@ describe("Classifier prompt cache (Phase 1)", () => {
 		const input: RoutingInput = {
 			context: ctx,
 			previousDecision: undefined,
-			pinnedTier: "low", // pinned — skips classifier block
+			pinnedTier: "low", // pinned — classifier runs but doesn't override routing
 			isBudgetExceeded: false,
 			modelRegistry: registry,
 			state,
 		};
 
-		await resolveRouting(input, baseRoutingConfig);
+		const decision = await resolveRouting(input, baseRoutingConfig);
 
-		// Cache never touched — classifier block was skipped entirely due to pin
-		expect(runClassifierCallCount).toBe(0);
-		expect(state.scope.lastClassifierKey).toBeUndefined();
-		expect(state.scope.lastClassifierVerdict).toBeUndefined();
+		// Classifier RUNS even when pinned (feeds pin-pressure logic)
+		expect(runClassifierCallCount).toBe(1);
+		// Tier stays pinned
+		expect(decision.tier).toBe("low");
+		// Cache is only populated if verdict succeeded; in this test the classifier fails
+		// so cache is empty. That's OK — the important thing is classifier ran.
 	});
 
 	test("T5.8: context capacity promotion clears cache fields", async () => {

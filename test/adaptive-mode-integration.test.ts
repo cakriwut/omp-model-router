@@ -72,7 +72,7 @@ describe("Adaptive mode classifier integration", () => {
 		expect(decision.isHeuristic).toBe(true);
 	});
 
-	test("adaptive mode: when classifier is skipped (pinned), reasoning should NOT mention classifier", async () => {
+	test("adaptive mode: when pinned, classifier still runs and feeds pin-pressure (fails silently)", async () => {
 		const context: Context = {
 			messages: [
 				{ role: "user", content: "investigate model router adaptive mode issue", timestamp: Date.now() },
@@ -97,9 +97,10 @@ describe("Adaptive mode classifier integration", () => {
 
 		const decision = await resolveRouting(input, config);
 
+		// When pinned, routing decision is still "Pinned to medium tier"
 		expect(decision.tier).toBe("medium");
-		expect(decision.reasoning).toMatch(/Pinned to medium tier/);
-		expect(decision.reasoning).not.toMatch(/Classifier unavailable/);
+		// But classifier DID run and failed, so reasoning reflects the fallback
+		expect(decision.reasoning).toMatch(/Classifier unavailable, using heuristic.*Pinned to medium tier/);
 	});
 
 	test("adaptive mode: rule-matched decisions should NOT attempt classifier", async () => {

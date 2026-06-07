@@ -79,7 +79,7 @@ Config file: `~/.omp/agent/model-router.json`
   "debug": false,
   "maxSessionBudget": 5.0,
   "defaultPin": "auto",
-  "pinTimeout": 600000,
+  "pinTimeout": 300000,
   "enableRtk": true,
   "classifierCache": {
     "ttlTurns": 20
@@ -104,14 +104,36 @@ Config file: `~/.omp/agent/model-router.json`
   }
 }
 ```
+
+## Classifier & Scoped Pin System (v0.8.1+)
+
+**Classifier runs on every new user message** (deduplicated by cache key `lastUserText|userMsgIndex|toolBucket`):
+- Enabled if `calibration.enabled: true` and `calibration.mode: "adaptive"`
+- Runs regardless of pin state (was gated by `!input.pinnedTier` in v0.8.0)
+- Verdict is always recorded into calibration matrix
+- **If not pinned:** classifier verdict becomes the routing decision (with P2 scoped pin on fresh calls)
+- **If pinned:** classifier verdict feeds into pin-pressure decay logic (doesn't override tier while active)
+
+**Scoped pin lifecycle (5-minute decay, pressure-based lapse):**
+1. **Set** — Heuristic (Rule J), rule-match, or classifier sets a system pin (not persisted, session-scoped only)
+2. **Active** — Pin tier blocks new routing decisions; classifier runs in parallel for pin-pressure tracking
+3. **Decay timeout** — 5 minutes (`pinTimeout: 300000`); automatically cleared on expiry
+4. **Pressure lapse** — 3+ consecutive turns of disagreement (classifier or heuristic vs pin) trigger early lapse
+5. **On lapse** — Pin is cleared; classifier verdict becomes the new routing decision (marking reasoning `"Pin lapsed. Classifier: ..."`)
+6. **Session resume** — All scoped pins reset to config floor (`defaultPin`); pin state is memory-only, never persisted to disk
+
+**User pins vs system pins:**
+- `/router pin <tier>` (user): Permanent within session; does not decay or lapse
+- Heuristic/rule/classifier pins (system): Subject to 5-min decay and 3-turn pressure lapse
+
 ## Calibration Modes
 
 The calibration system allows you to train and use an LLM classifier for routing decisions:
 
 - **`telemetry` mode** (default): Classifier runs in the background for data collection only. Heuristic routing decisions are used.
-- **`adaptive` mode**: Classifier controls routing decisions. The LLM evaluates each prompt and overrides heuristic classification (unless a tier is pinned, context-triggered, or rule-matched).
+- **`adaptive` mode**: Classifier controls routing decisions when unpinned; feeds pin-pressure logic when pinned.
 
-When `calibration.enabled` is `true` and `calibration.mode` is `"adaptive"`, the `classifierModel` (e.g., `anthropic/claude-3-haiku-20240307`) is used for real routing decisions instead of the heuristic.
+When `calibration.enabled` is `true` and `calibration.mode` is `"adaptive"`, the `classifierModel` (e.g., `anthropic/claude-3-haiku-20240307`) is used for real routing decisions (unless a pin is active, in which case classifier feeds the pin-pressure decay system).
 
 **New in v0.7.0**: The confusion matrix now closes the feedback loop:
 - Sync classifier verdicts are recorded into the matrix immediately
@@ -156,6 +178,8 @@ If the classifier decision isn't being used (check decision reasoning with `debu
 3. Look for `[model-router] Classifier failed: ...` in console logs (requires `debug: true`)
 4. Decision reasoning will show `"Classifier unavailable, using heuristic: ..."` when classifier fails
 5. If matrix has sufficient data (>= `warmupTurns`), matrix-based calibration will be applied as fallback
+6. Decision reasoning shows `"Classifier (cached): ..."` on cache hits — this is expected in tool loops
+
 6. Decision reasoning shows `"Classifier (cached): ..."` on cache hits — this is expected in tool loops
 
 ## Development

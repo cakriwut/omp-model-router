@@ -18,7 +18,7 @@ import type { SessionScope } from "../state";
 import type { RouterState } from "../state";
 import { getLastUserText, extractRecentToolCalls, getBucket } from "../utils/messages.js";
 import { updateCalibrationMatrix } from "../calibration/session";
-import { setScopedPin, incrementPinPressure, DEFAULT_PIN_PRESSURE_THRESHOLD } from "./pin";
+import { setScopedPin, incrementPinPressure, DEFAULT_PIN_PRESSURE_THRESHOLD, clearScopedPin } from "./pin";
 import { hasImageAttachment } from "./text";
 import { decideRouting, buildRoutingDecision, phaseForTier } from "./heuristic";
 import { appendPromptRecord } from "../calibration/trace.js";
@@ -278,7 +278,6 @@ export const resolveRouting = async (
 	if (
 		config.classifierModel &&
 		!isSubAgent &&
-		!input.pinnedTier &&
 		!decision.isContextTriggered &&
 		!decision.isRuleMatched
 	) {
@@ -362,31 +361,69 @@ export const resolveRouting = async (
 				updateCalibrationMatrix(input.calibration, decision.tier, verdict.tier);
 			}
 
-			decision = buildRoutingDecision(
-				config.profileName,
-				config.profile,
-				verdict.tier,
-				phaseForTier(verdict.tier),
-				cacheHit
-					? `Classifier (cached): ${verdict.reasoning}`
-					: `Classifier: ${verdict.reasoning}`,
-				config.thinkingOverrides,
-				true,
-			);
-			if (input.isBudgetExceeded && decision.tier === "high") {
-				decision.tier = "medium";
-				decision.phase = "implementation";
-				decision.reasoning = `Budget exceeded. Downgraded classifier decision to medium. (Original: ${decision.reasoning})`;
-				decision.isBudgetForced = true;
-			}
-			// P2 pin for classifier override (only on fresh classifier run, not cache hit)
-			if (!cacheHit && input.scope && config.pinConfig) {
-				setScopedPin(input.scope, decision.tier, "classifier", config.pinConfig);
+			// If pinned: use verdict for pin-pressure comparison, but don't override routing decision
+			// If not pinned: apply verdict to override routing decision
+			if (input.pinnedTier) {
+				// Pinned state: use classifier verdict for pin-pressure logic
+				if (input.scope && config.pinConfig) {
+					const threshold =
+						config.pinConfig.pinPressureThreshold ??
+						DEFAULT_PIN_PRESSURE_THRESHOLD;
+					const lapsed = incrementPinPressure(
+						input.scope,
+						verdict.tier, // classifier verdict is stronger signal than heuristic
+						threshold,
+						config.debug,
+					);
+					if (lapsed) {
+						// Pin lapsed — apply classifier verdict
+						decision = buildRoutingDecision(
+							config.profileName,
+							config.profile,
+							verdict.tier,
+							phaseForTier(verdict.tier),
+							cacheHit
+								? `Pin lapsed. Classifier (cached): ${verdict.reasoning}`
+								: `Pin lapsed. Classifier: ${verdict.reasoning}`,
+							config.thinkingOverrides,
+							true,
+						);
+						if (input.isBudgetExceeded && decision.tier === "high") {
+							decision.tier = "medium";
+							decision.phase = "implementation";
+							decision.reasoning = `Budget exceeded. Downgraded to medium. (Original: ${decision.reasoning})`;
+							decision.isBudgetForced = true;
+						}
+						clearScopedPin(input.scope);
+					}
+				}
+			} else {
+				// Not pinned: apply classifier verdict to override routing decision
+				decision = buildRoutingDecision(
+					config.profileName,
+					config.profile,
+					verdict.tier,
+					phaseForTier(verdict.tier),
+					cacheHit
+						? `Classifier (cached): ${verdict.reasoning}`
+						: `Classifier: ${verdict.reasoning}`,
+					config.thinkingOverrides,
+					true,
+				);
+				if (input.isBudgetExceeded && decision.tier === "high") {
+					decision.tier = "medium";
+					decision.phase = "implementation";
+					decision.reasoning = `Budget exceeded. Downgraded classifier decision to medium. (Original: ${decision.reasoning})`;
+					decision.isBudgetForced = true;
+				}
+				// P2 pin for classifier override (only on fresh run, not cache hit)
+				if (!cacheHit && input.scope && config.pinConfig) {
+					setScopedPin(input.scope, decision.tier, "classifier", config.pinConfig);
+				}
 			}
 		} else {
 			// Classifier was configured but failed — fall back to heuristic.
-			// In adaptive mode the pitfalls harness replaces matrix-based calibration;
-			// if the classifier can't produce a verdict we simply use the heuristic.
+			// This happens whether pinned or not; the pin doesn't prevent failure.
 			decision.reasoning = `Classifier unavailable, using heuristic: ${decision.reasoning}`;
 			decision.isHeuristic = true;
 		}

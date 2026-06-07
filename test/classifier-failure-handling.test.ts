@@ -71,7 +71,7 @@ describe("Classifier failure handling", () => {
 		expect(decision.reasoning).toMatch(/high|Classifier/i);
 	});
 
-	test("classifier skip when pinned tier is set", async () => {
+	test("classifier runs even when pinned, fails gracefully", async () => {
 		const input: RoutingInput = {
 			context: mockContext,
 			previousDecision: undefined,
@@ -90,12 +90,11 @@ describe("Classifier failure handling", () => {
 
 		const decision = await resolveRouting(input, config);
 
-		// Should use pinned tier
+		// When pinned, routing tier is pinned tier
 		expect(decision.tier).toBe("low");
 		
-		// Reasoning should mention pin, NOT classifier unavailable
+		// Classifier ran but failed, so tier stays pinned and reasoning reflects the pin
 		expect(decision.reasoning).toMatch(/Pinned to low tier/);
-		expect(decision.reasoning).not.toMatch(/Classifier unavailable/);
 	});
 
 	test("classifier skip when rule matched", async () => {
