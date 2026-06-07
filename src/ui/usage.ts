@@ -134,8 +134,15 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 	}
 
 	// Per-tier model lines
+	// Source of truth: modelCosts (all models seen this session from JSONL scan).
+	// Profile config is annotation-only — supplies tier label and fallback hierarchy.
+	// Models removed mid-session still appear in modelCosts; they render in an orphan block.
 	const TIERS = ["high", "medium", "low"] as const;
 	const modelLines: string[] = [];
+
+	// Track which model keys have been rendered (to identify orphans afterwards)
+	const renderedKeys = new Set<string>();
+
 	for (const tier of TIERS) {
 		const tierConfig = profile[tier];
 		try {
@@ -149,15 +156,33 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 			modelLines.push(
 				`  ${tierColor(tier, tier.toUpperCase().padEnd(8))}${modelId.padEnd(38)}${`${usageCount}x`.padStart(4)}   ${tierCostStr}`,
 			);
+			renderedKeys.add(tierConfig.model);
 			if (tierConfig.fallbacks?.length) {
 				for (const fb of tierConfig.fallbacks) {
 					const fbSlash = fb.indexOf("/");
 					const fbId = fbSlash >= 0 ? fb.slice(fbSlash + 1) : fb;
 					const fbUsage = modelUsage[fb]?.count ?? 0;
 					modelLines.push(`  ${" ".repeat(8)}└ ${fbId.padEnd(36)}${`${fbUsage}x`.padStart(4)}`);
+					renderedKeys.add(fb);
 				}
 			}
 		} catch { /* ignore bad model ref */ }
+	}
+
+	// Orphan block: models that were used this session but are no longer in the profile.
+	const orphans = Object.entries(modelUsage).filter(([key]) => !renderedKeys.has(key));
+	if (orphans.length > 0) {
+		modelLines.push("", theme.fg("dim", "  removed from profile:"));
+		for (const [key, usage] of orphans) {
+			const slashIdx = key.indexOf("/");
+			const modelId = slashIdx >= 0 ? key.slice(slashIdx + 1) : key;
+			const provider = slashIdx >= 0 ? key.slice(0, slashIdx) : "";
+			const registeredModel = provider ? modelRegistry.find(provider, modelId) : undefined;
+			const costStr = registeredModel?.cost ? `$${usage.cost.toFixed(4)}` : "";
+			modelLines.push(
+				`  ${theme.fg("dim", "?".padEnd(8))}${modelId.padEnd(38)}${`${usage.count}x`.padStart(4)}   ${costStr}`,
+			);
+		}
 	}
 
 	const lines = [headerLine, ...(treeCostLine ? [treeCostLine] : []), barLine, labelLine, "", ...modelLines];
