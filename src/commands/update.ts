@@ -16,14 +16,9 @@ export const handleUpdate = (
 				"Update unavailable: dev install detected.",
 				"",
 				"This extension is installed via local file path or symlink.",
-				"To enable updates, reinstall from npm:",
+				"To enable updates, install as an OMP plugin:",
 				"",
-				`  cd ~/.omp/agent/extensions/model-router`,
-				`  bun add @cakriwut/omp-model-router`,
-				"",
-				`Or reinstall via ${cliBinary} CLI:`,
-				`  ${cliBinary} uninstall model-router`,
-				`  ${cliBinary} install npm:@cakriwut/omp-model-router`,
+				`  ${cliBinary} plugin install @cakriwut/omp-model-router`,
 			].join("\n"),
 			"info",
 		);
@@ -49,7 +44,7 @@ export const handleUpdate = (
 
 		try {
 			const proc = Bun.spawn(
-				[cliBinary, "update", "npm:@cakriwut/omp-model-router"],
+				[cliBinary, "plugin", "install", "@cakriwut/omp-model-router", "--force"],
 				{ stdout: "pipe", stderr: "pipe" },
 			);
 
@@ -100,7 +95,7 @@ export const handleUpdate = (
 
 		try {
 			const proc = Bun.spawn(
-				[cliBinary, "update", "npm:@cakriwut/omp-model-router"],
+				[cliBinary, "plugin", "install", "@cakriwut/omp-model-router", "--force"],
 				{ stdout: "pipe", stderr: "pipe" },
 			);
 
