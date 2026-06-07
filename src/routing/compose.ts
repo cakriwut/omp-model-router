@@ -135,6 +135,12 @@ export interface RoutingConfig {
 	pitfalls?: string;
 	/** Path to classifierPrompt.jsonl for logging full prompts+verdicts. Only written on fresh sync calls. */
 	promptLogPath?: string;
+	/**
+	 * Called after a fresh (non-cached) classifier run to record the classifier model's
+	 * actual token usage and cost into the session's modelCosts map.
+	 * Receives the canonical model ref (e.g. "anthropic/claude-3-haiku-20240307") and usage.
+	 */
+	recordClassifierCost?: (modelRef: string, usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number }) => void;
 }
 
 /**
@@ -275,7 +281,7 @@ export const resolveRouting = async (
 	const resolvedScope = input.scope ?? input.state?.scope;
 	const isSubAgent = (resolvedScope?.parentSessionId) !== undefined;
 	let bucket: string | undefined;
-	let verdict: { tier: RouterTier; reasoning: string; classifierModelRef?: string } | undefined;
+	let verdict: { tier: RouterTier; reasoning: string; classifierModelRef?: string; classifierUsage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number } } | undefined;
 	if (
 		config.classifierModel &&
 		!isSubAgent &&
@@ -305,6 +311,7 @@ export const resolveRouting = async (
 		if (cacheHit && scope) {
 			verdict = scope.lastClassifierVerdict;
 			scope.classifierTurnsSinceRun += 1;
+			scope.classifierCacheHits += 1;
 		} else {
 			const classifierSpawnTime = Date.now();
 			const { runClassifier, resolveClassifierContextWindow } = await import("./index.js");
@@ -333,6 +340,11 @@ export const resolveRouting = async (
 				scope.lastClassifierKey = sig;
 				scope.lastClassifierVerdict = verdict;
 				scope.classifierTurnsSinceRun = 0;
+				scope.classifierInvocations += 1;
+				// Record classifier model cost on fresh run
+				if (verdict.classifierUsage && verdict.classifierModelRef && config.recordClassifierCost) {
+					config.recordClassifierCost(verdict.classifierModelRef, verdict.classifierUsage);
+				}
 			}
 			// Write prompt log on fresh call (not cache hit)
 			if (config.promptLogPath) {

@@ -124,6 +124,8 @@ export const handleUsage = (
 					llmCallsAttempted: state.calibration.llmCallsAttempted,
 					llmCallsFailed: state.calibration.llmCallsFailed,
 					matrix: state.calibration.matrix,
+					classifierInvocations: state.classifierInvocations,
+					classifierCacheHits: state.classifierCacheHits,
 				}
 			: undefined,
 	});

@@ -2,7 +2,7 @@
  * Routing orchestration — classifier logic + barrel re-exports.
  */
 
-import { type Context, streamSimple } from "@oh-my-pi/pi-ai";
+import { type Context, type AssistantMessageEvent, streamSimple } from "@oh-my-pi/pi-ai";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { parseCanonicalModelRef } from "../config";
 import { shortenModelRef } from "../ui/theme.js";
@@ -50,7 +50,7 @@ export const runClassifier = async (
 	toolCounts?: Record<string, number>,
 	pitfalls?: string,
 	contextWindow?: number,
-): Promise<{ tier: RouterTier; reasoning: string; classifierModelRef: string } | undefined> => {
+): Promise<{ tier: RouterTier; reasoning: string; classifierModelRef: string; classifierUsage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number } } | undefined> => {
 	const classifierModelRefs = Array.isArray(classifierModelRefsInput)
 		? classifierModelRefsInput
 		: [classifierModelRefsInput];
@@ -124,18 +124,28 @@ export const runClassifier = async (
 					maxTokens: 200,
 				});
 				let fullText = "";
-				for await (const event of stream) {
-					if (
-						event.type === "text_delta" &&
-						typeof (event as { delta?: unknown }).delta === "string"
-					) {
+				let classifierUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 0 };
+				for await (const rawEvent of stream) {
+					const event = rawEvent as AssistantMessageEvent;
+					if (event.type === "text_delta") {
 						const remaining = SYNC_CLASSIFIER_MAX_BUFFER - fullText.length;
 						if (remaining <= 0) { ac.abort(); break; }
 						// Slice delta to never exceed MAX_BUFFER regardless of chunk size
-						fullText += (event as { delta: string }).delta.slice(0, remaining);
+						fullText += event.delta.slice(0, remaining);
 						if (fullText.length >= SYNC_CLASSIFIER_MAX_BUFFER) {
 							ac.abort();
 							break;
+						}
+					} else if (event.type === "done") {
+						const u = event.message.usage;
+						if (u) {
+							classifierUsage = {
+								inputTokens: u.input ?? 0,
+								outputTokens: u.output ?? 0,
+								cacheReadTokens: u.cacheRead ?? 0,
+								cacheWriteTokens: u.cacheWrite ?? 0,
+								cost: u.cost?.total ?? 0,
+							};
 						}
 					}
 				}
@@ -149,7 +159,7 @@ export const runClassifier = async (
 
 				if (result) {
 					// Success! Return immediately
-					return { ...result, classifierModelRef };
+					return { ...result, classifierModelRef, classifierUsage };
 				}
 				// Parsing failed — log raw output for diagnostics, then try next model
 				if (debug) {

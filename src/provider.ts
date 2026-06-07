@@ -513,6 +513,8 @@ export const registerRouterProvider = (
 						pinConfig: { pinTimeout: state.currentConfig.pinTimeout, defaultPin: state.currentConfig.defaultPin, pinPressureThreshold: state.currentConfig.pinPressureThreshold },
 						pitfalls: pitfalls || undefined,
 						promptLogPath,
+						recordClassifierCost: (modelRef, usage) =>
+							state.recordModelCost(modelRef, "classifier", usage),
 					},
 				);
 

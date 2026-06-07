@@ -6,7 +6,7 @@ import type {
 import type { TierCounter, ModelCostEntry } from "../state";
 
 export interface ModelRegistryLookup {
-	find(provider: string, modelId: string): { cost?: unknown } | undefined;
+	find(provider: string, modelId: string): { cost?: { input: number; output: number; cacheRead: number; cacheWrite: number } | null } | undefined;
 }
 
 export interface CalibrationUsageInput {
@@ -15,6 +15,10 @@ export interface CalibrationUsageInput {
 	llmCallsAttempted: number;
 	llmCallsFailed: number;
 	matrix: number[][];
+	/** Fresh (non-cached) classifier LLM calls made in this session. */
+	classifierInvocations: number;
+	/** Classifier cache hits in this session. */
+	classifierCacheHits: number;
 }
 
 export interface UsageReportInput {
@@ -62,7 +66,8 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 	const totalDecisions = tierCounts.high + tierCounts.medium + tierCounts.low;
 
 	// Model cost breakdown from modelCosts map
-	const modelUsage: Record<string, { count: number; tier: string; cost: number; inputTokens: number; outputTokens: number }> = {};
+	// Model cost breakdown from modelCosts map
+	const modelUsage: Record<string, { count: number; tier: string; cost: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }> = {};
 	for (const [key, entry] of modelCosts) {
 		modelUsage[key] = {
 			count: entry.invocations,
@@ -70,6 +75,8 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 			cost: entry.cost,
 			inputTokens: entry.inputTokens,
 			outputTokens: entry.outputTokens,
+			cacheReadTokens: entry.cacheReadTokens,
+			cacheWriteTokens: entry.cacheWriteTokens,
 		};
 	}
 
@@ -169,8 +176,11 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 		} catch { /* ignore bad model ref */ }
 	}
 
-	// Orphan block: models that were used this session but are no longer in the profile.
-	const orphans = Object.entries(modelUsage).filter(([key]) => !renderedKeys.has(key));
+	// Orphan block: models used this session but no longer in the profile.
+	// Entries with tier="classifier" are excluded here — they go in the classifier block below.
+	const orphans = Object.entries(modelUsage).filter(
+		([key, u]) => !renderedKeys.has(key) && u.tier !== "classifier",
+	);
 	if (orphans.length > 0) {
 		modelLines.push("", theme.fg("dim", "  removed from profile:"));
 		for (const [key, usage] of orphans) {
@@ -185,20 +195,107 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 		}
 	}
 
-	const lines = [headerLine, ...(treeCostLine ? [treeCostLine] : []), barLine, labelLine, "", ...modelLines];
-	if (lastDecision) {
-	lines.push(
-		"",
-		`Last: ${tierColor(lastDecision.tier, lastDecision.tier)} → ${lastDecision.targetProvider}/${lastDecision.targetModelId} (${lastDecision.thinking})`,
-	);
+	// Classifier block: entries with tier="classifier" (recorded by recordClassifierCost)
+	const classifierEntries = Object.entries(modelUsage).filter(([, u]) => u.tier === "classifier");
+	if (classifierEntries.length > 0 || (opts.calibration && (opts.calibration.classifierInvocations + opts.calibration.classifierCacheHits) > 0)) {
+		const totalCalls = opts.calibration ? opts.calibration.classifierInvocations + opts.calibration.classifierCacheHits : 0;
+		const cachedCalls = opts.calibration ? opts.calibration.classifierCacheHits : 0;
+		modelLines.push("", theme.fg("dim", "  classifier:"));
+		if (classifierEntries.length > 0) {
+			for (const [key, usage] of classifierEntries) {
+				const slashIdx = key.indexOf("/");
+				const modelId = slashIdx >= 0 ? key.slice(slashIdx + 1) : key;
+				const provider = slashIdx >= 0 ? key.slice(0, slashIdx) : "";
+				const registeredModel = provider ? modelRegistry.find(provider, modelId) : undefined;
+				const costStr = registeredModel?.cost ? `$${usage.cost.toFixed(4)}` : "";
+				const cacheNote = cachedCalls > 0 ? `  (${totalCalls} calls, ${cachedCalls} cached)` : `  (${totalCalls} calls)`;
+				modelLines.push(
+					`  ${theme.fg("dim", "·".padEnd(8))}${modelId.padEnd(38)}${`${usage.count}x`.padStart(4)}   ${costStr}${theme.fg("dim", cacheNote)}`,
+				);
+			}
+		} else {
+			// calibration enabled but no cost data yet (model has no rates or hasn't run)
+			const cacheNote = cachedCalls > 0 ? `${totalCalls} calls, ${cachedCalls} cached` : `${totalCalls} calls`;
+			modelLines.push(`  ${theme.fg("dim", "·".padEnd(8))}${"(classifier)".padEnd(38)}${" ".repeat(4)}   ${theme.fg("dim", cacheNote)}`);
+		}
 	}
 
+	const lines = [headerLine, ...(treeCostLine ? [treeCostLine] : []), barLine, labelLine, "", ...modelLines];
+	if (lastDecision) {
+		lines.push(
+			"",
+			`Last: ${tierColor(lastDecision.tier, lastDecision.tier)} → ${lastDecision.targetProvider}/${lastDecision.targetModelId} (${lastDecision.thinking})`,
+		);
+	}
+
+	// ── Savings simulator ──────────────────────────────────────────────
+	// Reprojects actual token counts through each tier's model prices.
+	// Input tokens are identical regardless of model; output tokens may differ in
+	// practice but are treated as fixed here — this is an approximation, not an invoice.
+	const hasCostRates = (modelRef: string): boolean => {
+		const slash = modelRef.indexOf("/");
+		if (slash < 0) return false;
+		return !!modelRegistry.find(modelRef.slice(0, slash), modelRef.slice(slash + 1))?.cost;
+	};
+	const repriceTokens = (
+		inputTokens: number,
+		outputTokens: number,
+		cacheReadTokens: number,
+		cacheWriteTokens: number,
+		modelRef: string,
+	): number | undefined => {
+		const slash = modelRef.indexOf("/");
+		if (slash < 0) return undefined;
+		const reg = modelRegistry.find(modelRef.slice(0, slash), modelRef.slice(slash + 1));
+		const c = reg?.cost;
+		if (!c) return undefined;
+		return (
+			inputTokens      * (c.input      / 1_000_000) +
+			outputTokens     * (c.output     / 1_000_000) +
+			cacheReadTokens  * (c.cacheRead  / 1_000_000) +
+			cacheWriteTokens * (c.cacheWrite / 1_000_000)
+		);
+	};
+
+	// Aggregate all non-classifier invocations' tokens (profile models + orphans)
+	// Classifier cost is excluded — it is an overhead, not a routable turn cost.
+	const routableCosts = Object.values(modelUsage).filter(u => u.tier !== "classifier");
+	const hasTokenData = routableCosts.some(u => u.inputTokens > 0 || u.outputTokens > 0);
+
+	if (hasTokenData && hasCostRates(profile.high.model) && hasCostRates(profile.medium.model) && hasCostRates(profile.low.model)) {
+		let allHighCost = 0;
+		let allMediumCost = 0;
+		let allLowCost = 0;
+		for (const u of routableCosts) {
+			const h = repriceTokens(u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, profile.high.model);
+			const m = repriceTokens(u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, profile.medium.model);
+			const l = repriceTokens(u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, profile.low.model);
+			if (h !== undefined) allHighCost += h;
+			if (m !== undefined) allMediumCost += m;
+			if (l !== undefined) allLowCost += l;
+		}
+		// Router cost = actual JSONL sum (headerCost), excluding classifier overhead
+		const classifierCost = classifierEntries.reduce((s, [, u]) => s + u.cost, 0);
+		const routerCost = headerCost - classifierCost;
+
+		const savingPct = (cost: number): string =>
+			allHighCost > 0 ? `−${Math.round((1 - cost / allHighCost) * 100)}%` : "n/a";
+
+		lines.push(
+			"",
+			`  ${theme.fg("accent", `Savings vs all-high ($${allHighCost.toFixed(4)} baseline):`)}`,
+			`  ${"all-high".padEnd(12)}$${allHighCost.toFixed(4)}   ${theme.fg("dim", "─")}`,
+			`  ${"all-medium".padEnd(12)}$${allMediumCost.toFixed(4)}   ${theme.fg("dim", savingPct(allMediumCost))}`,
+			`  ${"all-low".padEnd(12)}$${allLowCost.toFixed(4)}   ${theme.fg("dim", savingPct(allLowCost))}`,
+			`  ${theme.fg("accent", "router".padEnd(12))}$${routerCost.toFixed(4)}   ${theme.fg("accent", savingPct(routerCost))}  ←`,
+		);
+	}
 
 	// ── Calibration stats ──────────────────────────────────────────────
 	if (opts.calibration) {
 		const cal = opts.calibration;
 		if (cal.totalComparisons > 0) {
-			const mismatchRate = cal.llmCallsAttempted > 0 
+			const mismatchRate = cal.llmCallsAttempted > 0
 				? (cal.totalComparisons - (cal.matrix[0][0] + cal.matrix[1][1] + cal.matrix[2][2])) / cal.totalComparisons
 				: 0;
 			const agreementRate = 1 - mismatchRate;
@@ -206,12 +303,12 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 			const failureRate = cal.llmCallsAttempted > 0
 				? cal.llmCallsFailed / cal.llmCallsAttempted
 				: 0;
-			
+
 			lines.push("");
 			lines.push(
 				`  ${theme.fg("accent", "Calibration")} ${cal.totalComparisons} comparisons | ${theme.fg(agreementPct >= 75 ? "success" : "warning", `${agreementPct}% agreement`)} | ${cal.llmCallsAttempted} LLM calls (${cal.llmCallsFailed} failed)`,
 			);
-			
+
 			if (failureRate > 0.5) {
 				lines.push(
 					`               ${theme.fg("warning", `⚠ High failure rate (${Math.round(failureRate * 100)}%) — check classifierModel config`)}`,

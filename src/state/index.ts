@@ -42,6 +42,10 @@ export interface SessionScope {
 	lastClassifierVerdict: { tier: RouterTier; reasoning: string; classifierModelRef?: string } | undefined;
 	/** Turns elapsed since classifier last ran (0 = ran this turn). */
 	classifierTurnsSinceRun: number;
+	/** Total fresh (non-cached) classifier LLM calls made in this session. */
+	classifierInvocations: number;
+	/** Total classifier cache hits in this session. */
+	classifierCacheHits: number;
 	/**
 	 * Monotonic count of user messages seen in this session.
 	 * Used as part of the classifier cache key.
@@ -263,14 +267,16 @@ export class RouterState {
 				modelCosts: isSibling
 					? new Map(previousScope.modelCosts)
 					: new Map(),
-				// Classifier cache — never carry forward (each session gets a fresh cache)
-				lastClassifierKey: undefined,
-				lastClassifierVerdict: undefined,
-				classifierTurnsSinceRun: 0,
-				// Monotonic user-message counter — carry forward for siblings
-				// (sibling sessions share the same user message stream)
-				userMessagesSeen: isSibling ? previousScope.userMessagesSeen : 0,
-				lastUserEntryId: isSibling ? previousScope.lastUserEntryId : undefined,
+			// Classifier cache — never carry forward (each session gets a fresh cache)
+			lastClassifierKey: undefined,
+			lastClassifierVerdict: undefined,
+			classifierTurnsSinceRun: 0,
+			classifierInvocations: isSibling ? previousScope.classifierInvocations : 0,
+			classifierCacheHits: isSibling ? previousScope.classifierCacheHits : 0,
+			// Monotonic user-message counter — carry forward for siblings
+			// (sibling sessions share the same user message stream)
+			userMessagesSeen: isSibling ? previousScope.userMessagesSeen : 0,
+			lastUserEntryId: isSibling ? previousScope.lastUserEntryId : undefined,
 			});
 			if (this.currentConfig.debug && !this.parentAttributionLogged.has(sessionId)) {
 				this.parentAttributionLogged.add(sessionId);
@@ -405,6 +411,8 @@ export class RouterState {
 				parent.tierCounter.high   += child.tierCounter.high;
 				parent.tierCounter.medium += child.tierCounter.medium;
 				parent.tierCounter.low    += child.tierCounter.low;
+				parent.classifierInvocations += child.classifierInvocations;
+				parent.classifierCacheHits   += child.classifierCacheHits;
 				// ── map merge ────────────────────────────────────────────────
 				this.mergeModelCosts(parent.modelCosts, child.modelCosts);
 				// SKIP: debugHistory, lastDecision — parent retains its own routing trace.
@@ -511,6 +519,8 @@ export class RouterState {
 	set lastClassifierVerdict(v: { tier: RouterTier; reasoning: string } | undefined) { this.scope.lastClassifierVerdict = v; }
 	get classifierTurnsSinceRun(): number { return this.scope.classifierTurnsSinceRun; }
 	set classifierTurnsSinceRun(v: number) { this.scope.classifierTurnsSinceRun = v; }
+	get classifierInvocations(): number { return this.scope.classifierInvocations; }
+	get classifierCacheHits(): number { return this.scope.classifierCacheHits; }
 	get userMessagesSeen(): number { return this.scope.userMessagesSeen; }
 	set userMessagesSeen(v: number) { this.scope.userMessagesSeen = v; }
 	get lastUserEntryId(): string | undefined { return this.scope.lastUserEntryId; }

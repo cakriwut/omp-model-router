@@ -250,6 +250,8 @@ describe("3.x finalizeChildSession rollup completeness", () => {
 			accumulatedCost: true,
 			tierCounter: true,
 			modelCosts: true,
+			classifierInvocations: true,
+			classifierCacheHits: true,
 		};
 		const SKIPPED_FIELDS: Record<string, true> = {
 			sessionId: true,
