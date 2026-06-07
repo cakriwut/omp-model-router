@@ -160,14 +160,13 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 			const trackedCost = modelUsage[tierConfig.model]?.cost ?? 0;
 			const registeredModel = provider ? modelRegistry.find(provider, modelId) : undefined;
 			const tierCostStr = registeredModel?.cost ? `$${trackedCost.toFixed(4)}` : "";
-			// Skip primary row if this model was already rendered as a fallback of a higher tier.
-			// Still mark it rendered and render its own fallbacks below.
-			if (!renderedKeys.has(tierConfig.model)) {
-				modelLines.push(
-					`  ${tierColor(tier, tier.toUpperCase().padEnd(8))}${modelId.padEnd(38)}${`${usageCount}x`.padStart(4)}   ${tierCostStr}`,
-				);
-				renderedKeys.add(tierConfig.model);
-			}
+			// Always render the tier primary row — the tier label (HIGH/MEDIUM/LOW) must appear
+			// even if this model also appears as a fallback of a higher tier.
+			// Fallback rows (└) are what get deduplicated below.
+			modelLines.push(
+				`  ${tierColor(tier, tier.toUpperCase().padEnd(8))}${modelId.padEnd(38)}${`${usageCount}x`.padStart(4)}   ${tierCostStr}`,
+			);
+			renderedKeys.add(tierConfig.model);
 			if (tierConfig.fallbacks?.length) {
 				for (const fb of tierConfig.fallbacks) {
 					const fbSlash = fb.indexOf("/");
