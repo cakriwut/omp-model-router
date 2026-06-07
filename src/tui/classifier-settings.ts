@@ -266,7 +266,16 @@ export class ClassifierSettingsComponent implements Component {
 		}
 		const row = rows[this.#cursor];
 		if (row?.kind === "model") {
-			return "ENTER replace · ctrl+a add · ctrl+d remove · ctrl+s save · ESC back";
+			const models = this.#getModels();
+			const i = row.modelIndex!;
+			const canUp = i > 0;
+			const canDown = i < models.length - 1;
+			const moveHints = [
+				canUp ? "ctrl+u ▲" : "",
+				canDown ? "ctrl+k ▼" : "",
+			].filter(Boolean).join(" · ");
+			const base = "ENTER replace · ctrl+a add · ctrl+d remove";
+			return moveHints ? `${base} · ${moveHints} · ctrl+s save · ESC back` : `${base} · ctrl+s save · ESC back`;
 		}
 		return "SPACE toggle/cycle · ENTER edit · ctrl+a add model · ctrl+s save · ESC back";
 	}
@@ -359,6 +368,35 @@ export class ClassifierSettingsComponent implements Component {
 			}
 			return;
 		}
+
+		// Move model up in chain (ctrl+u)
+		if (matchesKey(data, "ctrl+u")) {
+			if (row.kind === "model" && row.modelIndex !== undefined && row.modelIndex > 0) {
+				const models = this.#getModels();
+				const i = row.modelIndex;
+				[models[i - 1], models[i]] = [models[i], models[i - 1]];
+				this.#setModels(models);
+				// Keep cursor on the moved item
+				this.#cursor -= 1;
+			}
+			return;
+		}
+
+		// Move model down in chain (ctrl+k)
+		if (matchesKey(data, "ctrl+k")) {
+			if (row.kind === "model" && row.modelIndex !== undefined) {
+				const models = this.#getModels();
+				const i = row.modelIndex;
+				if (i < models.length - 1) {
+					[models[i], models[i + 1]] = [models[i + 1], models[i]];
+					this.#setModels(models);
+					// Keep cursor on the moved item
+					this.#cursor += 1;
+				}
+			}
+			return;
+		}
+
 
 		// Save
 		if (matchesKey(data, "ctrl+s")) {
