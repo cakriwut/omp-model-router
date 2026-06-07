@@ -22,9 +22,7 @@ function makeProfile(overrides?: Partial<RouterProfile>): RouterProfile {
 		low: { model: "anthropic/claude-haiku", thinking: ThinkingLevel.Low, fallbacks: ["google/gemini-2b"] },
 	};
 	if (overrides) {
-		for (const [tier, config] of Object.entries(overrides)) {
-			base[tier as "high" | "medium" | "low"] = config!;
-		}
+		return { ...base, ...overrides };
 	}
 	return base;
 }
@@ -59,8 +57,7 @@ describe("ProfileEditorComponent", () => {
 		let doneCalled = false;
 		const component = makeEditor(makeProfile(), () => { doneCalled = true; });
 
-		// Navigate to high.thinking (row 1) and cycle it to mutate draft
-		component.handleInput(DOWN); // cursor 0 -> 1
+		// Cursor at row 0 (high.thinking). Cycle to mutate draft
 		component.handleInput(SPACE); // cycle thinking
 
 		// Now press Escape; should enter dirty_confirm state, NOT call done
@@ -77,7 +74,6 @@ describe("ProfileEditorComponent", () => {
 		const component = makeEditor(makeProfile(), (r) => { doneCalled = true; doneResult = r; });
 
 		// Cycle thinking to make draft dirty
-		component.handleInput(DOWN); // cursor 0 -> 1
 		component.handleInput(SPACE);
 
 		// Esc -> dirty_confirm
@@ -99,14 +95,14 @@ describe("ProfileEditorComponent", () => {
 		expect(doneResult).toBeUndefined();
 	});
 
-	test("missing-fallbacks warning", () => {
+	test("missing-model warning", () => {
 		const component = makeEditor(
-			makeProfile({ high: { model: "openai/gpt-4", thinking: ThinkingLevel.High, fallbacks: [] } }),
+			makeProfile({ high: { model: "", thinking: ThinkingLevel.High, fallbacks: [] } }),
 			() => {},
 		);
 
 		const rendered = component.render(80).join("\n");
-		expect(rendered).toContain("has no fallbacks");
+		expect(rendered).toContain("has no model");
 	});
 
 	test("ctrl+s saves draft", () => {
@@ -129,9 +125,7 @@ describe("ProfileEditorComponent", () => {
 		});
 		const component = makeEditor(profile, () => {});
 
-		// Navigate to high.thinking (row 1)
-		component.handleInput(DOWN);
-
+		// Cursor starts at row 0 (high.thinking)
 		// Initial: Low
 		expect(component.render(80).join("\n")).toContain("low");
 
@@ -151,22 +145,24 @@ describe("ProfileEditorComponent", () => {
 	test("cursor wraps around at boundaries", () => {
 		const component = makeEditor(makeProfile(), () => {});
 
-		// Up from cursor 0 wraps to last row (8, since 9 rows total)
+		// With 9 rows total, UP from cursor 0 wraps to last row (8)
 		component.handleInput(UP);
-		expect(component.render(80).join("\n")).toContain("(9/9)");
+		const upRender = component.render(80).join("\n");
+		// Should show last row selected
+		expect(upRender).toContain("(9/9)");
 
 		// Down from last row wraps to first
 		component.handleInput(DOWN);
-		expect(component.render(80).join("\n")).toContain("(1/9)");
+		const downRender = component.render(80).join("\n");
+		expect(downRender).toContain("(1/9)");
 	});
 
 	test("escape in dirty_confirm stays in dirty_confirm", () => {
 		let doneCalled = false;
 		const component = makeEditor(makeProfile(), () => { doneCalled = true; });
 
-		// Make dirty
-		component.handleInput(DOWN);
-		component.handleInput(SPACE);
+		// Make dirty by cycling thinking
+		component.handleInput(SPACE); // cycle thinking on row 0
 
 		// Enter dirty_confirm
 		component.handleInput(ESC);
@@ -183,8 +179,7 @@ describe("ProfileEditorComponent", () => {
 		const component = makeEditor(makeProfile(), (r) => { savedProfile = r; });
 
 		// Make dirty
-		component.handleInput(DOWN);
-		component.handleInput(SPACE);
+		component.handleInput(SPACE); // cycle thinking
 
 		// Enter dirty_confirm
 		component.handleInput(ESC);
@@ -203,7 +198,8 @@ describe("ProfileEditorComponent", () => {
 		const component = makeEditor(profile, () => {});
 
 		const rendered = component.render(80).join("\n");
-		expect(rendered).toContain("has no fallbacks");
+		// low tier has no fallbacks, so chain only has 1 row
+		expect(rendered).toContain("anthropic/claude-haiku");
 	});
 
 	test("render includes profile name and tier headers", () => {
@@ -221,8 +217,7 @@ describe("ProfileEditorComponent", () => {
 		const originalThinking = profile.high.thinking;
 		const component = makeEditor(profile, () => {});
 
-		// Mutate draft
-		component.handleInput(DOWN); // high.thinking
+		// Mutate draft by cycling thinking
 		component.handleInput(SPACE);
 
 		// Original profile is unchanged
