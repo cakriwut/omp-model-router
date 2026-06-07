@@ -197,6 +197,8 @@ export interface RoutingDecision {
 	isContextTriggered?: boolean;
 	isBudgetForced?: boolean;
 	isRuleMatched?: boolean;
+	/** Classifier was configured but produced no verdict; heuristic decided */
+	isHeuristic?: boolean;
 	isEmbargoed?: boolean;
 	embargoTimeRemaining?: number;
 	/** Tool-mix bucket computed during routing (carried for tracing/logging) */

@@ -215,24 +215,21 @@ function discoverSessions(
 		let sessionTimestamp = "";
 
 		try {
+			// classifierPrompt.jsonl lives at <project>/<sessionId>/classifierPrompt.jsonl
+			// Session header JSONL lives at <project>/<sessionId>.jsonl (sibling of sessionDir)
 			const sessionDir = dirname(classifierPath);
-			const sessionFiles = readdirSync(sessionDir);
-			const sessionJsonl = sessionFiles.find(f => f.endsWith(".jsonl") && !f.includes("Debug") && !f.includes("classifier"));
+			const sessionJsonlPath = sessionDir + ".jsonl";
+			const content = readFileSync(sessionJsonlPath, "utf-8");
+			const firstLine = content.split("\n")[0];
 
-			if (sessionJsonl) {
-				const sessionPath = join(sessionDir, sessionJsonl);
-				const content = readFileSync(sessionPath, "utf-8");
-				const firstLine = content.split("\n")[0];
-
-				if (firstLine) {
-					const header: unknown = JSON.parse(firstLine);
-					if (typeof header === "object" && header !== null) {
-						const h = header as Record<string, unknown>;
-						if (h.type === "session") {
-							sessionId = String(h.id ?? "");
-							sessionTitle = String(h.title ?? "");
-							sessionTimestamp = String(h.timestamp ?? "");
-						}
+			if (firstLine) {
+				const header: unknown = JSON.parse(firstLine);
+				if (typeof header === "object" && header !== null) {
+					const h = header as Record<string, unknown>;
+					if (h.type === "session") {
+						sessionId = String(h.id ?? "");
+						sessionTitle = String(h.title ?? "");
+						sessionTimestamp = String(h.timestamp ?? "");
 					}
 				}
 			}

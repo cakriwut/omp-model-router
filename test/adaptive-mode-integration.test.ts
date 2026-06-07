@@ -68,6 +68,8 @@ describe("Adaptive mode classifier integration", () => {
 		
 		// isClassifier flag should be false
 		expect(decision.isClassifier).toBeFalsy();
+		// isHeuristic flag should be true (classifier configured but no verdict)
+		expect(decision.isHeuristic).toBe(true);
 	});
 
 	test("adaptive mode: when classifier is skipped (pinned), reasoning should NOT mention classifier", async () => {

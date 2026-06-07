@@ -436,9 +436,9 @@ export class LogViewerComponent implements Component {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatShortTimestamp(ts: string): string {
-	// "2026-06-05T12:34:56.789Z" → "06-05 12:34"
-	const m = ts.match(/(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-	if (m) return `${m[1]}-${m[2]} ${m[3]}:${m[4]}`;
+	// "2026-06-05T12:34:56.789Z" → "05-06-2026 12:34"
+	const m = ts.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+	if (m) return `${m[3]}-${m[2]}-${m[1]} ${m[4]}:${m[5]}`;
 	return ts.slice(0, 16);
 }
 

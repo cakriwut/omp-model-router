@@ -388,6 +388,7 @@ export const resolveRouting = async (
 			// In adaptive mode the pitfalls harness replaces matrix-based calibration;
 			// if the classifier can't produce a verdict we simply use the heuristic.
 			decision.reasoning = `Classifier unavailable, using heuristic: ${decision.reasoning}`;
+			decision.isHeuristic = true;
 		}
 	}
 	

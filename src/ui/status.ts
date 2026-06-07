@@ -86,6 +86,7 @@ const getDecisionFlags = (decision: RoutingDecision): string[] => {
 	if (decision.isContextTriggered) flags.push("ctx");
 	if (decision.isBudgetForced) flags.push("budget");
 	if (decision.isRuleMatched) flags.push("rule");
+	if (decision.isHeuristic) flags.push("heuristic");
 	return flags;
 };
 
