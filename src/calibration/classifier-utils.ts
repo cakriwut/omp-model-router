@@ -197,6 +197,32 @@ export function sanitizeRoleMarkers(text: string): string {
 }
 
 /**
+ * Neutralize remaining angle-bracket tokens in user/assistant text before
+ * it is placed inside a prompt XML block.
+ *
+ * The classifier prompt uses <tiers>, <pitfalls>, <history>, <activity>,
+ * <signals>, and <request> as structural delimiters.  Any <tag> fragment
+ * surviving from user input could be misread as a structural tag by the
+ * model or, in adversarial cases, used to inject a fake block boundary.
+ *
+ * Paired blocks with inner content are already stripped by stripForUserMessage /
+ * extractUserBareText / shakeForClassifier.  This function catches what those
+ * leave behind: lone opening tags, self-closing tags, closing tags, and short
+ * inline angle-bracket tokens (e.g. <br/>, <foo>, </bar>, <current message>).
+ *
+ * Strategy: replace <...> with [...] — brackets are structurally inert in the
+ * prompt but preserve readability so the classifier still sees the token shape.
+ * Cap inner content at 120 chars to avoid matching JS generics or comparisons.
+ */
+export function sanitizeAngleBrackets(text: string): string {
+	// Match any remaining <...> token (open, close, self-closing, inline annotation).
+	// The inner content cap (120 chars) avoids false-positive matches on things
+	// like a < b > c comparisons or TypeScript generics in pasted code.
+	return text.replace(/<([^>]{0,120})>/g, (_match, inner: string) => `[${inner}]`);
+}
+
+
+/**
  * Truncate `text` to at most `budget` chars, breaking at the last word
  * boundary (space or newline) within the budget. Appends "…" when cut.
  */
@@ -246,7 +272,7 @@ export function getConversationSummary(
 			if (plain.length < 20) continue;
 			const firstLine = plain.split("\n")[0].toLowerCase();
 			if (/^(please |proceed |let me know|could you |can you provide|i need more|alternatively)/.test(firstLine)) continue;
-			const truncated = shakeForClassifier(sanitizeRoleMarkers(plain), maxMsgChars);
+			const truncated = shakeForClassifier(sanitizeAngleBrackets(sanitizeRoleMarkers(plain)), maxMsgChars);
 			if (!truncated) continue;
 			if (totalChars + truncated.length > maxHistoryChars) break;
 			entries.unshift(`B: ${truncated}`);
@@ -264,7 +290,7 @@ export function getConversationSummary(
 				continue;
 			}
 			if (totalChars + bare.length > maxHistoryChars) break;
-			entries.unshift(`A: ${sanitizeRoleMarkers(bare)}`);
+			entries.unshift(`A: ${sanitizeAngleBrackets(sanitizeRoleMarkers(bare))}`);
 			totalChars += bare.length;
 		}
 	}
@@ -371,7 +397,7 @@ export function buildClassifierPrompt(
 ): string {
 	const b = computeBudgets(contextWindow);
 
-	const promptText     = sanitizeRoleMarkers(stripForUserMessage(getLastUserText(context), b.maxPromptChars));
+	const promptText     = sanitizeAngleBrackets(sanitizeRoleMarkers(stripForUserMessage(getLastUserText(context), b.maxPromptChars)));
 	const historyText    = getConversationSummary(context, 12, b.maxMsgChars, b.maxHistoryChars);
 	const pitfallsSection = pitfalls ? truncateAtWord(pitfalls, b.maxPitfallsChars) : undefined;
 	const signals        = detectSignals(context);

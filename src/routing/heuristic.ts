@@ -13,6 +13,7 @@ import type {
 	RoutingDecision,
 	RoutingRule,
 	RouterThinkingByTier,
+	TaskType,
 } from "../types";
 import {
 	hasImageAttachment,
@@ -187,6 +188,118 @@ const IMPLEMENTATION_MATCHER = buildKeywordMatcher(IMPLEMENTATION_KEYWORDS);
 const LOOKUP_MATCHER = buildKeywordMatcher(LOOKUP_KEYWORDS);
 const GIT_MATCHER = buildKeywordMatcher(GIT_KEYWORDS);
 
+// ─── Task-type keyword matchers ───────────────────────────────────────────────
+
+const CODING_KEYWORDS: readonly string[] = [
+	"implement",
+	"code",
+	"function",
+	"class",
+	"algorithm",
+	"script",
+	"program",
+	"debug",
+	"compile",
+	"unit test",
+	"integration test",
+	"refactor",
+	"api",
+	"endpoint",
+	"library",
+	"module",
+	"package",
+	"dependency",
+	"bug",
+	"exception",
+	"python",
+	"javascript",
+	"typescript",
+	"rust",
+	"golang",
+	"java",
+	"html",
+	"css",
+	"sql",
+	"regex",
+	"crud",
+	"frontend",
+	"backend",
+	"database",
+	"server",
+	"cli",
+	"dockerfile",
+	"terraform",
+];
+
+const RESEARCH_KEYWORDS: readonly string[] = [
+	"explain",
+	"how does",
+	"what is",
+	"why does",
+	"compare",
+	"difference between",
+	"pros and cons",
+	"trade-off",
+	"literature",
+	"paper",
+	"study",
+	"investigate",
+	"analyze",
+	"analysis",
+];
+
+const MATH_KEYWORDS: readonly string[] = [
+	"calculate",
+	"compute",
+	"solve",
+	"equation",
+	"formula",
+	"probability",
+	"statistics",
+	"integral",
+	"derivative",
+	"matrix",
+	"vector",
+	"optimize",
+	"proof",
+	"theorem",
+	"linear regression",
+	"gradient",
+];
+
+const WRITING_KEYWORDS: readonly string[] = [
+	"draft",
+	"essay",
+	"blog",
+	"article",
+	"email",
+	"letter",
+	"story",
+	"creative writing",
+	"prose",
+	"narrative",
+	"copywrite",
+];
+
+const SUMMARIZATION_KEYWORDS: readonly string[] = [
+	"summarize",
+	"summary",
+	"tl;dr",
+	"tldr",
+	"recap",
+	"condense",
+	"brief overview",
+	"key points",
+	"main points",
+	"highlights",
+];
+
+const CODING_TASK_MATCHER = buildKeywordMatcher(CODING_KEYWORDS);
+const RESEARCH_TASK_MATCHER = buildKeywordMatcher(RESEARCH_KEYWORDS);
+const MATH_TASK_MATCHER = buildKeywordMatcher(MATH_KEYWORDS);
+const WRITING_TASK_MATCHER = buildKeywordMatcher(WRITING_KEYWORDS);
+const SUMMARIZATION_TASK_MATCHER = buildKeywordMatcher(SUMMARIZATION_KEYWORDS);
+
 /**
  * Returns true if any keyword in the matcher appears in text, using
  * word-boundary matching for single-word keywords and substring matching
@@ -226,6 +339,36 @@ export const containsAny = (text: string, keywords: string[]): boolean => {
 		if (keyword.includes(" ")) return text.includes(keyword);
 		return new RegExp(`\\b${keyword}\\b`, "i").test(text);
 	});
+};
+
+/**
+ * Detect the most likely task type from user prompt text.
+ * Scores each type by keyword match count and returns the winner,
+ * or undefined if no keywords match (avoids false positives on short prompts).
+ *
+ * Used to auto-select a task-type-specialized profile when one is configured.
+ */
+export const detectTaskType = (text: string): TaskType | undefined => {
+	const t = text.toLowerCase();
+	let best: TaskType | undefined;
+	let bestScore = 0;
+
+	const candidates: [TaskType, KeywordMatcher][] = [
+		["coding", CODING_TASK_MATCHER],
+		["research", RESEARCH_TASK_MATCHER],
+		["math", MATH_TASK_MATCHER],
+		["writing", WRITING_TASK_MATCHER],
+		["summarization", SUMMARIZATION_TASK_MATCHER],
+	];
+	for (const [type, matcher] of candidates) {
+		const score = countKeywordMatches(t, matcher);
+		if (score > bestScore) {
+			bestScore = score;
+			best = type;
+		}
+	}
+	// Require at least 1 match — avoids routing generic short prompts
+	return bestScore >= 1 ? best : undefined;
 };
 
 // ─── Routing primitives ───────────────────────────────────────────────────────

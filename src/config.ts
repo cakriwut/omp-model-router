@@ -12,6 +12,7 @@ import type {
 	ParsedConfigFile,
 	RouterTier,
 	RoutingRule,
+	TaskType,
 } from "./types";
 
 export const ROUTER_TIERS = ["high", "medium", "low"] as const;
@@ -282,7 +283,12 @@ export const normalizeConfig = (raw: RouterConfig): ConfigLoadResult => {
 	const fallbackAuto = FALLBACK_CONFIG.profiles.auto;
 
 	for (const [name, profile] of Object.entries(raw.profiles ?? {})) {
+		const validTaskTypes: readonly string[] = ["coding", "research", "math", "writing", "summarization"];
+		const rawTaskType = (profile as RouterProfile | undefined)?.taskType;
+		const taskType: TaskType | undefined =
+			rawTaskType && validTaskTypes.includes(rawTaskType) ? rawTaskType : undefined;
 		normalizedProfiles[name] = {
+			...(taskType !== undefined ? { taskType } : {}),
 			high: normalizeTierConfig(
 				profile?.high,
 				fallbackAuto.high,
@@ -494,4 +500,21 @@ export const patchConfigFile = (
 	} catch {
 		return false;
 	}
+};
+
+/**
+ * Find the first profile that declares `taskType === type`.
+ * Returns the profile name or undefined if none matches.
+ * Profiles are checked in sorted order for determinism.
+ */
+export const resolveProfileForTaskType = (
+	config: RouterConfig,
+	taskType: TaskType,
+): string | undefined => {
+	for (const name of profileNames(config)) {
+		if (config.profiles[name]?.taskType === taskType) {
+			return name;
+		}
+	}
+	return undefined;
 };

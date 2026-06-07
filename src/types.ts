@@ -4,6 +4,18 @@ import type { CalibrationConfig } from "./calibration/types";
 export type RouterTier = "high" | "medium" | "low";
 export type RouterPin = RouterTier | "auto";
 
+/**
+ * Declared purpose of a profile. When set, the router auto-selects this profile
+ * for matching task types instead of always using defaultProfile.
+ * Profiles without taskType are never auto-selected — they act as manual presets.
+ */
+export type TaskType =
+	| "coding"
+	| "research"
+	| "math"
+	| "writing"
+	| "summarization";
+
 export type ScopedPinSource =
 	| "user"
 	| "heuristic"
@@ -88,6 +100,14 @@ export interface AutoUpgradeConfig {
 
 
 export interface RouterProfile {
+	/**
+	 * Optional task-type declaration. When set, the router auto-selects this profile
+	 * when the detected task type matches, instead of falling back to defaultProfile.
+	 * Only one profile should declare each taskType; if multiple do, the first
+	 * alphabetically wins (deterministic but arbitrary — avoid duplicates).
+	 * Profiles without taskType are never auto-selected and serve as manual presets.
+	 */
+	taskType?: TaskType;
 	high: RoutedTierConfig;
 	medium: RoutedTierConfig;
 	low: RoutedTierConfig;

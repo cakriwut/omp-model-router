@@ -14,12 +14,14 @@ import type {
 	ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent";
 import type { RoutingDecision } from "./types";
-import { profileNames, parseCanonicalModelRef, ROUTER_TIERS } from "./config";
+import { profileNames, parseCanonicalModelRef, ROUTER_TIERS, resolveProfileForTaskType } from "./config";
 import { resolveEffectivePin, setScopedPin } from "./routing/pin";
 import {
 	resolveRouting,
 	extractTextFromContent,
 	hasImageAttachment,
+	getLastUserText,
+	detectTaskType,
 } from "./routing";
 import type { RouterState } from "./state";
 import { loadPitfalls } from "./calibration/pitfalls";
@@ -453,8 +455,36 @@ export const registerRouterProvider = (
 						throw new Error(`Unknown router profile: ${model.id}`);
 					}
 
-					state.selectedProfile = model.id;
-					state.routerEnabled = true;
+
+				// ── Task-type profile selection ───────────────────────────────────────
+				// If the active profile is generic (no taskType declared), detect the
+				// task type from the prompt and redirect to a task-type profile if one
+				// exists. When the user is already on a task-specific profile, skip.
+				let effectiveProfileName = model.id;
+				let effectiveProfile = profile;
+				if (!profile.taskType) {
+					const lastText = getLastUserText(context);
+					if (lastText) {
+						const detectedType = detectTaskType(lastText);
+						if (detectedType) {
+							const taskProfileName = resolveProfileForTaskType(state.currentConfig, detectedType);
+							const taskProfile = taskProfileName
+								? state.currentConfig.profiles[taskProfileName]
+								: undefined;
+							if (taskProfileName && taskProfile) {
+								effectiveProfileName = taskProfileName;
+								effectiveProfile = taskProfile;
+								if (state.currentConfig.debug) {
+									console.log(
+										`[model-router] task-type: detected="${detectedType}" profile="${model.id}"→"${taskProfileName}"`,
+									);
+								}
+							}
+						}
+					}
+				}
+				state.selectedProfile = effectiveProfileName;
+				state.routerEnabled = true;
 
 					const isBudgetExceeded =
 						state.currentConfig.maxSessionBudget !== undefined &&
@@ -502,9 +532,9 @@ export const registerRouterProvider = (
 						state: state,
 					},
 					{
-						profileName: model.id,
-						profile,
-						thinkingOverrides: state.thinkingByProfile[model.id],
+					profileName: effectiveProfileName,
+					profile: effectiveProfile,
+					thinkingOverrides: state.thinkingByProfile[effectiveProfileName],
 						phaseBias: state.currentConfig.phaseBias ?? 0.5,
 						rules: state.currentConfig.rules,
 						classifierModel: effectiveClassifierModel,
@@ -536,7 +566,7 @@ export const registerRouterProvider = (
 					const imageAttached = hasImageAttachment(context);
 					let modelsToTry = [
 						decision.targetLabel,
-						...(profile[decision.tier].fallbacks ?? []),
+						...(effectiveProfile[decision.tier].fallbacks ?? []),
 					];
 					if (imageAttached) {
 						const filtered = modelsToTry.filter((ref) =>
@@ -634,7 +664,7 @@ export const registerRouterProvider = (
 
 
 						const thinkingOverride = actions.getThinkingOverride(
-							model.id,
+							effectiveProfileName,
 							decision.tier,
 						);
 						const effectiveThinking = thinkingOverride ?? decision.thinking;
