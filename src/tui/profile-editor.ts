@@ -4,8 +4,6 @@ import type { KeybindingsManager, Theme, ModelRegistry } from "@oh-my-pi/pi-codi
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { RouterProfile, RouterTier } from "../types";
 import { ModelPickerComponent } from "./model-picker";
-import { FallbackPickerComponent } from "./fallback-picker";
-import { shortenModelRef } from "../ui/theme.js";
 
 const TIERS: readonly RouterTier[] = ["high", "medium", "low"] as const;
 const THINKING_CYCLE: readonly ThinkingLevel[] = [
@@ -13,33 +11,26 @@ const THINKING_CYCLE: readonly ThinkingLevel[] = [
 	ThinkingLevel.Medium,
 	ThinkingLevel.High,
 ] as const;
-type FieldKind = "model" | "thinking" | "fallbacks";
-const FIELDS: readonly FieldKind[] = ["model", "thinking", "fallbacks"] as const;
 
-interface Row {
+// Dynamic rows: 'thinking' and model/fallback chain entries
+export type RowKind = "thinking" | "chain";
+export interface Row {
 	tier: RouterTier;
-	field: FieldKind;
+	kind: RowKind;
+	/** for chain rows, index in [model, ...fallbacks] */
+	chainIndex?: number;
 }
-
-const ROWS: readonly Row[] = TIERS.flatMap((tier) =>
-	FIELDS.map((field) => ({ tier, field }) satisfies Row),
-);
 
 type EditorState = "editing" | "dirty_confirm";
 
-/** Active sub-view state (model picker or fallback picker). */
-type SubView =
-	| { kind: "model"; tier: RouterTier; component: ModelPickerComponent }
-	| { kind: "fallbacks"; tier: RouterTier; component: FallbackPickerComponent };
-
 /**
  * Profile editor component with three tier sections (HIGH / MEDIUM / LOW),
- * each with `model`, `thinking`, and `fallbacks` rows.
+ * each with a `thinking` row and dynamic model chain rows.
  *
- * Submenus:
- * - `model` row → opens {@link ModelPickerComponent} inline, result updates `draft.{tier}.model`.
- * - `fallbacks` row → opens {@link FallbackPickerComponent} inline, result updates `draft.{tier}.fallbacks`.
- * - `thinking` row → cycles through `low → medium → high → low` via SPACE.
+ * Each tier shows:
+ * - thinking row → cycles through `low → medium → high → low` via SPACE
+ * - chain rows (model + fallbacks) → numbered rows with CTRL+U/K (move), 
+ *   CTRL+A (add), CTRL+D (delete), Enter/Space to replace
  *
  * Exit paths:
  * - `S` → `done(draft)`
@@ -47,7 +38,7 @@ type SubView =
  * - `Esc` (dirty) → enters `dirty_confirm`; then `S` saves, `y` discards (`done(undefined)`),
  *   `n` returns to `editing`.
  *
- * Sub-views are rendered inline — ESC in a sub-view navigates back to the
+ * Sub-view (ModelPickerComponent) is rendered inline — ESC in a sub-view navigates back to the
  * editor (not out of the entire component).
  */
 export class ProfileEditorComponent implements Component {
@@ -62,7 +53,7 @@ export class ProfileEditorComponent implements Component {
 	#draft: RouterProfile;
 	#cursor = 0;
 	#state: EditorState = "editing";
-	#subView: SubView | undefined;
+	#subView: ModelPickerComponent | undefined;
 
 	constructor(
 		tui: TUI,
@@ -89,12 +80,46 @@ export class ProfileEditorComponent implements Component {
 		// No cached state to invalidate; all rendering is derived from #draft.
 	}
 
+	// ─── Rows ──────────────────────────────────────────────────────────────
+
+	#buildRows(): Row[] {
+		const rows: Row[] = [];
+		for (const tier of TIERS) {
+			// Add thinking row for this tier
+			rows.push({ tier, kind: "thinking" });
+			
+			// Add chain rows for [model, ...fallbacks]
+			const cfg = this.#draft[tier];
+			const fallbacks = cfg.fallbacks ?? [];
+			// Model is always present; chain = [model, ...fallbacks]
+			for (let i = 0; i <= fallbacks.length; i++) {
+				rows.push({ tier, kind: "chain", chainIndex: i });
+			}
+		}
+		return rows;
+	}
+
+	#getChainForTier(tier: RouterTier): string[] {
+		const cfg = this.#draft[tier];
+		const fallbacks = cfg.fallbacks ?? [];
+		return [cfg.model, ...fallbacks];
+	}
+
+	#setChainForTier(tier: RouterTier, chain: string[]): void {
+		if (chain.length === 0) return;
+		this.#draft[tier] = {
+			...this.#draft[tier],
+			model: chain[0],
+			fallbacks: chain.length > 1 ? chain.slice(1) : undefined,
+		};
+	}
+
 	// ─── Render ────────────────────────────────────────────────────────────
 
 	render(width: number): string[] {
 		// If a sub-view is active, delegate rendering entirely to it.
 		if (this.#subView) {
-			return this.#subView.component.render(width);
+			return this.#subView.render(width);
 		}
 
 		const t = this.#theme;
@@ -106,28 +131,39 @@ export class ProfileEditorComponent implements Component {
 		lines.push(`${title}    ${headerHint}`);
 		lines.push("");
 
-		// Tier sections
-		for (const tier of TIERS) {
-			lines.push(this.#renderTierHeader(tier));
-			for (const field of FIELDS) {
-				lines.push(this.#renderRow(tier, field));
+		const rows = this.#buildRows();
+		let lastTier: RouterTier | undefined;
+
+		// Render each row, with tier headers where tier changes
+		for (let i = 0; i < rows.length; i++) {
+			const row = rows[i];
+			if (row.tier !== lastTier) {
+				lines.push(this.#renderTierHeader(row.tier));
+				lastTier = row.tier;
 			}
-			lines.push("");
+
+			if (row.kind === "thinking") {
+				lines.push(this.#renderThinkingRow(rows, i, row.tier));
+			} else {
+				lines.push(this.#renderChainRow(rows, i, row.tier, row.chainIndex!));
+			}
 		}
 
-		// Counter
-		const totalRows = ROWS.length;
-		lines.push(`  (${this.#cursor + 1}/${totalRows})`);
 		lines.push("");
 
-		// Missing-fallbacks warnings
+		// Counter
+		lines.push(`  (${this.#cursor + 1}/${rows.length})`);
+		lines.push("");
+
+		// Missing-model warnings
 		for (const tier of TIERS) {
-			const fb = this.#draft[tier].fallbacks;
-			if (!fb || fb.length === 0) {
+			const chain = this.#getChainForTier(tier);
+			const primaryModel = chain[0];
+			if (!primaryModel || primaryModel.trim().length === 0) {
 				lines.push(
 					t.fg(
 						"warning",
-						`  ⚠ ${tier.toUpperCase()} has no fallbacks — requests fail without retries`,
+						`  ⚠ ${tier.toUpperCase()} has no model configured`,
 					),
 				);
 			}
@@ -135,7 +171,7 @@ export class ProfileEditorComponent implements Component {
 
 		// Hint line
 		lines.push("");
-		lines.push(t.fg("muted", `  ${this.#hintLine()}`));
+		lines.push(t.fg("muted", `  ${this.#hintLine(rows)}`));
 
 		return lines.map((line) => truncateToWidth(replaceTabs(line), width));
 	}
@@ -146,20 +182,18 @@ export class ProfileEditorComponent implements Component {
 		return this.#theme.fg("accent", `─── ${label} ${dashes}`);
 	}
 
-	#renderRow(tier: RouterTier, field: FieldKind): string {
+	#renderThinkingRow(rows: Row[], rowIdx: number, tier: RouterTier): string {
 		const t = this.#theme;
-		const rowIndex = this.#rowIndex(tier, field);
-		const isSelected = rowIndex === this.#cursor;
+		const isSelected = rowIdx === this.#cursor;
 		const cursor = isSelected ? "❯ " : "  ";
 
 		const tierCfg = this.#draft[tier];
 		const origCfg = this.#original[tier];
-		const changed = this.#fieldChanged(tier, field, tierCfg, origCfg);
+		const changed = (tierCfg.thinking ?? null) !== (origCfg.thinking ?? null);
 
-		const label = field.padEnd(11);
-		const value = this.#formatValue(tier, field);
+		const label = "thinking".padEnd(11);
+		const value = tierCfg.thinking ?? "off";
 
-		// Changed marker: replaces the leading 2 chars (`❯ ` / `  `) with `* ` on changed.
 		const prefix = changed ? "* " : cursor;
 		const valueText = changed ? `[${value}]` : value;
 
@@ -167,34 +201,55 @@ export class ProfileEditorComponent implements Component {
 		return `${prefix}${labelStyled}${valueText}`;
 	}
 
-	#formatValue(tier: RouterTier, field: FieldKind): string {
-		const cfg = this.#draft[tier];
-		if (field === "model") return cfg.model;
-		if (field === "thinking") return cfg.thinking ?? "off";
-		// fallbacks
-		const fb = cfg.fallbacks;
-		if (!fb || fb.length === 0) return "(none configured) ⚠";
-		const shorts = fb.map((ref) => shortenModelRef(ref));
-		return `${fb.length} models: ${shorts.join(", ")}`;
+	#renderChainRow(rows: Row[], rowIdx: number, tier: RouterTier, chainIndex: number): string {
+		const t = this.#theme;
+		const isSelected = rowIdx === this.#cursor;
+		const cursor = isSelected ? "❯ " : "  ";
+
+		const chain = this.#getChainForTier(tier);
+		const modelRef = chain[chainIndex];
+
+		// Detect if this model is different from original
+		const origChain = this.#getOriginalChainForTier(tier);
+		const changed = chainIndex >= origChain.length || origChain[chainIndex] !== modelRef;
+
+		const prefix = changed ? "* " : cursor;
+		const number = `${chainIndex + 1}. `;
+		const role = chainIndex === 0
+			? t.fg("accent", "[primary]")
+			: t.fg("muted", `[fallback ${chainIndex}]`);
+
+		const modelText = isSelected ? t.fg("accent", modelRef) : modelRef;
+		return `${prefix}${number}${modelText} ${role}`;
 	}
 
-	#fieldChanged(
-		tier: RouterTier,
-		field: FieldKind,
-		draft: RouterProfile[RouterTier],
-		original: RouterProfile[RouterTier],
-	): boolean {
-		if (field === "model") return draft.model !== original.model;
-		if (field === "thinking") return (draft.thinking ?? null) !== (original.thinking ?? null);
-		// fallbacks: compare by JSON to avoid order-insensitive diffs (fallback order matters)
-		return JSON.stringify(draft.fallbacks ?? null) !== JSON.stringify(original.fallbacks ?? null);
+	#getOriginalChainForTier(tier: RouterTier): string[] {
+		const cfg = this.#original[tier];
+		const fallbacks = cfg.fallbacks ?? [];
+		return [cfg.model, ...fallbacks];
 	}
 
-	#hintLine(): string {
+	#hintLine(rows: Row[]): string {
 		if (this.#state === "dirty_confirm") {
 			return "Unsaved: ctrl+s save · y discard · n continue";
 		}
-		return "ENTER/SPACE edit field · ctrl+s save · ESC cancel";
+		const row = rows[this.#cursor];
+		if (row?.kind === "thinking") {
+			return "SPACE cycle · ctrl+s save · ESC cancel";
+		}
+		if (row?.kind === "chain") {
+			const chain = this.#getChainForTier(row.tier);
+			const i = row.chainIndex!;
+			const canUp = i > 0;
+			const canDown = i < chain.length - 1;
+			const moveHints = [
+				canUp ? "ctrl+u ▲" : "",
+				canDown ? "ctrl+k ▼" : "",
+			].filter(Boolean).join(" · ");
+			const base = "ENTER replace · ctrl+a add · ctrl+d remove";
+			return moveHints ? `${base} · ${moveHints} · ctrl+s save · ESC cancel` : `${base} · ctrl+s save · ESC cancel`;
+		}
+		return "ctrl+s save · ESC cancel";
 	}
 
 	// ─── Input ─────────────────────────────────────────────────────────────
@@ -202,7 +257,7 @@ export class ProfileEditorComponent implements Component {
 	handleInput(data: string): void {
 		// If a sub-view is active, delegate input to it.
 		if (this.#subView) {
-			this.#subView.component.handleInput(data);
+			this.#subView.handleInput(data);
 			return;
 		}
 
@@ -212,45 +267,98 @@ export class ProfileEditorComponent implements Component {
 		}
 
 		const kb = this.#keybindings;
+		const rows = this.#buildRows();
 
-		// 1. Up/Down navigate (skip non-existent header/separator rows; ROWS already excludes them).
+		// 1. Up/Down navigate
 		if (kb.matches(data, "tui.select.up")) {
-			this.#cursor = (this.#cursor - 1 + ROWS.length) % ROWS.length;
+			this.#cursor = (this.#cursor - 1 + rows.length) % rows.length;
 			return;
 		}
 		if (kb.matches(data, "tui.select.down")) {
-			this.#cursor = (this.#cursor + 1) % ROWS.length;
+			this.#cursor = (this.#cursor + 1) % rows.length;
 			return;
 		}
 
-		const row = ROWS[this.#cursor];
+		const row = rows[this.#cursor];
 		if (!row) return;
 
-		// 2. Enter/Space on model or fallbacks → open submenu.
+		// 2. Enter/Space on thinking → cycle
 		const isConfirm = kb.matches(data, "tui.select.confirm");
 		const isSpace = data === " ";
-		if (row.field === "model" && (isConfirm || isSpace)) {
-			this.#openModelPicker(row.tier);
-			return;
-		}
-		if (row.field === "fallbacks" && (isConfirm || isSpace)) {
-			this.#openFallbackPicker(row.tier);
-			return;
-		}
-
-		// 3. Space on thinking → cycle low → medium → high → low.
-		if (row.field === "thinking" && (isConfirm || isSpace)) {
+		if (row.kind === "thinking" && (isConfirm || isSpace)) {
 			this.#cycleThinking(row.tier);
 			return;
 		}
 
-		// 4. ctrl+s → save.
+		// 3. Enter/Space on chain → replace
+		if (row.kind === "chain" && (isConfirm || isSpace)) {
+			this.#openModelPickerReplace(row.tier, row.chainIndex!);
+			return;
+		}
+
+		// 4. ctrl+a → add model to current tier
+		if (matchesKey(data, "ctrl+a")) {
+			if (row.kind === "chain") {
+				this.#openModelPickerAdd(row.tier);
+			}
+			return;
+		}
+
+		// 5. ctrl+d → delete model from current tier chain
+		if (matchesKey(data, "ctrl+d")) {
+			if (row.kind === "chain") {
+				const chain = this.#getChainForTier(row.tier);
+				if (chain.length > 1) {
+					// Don't allow deleting the primary model
+					if (row.chainIndex! > 0) {
+						chain.splice(row.chainIndex!, 1);
+						this.#setChainForTier(row.tier, chain);
+						// Adjust cursor if needed
+						const newRows = this.#buildRows();
+						if (this.#cursor >= newRows.length) {
+							this.#cursor = Math.max(0, newRows.length - 1);
+						}
+					}
+				}
+			}
+			return;
+		}
+
+		// 6. ctrl+u → move up in chain
+		if (matchesKey(data, "ctrl+u")) {
+			if (row.kind === "chain" && row.chainIndex! > 0) {
+				const chain = this.#getChainForTier(row.tier);
+				const i = row.chainIndex!;
+				[chain[i - 1], chain[i]] = [chain[i], chain[i - 1]];
+				this.#setChainForTier(row.tier, chain);
+				// Keep cursor on moved item
+				this.#cursor -= 1;
+			}
+			return;
+		}
+
+		// 7. ctrl+k → move down in chain
+		if (matchesKey(data, "ctrl+k")) {
+			if (row.kind === "chain" && row.chainIndex !== undefined) {
+				const chain = this.#getChainForTier(row.tier);
+				const i = row.chainIndex;
+				if (i < chain.length - 1) {
+					[chain[i], chain[i + 1]] = [chain[i + 1], chain[i]];
+					this.#setChainForTier(row.tier, chain);
+					// Keep cursor on moved item
+					this.#cursor += 1;
+				}
+			}
+			return;
+		}
+
+		// 8. ctrl+s → save
 		if (matchesKey(data, "ctrl+s")) {
 			this.#done(this.#draft);
 			return;
 		}
 
-		// 5. Esc → cancel or enter dirty_confirm.
+		// 9. Esc → cancel or enter dirty_confirm
 		if (kb.matches(data, "tui.select.cancel")) {
 			if (this.#isDirty()) {
 				this.#state = "dirty_confirm";
@@ -260,7 +368,7 @@ export class ProfileEditorComponent implements Component {
 			return;
 		}
 
-		// All other input ignored — there is no inline editor at the editor level.
+		// All other input ignored
 	}
 
 	#handleDirtyConfirm(data: string): void {
@@ -287,21 +395,22 @@ export class ProfileEditorComponent implements Component {
 		this.#draft[tier] = { ...this.#draft[tier], thinking: next };
 	}
 
-	// ─── Submenu wiring (inline sub-views) ─────────────────────────────────
+	// ─── Submenu wiring (model picker) ─────────────────────────────────────
 
-	#openModelPicker(tier: RouterTier): void {
-		const tierCfg = this.#draft[tier];
-		const fallbacks = tierCfg.fallbacks ?? [];
+	#openModelPickerReplace(tier: RouterTier, chainIndex: number): void {
+		const chain = this.#getChainForTier(tier);
+		const current = chain[chainIndex];
 
 		const done = (result: string | undefined): void => {
-			// Close the sub-view and return to the editor.
 			this.#subView = undefined;
 			if (typeof result === "string" && result.length > 0) {
-				this.#draft[tier] = { ...this.#draft[tier], model: result };
+				const c = this.#getChainForTier(tier);
+				c[chainIndex] = result;
+				this.#setChainForTier(tier, c);
 			}
 		};
 
-		const component = new ModelPickerComponent(
+		this.#subView = new ModelPickerComponent(
 			this.#tui,
 			this.#theme,
 			this.#keybindings,
@@ -309,58 +418,51 @@ export class ProfileEditorComponent implements Component {
 			{
 				tier,
 				modelRegistry: this.#modelRegistry,
-				currentPrimary: tierCfg.model,
-				currentFallbacks: fallbacks,
+				currentPrimary: current,
+				currentFallbacks: chain.filter((_, i) => i !== chainIndex),
 			},
 		);
-
-		this.#subView = { kind: "model", tier, component };
 	}
 
-	#openFallbackPicker(tier: RouterTier): void {
-		const tierCfg = this.#draft[tier];
-		const available = this.#modelRegistry.getAvailable();
-		const allModels = available
-			.filter((m) => m.provider !== "router")
-			.map((m) => ({
-				value: `${m.provider}/${m.id}`,
-				label: m.name,
-				description: `${m.provider} · ${Math.floor(m.contextWindow / 1000)}k`,
-			}));
+	#openModelPickerAdd(tier: RouterTier): void {
+		const chain = this.#getChainForTier(tier);
 
-		const done = (result: string[] | undefined): void => {
-			// Close the sub-view and return to the editor.
+		const done = (result: string | undefined): void => {
 			this.#subView = undefined;
-			if (Array.isArray(result)) {
-				this.#draft[tier] = {
-					...this.#draft[tier],
-					fallbacks: result.length === 0 ? undefined : result,
-				};
+			if (typeof result === "string" && result.length > 0) {
+				const c = this.#getChainForTier(tier);
+				// Don't add duplicates
+				if (!c.includes(result)) {
+					c.push(result);
+					this.#setChainForTier(tier, c);
+				}
+				// Move cursor to the new chain row
+				const rows = this.#buildRows();
+				const newIdx = rows.findIndex(
+					(r) => r.tier === tier && r.kind === "chain" && r.chainIndex === c.length - 1
+				);
+				if (newIdx >= 0) this.#cursor = newIdx;
 			}
 		};
 
-		const component = new FallbackPickerComponent(
-			this.#tui as TUI,
+		this.#subView = new ModelPickerComponent(
+			this.#tui,
 			this.#theme,
 			this.#keybindings,
 			done,
-			allModels,
-			tierCfg.model,
-			tierCfg.fallbacks ?? [],
-			tier,
+			{
+				tier,
+				modelRegistry: this.#modelRegistry,
+				currentPrimary: chain[0],
+				currentFallbacks: chain.slice(1),
+			},
 		);
-
-		this.#subView = { kind: "fallbacks", tier, component };
 	}
 
 	// ─── Helpers ───────────────────────────────────────────────────────────
 
 	#isDirty(): boolean {
 		return JSON.stringify(this.#draft) !== this.#originalJson;
-	}
-
-	#rowIndex(tier: RouterTier, field: FieldKind): number {
-		return ROWS.findIndex((r) => r.tier === tier && r.field === field);
 	}
 }
 
