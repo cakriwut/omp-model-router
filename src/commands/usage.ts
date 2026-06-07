@@ -110,6 +110,14 @@ export const handleUsage = (
 				entry.tier = resolveModelTier(entry.model, profile);
 			}
 		}
+		// Classifier calls use streamSimple directly — they are never pushed to the host
+		// stream and therefore never appear in the session JSONL. Merge them from the
+		// in-memory modelCosts map, which is populated by recordClassifierCost.
+		for (const [key, entry] of state.modelCosts) {
+			if (entry.tier === "classifier" && !reportModelCosts.has(key)) {
+				reportModelCosts.set(key, { ...entry });
+			}
+		}
 		reportTotalCost = [...reportModelCosts.values()].reduce((s, e) => s + e.cost, 0);
 	} else {
 		// Fallback: no session file (in-memory mode, tests)
