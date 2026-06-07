@@ -160,17 +160,24 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 			const trackedCost = modelUsage[tierConfig.model]?.cost ?? 0;
 			const registeredModel = provider ? modelRegistry.find(provider, modelId) : undefined;
 			const tierCostStr = registeredModel?.cost ? `$${trackedCost.toFixed(4)}` : "";
-			modelLines.push(
-				`  ${tierColor(tier, tier.toUpperCase().padEnd(8))}${modelId.padEnd(38)}${`${usageCount}x`.padStart(4)}   ${tierCostStr}`,
-			);
-			renderedKeys.add(tierConfig.model);
+			// Skip primary row if this model was already rendered as a fallback of a higher tier.
+			// Still mark it rendered and render its own fallbacks below.
+			if (!renderedKeys.has(tierConfig.model)) {
+				modelLines.push(
+					`  ${tierColor(tier, tier.toUpperCase().padEnd(8))}${modelId.padEnd(38)}${`${usageCount}x`.padStart(4)}   ${tierCostStr}`,
+				);
+				renderedKeys.add(tierConfig.model);
+			}
 			if (tierConfig.fallbacks?.length) {
 				for (const fb of tierConfig.fallbacks) {
 					const fbSlash = fb.indexOf("/");
 					const fbId = fbSlash >= 0 ? fb.slice(fbSlash + 1) : fb;
 					const fbUsage = modelUsage[fb]?.count ?? 0;
-					modelLines.push(`  ${" ".repeat(8)}└ ${fbId.padEnd(36)}${`${fbUsage}x`.padStart(4)}`);
-					renderedKeys.add(fb);
+					// Skip fallback row if already rendered (e.g. this model is primary in another tier)
+					if (!renderedKeys.has(fb)) {
+						modelLines.push(`  ${" ".repeat(8)}└ ${fbId.padEnd(36)}${`${fbUsage}x`.padStart(4)}`);
+						renderedKeys.add(fb);
+					}
 				}
 			}
 		} catch { /* ignore bad model ref */ }
@@ -262,14 +269,26 @@ export const renderUsageReport = (opts: UsageReportInput): string => {
 	const routableCosts = Object.values(modelUsage).filter(u => u.tier !== "classifier");
 	const hasTokenData = routableCosts.some(u => u.inputTokens > 0 || u.outputTokens > 0);
 
-	if (hasTokenData && hasCostRates(profile.high.model) && hasCostRates(profile.medium.model) && hasCostRates(profile.low.model)) {
+	// Relax savings gate: if a tier's primary model has no cost rates, walk its fallbacks
+	// to find a priced substitute. This handles profiles where the high-tier primary is
+	// not yet in the OMP registry (e.g. newly launched models).
+	const resolveRepricingModel = (tierKey: "high" | "medium" | "low"): string | undefined => {
+		const tc = profile[tierKey];
+		if (hasCostRates(tc.model)) return tc.model;
+		return tc.fallbacks?.find(hasCostRates);
+	};
+	const highRef   = resolveRepricingModel("high");
+	const mediumRef = resolveRepricingModel("medium");
+	const lowRef    = resolveRepricingModel("low");
+
+	if (hasTokenData && highRef && mediumRef && lowRef) {
 		let allHighCost = 0;
 		let allMediumCost = 0;
 		let allLowCost = 0;
 		for (const u of routableCosts) {
-			const h = repriceTokens(u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, profile.high.model);
-			const m = repriceTokens(u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, profile.medium.model);
-			const l = repriceTokens(u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, profile.low.model);
+			const h = repriceTokens(u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, highRef);
+			const m = repriceTokens(u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, mediumRef);
+			const l = repriceTokens(u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, lowRef);
 			if (h !== undefined) allHighCost += h;
 			if (m !== undefined) allMediumCost += m;
 			if (l !== undefined) allLowCost += l;
