@@ -96,8 +96,19 @@ export const handleUsage = (
 	const sessionFile = (ctx.sessionManager as any).getSessionFile?.();
 	if (sessionFile && existsSync(sessionFile)) {
 		reportModelCosts = scanSessionTree(sessionFile);
+		// Build a set of classifier model refs from config for O(1) lookup
+		const rawClassifierModel = state.currentConfig.calibration?.classifierModel;
+		const classifierRefs = new Set<string>(
+			rawClassifierModel
+				? (Array.isArray(rawClassifierModel) ? rawClassifierModel : [rawClassifierModel])
+				: [],
+		);
 		for (const entry of reportModelCosts.values()) {
-			entry.tier = resolveModelTier(entry.model, profile);
+			if (classifierRefs.has(entry.model)) {
+				entry.tier = "classifier";
+			} else {
+				entry.tier = resolveModelTier(entry.model, profile);
+			}
 		}
 		reportTotalCost = [...reportModelCosts.values()].reduce((s, e) => s + e.cost, 0);
 	} else {
