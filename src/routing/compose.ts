@@ -339,7 +339,7 @@ export const resolveRouting = async (
 					? config.classifierModel[0]
 					: config.classifierModel;
 				const detectedSignals = detectSignals(input.context);
-				appendPromptRecord(config.promptLogPath, {
+				void appendPromptRecord(config.promptLogPath, {
 					timestamp:    new Date().toISOString(),
 					turnIndex:    input.calibration?.turnsProcessed ?? 0,
 					userMsgIndex: resolvedScope?.userMessagesSeen ?? 0,

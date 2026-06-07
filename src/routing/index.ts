@@ -151,7 +151,10 @@ export const runClassifier = async (
 					// Success! Return immediately
 					return result;
 				}
-				// Parsing failed, try next model
+				// Parsing failed — log raw output for diagnostics, then try next model
+				if (debug) {
+					console.warn(`[model-router] Classifier parse failed for ${classifierModelRef}. Raw output: ${JSON.stringify(fullText.slice(0, 300))}`);
+				}
 				lastError = new Error(`Classifier output parsing failed for ${classifierModelRef}`);
 				continue;
 			} finally {

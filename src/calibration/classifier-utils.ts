@@ -401,18 +401,21 @@ export function buildClassifierPrompt(
 	const activityBlock  = activityText    ? `\n<activity>${activityText}</activity>\n`          : "";
 	const signalsBlock   = hints.length    ? `\n<signals>${hints.join(" ")}</signals>\n`         : "";
 
-	return `<task>Classify this request as "high", "medium", or "low" effort.</task>
+	return `You are a routing classifier. Classify the user request below as "high", "medium", or "low" effort. Reply ONLY with the two lines shown in the format — no preamble, no explanation, no other text.
 
 <tiers>
 high   — Architecture, design decisions, tradeoff analysis, broad codebase research, large refactors, debugging unfamiliar systems.
 medium — Implementing a known plan, multi-file edits, focused debugging, writing tests, normal coding.
-low    — Summaries, lookups, quick explanations, status checks, observations, one-liner fixes, changelogs.
+low    — Summaries, lookups, quick explanations, status checks, observations, one-liner fixes, short acknowledgements, changelogs.
 </tiers>
 ${pitfallsBlock}${historyBlock}${activityBlock}${signalsBlock}
-<request>${promptText}</request>
+<request>
+${promptText}
+</request>
 
-Tier: [high|medium|low]
-Reasoning: [one sentence]`;
+Respond with exactly these two lines and nothing else:
+Tier: high|medium|low
+Reasoning: one sentence`;
 }
 
 /** Parse classifier output (shared between sync and async paths) */
@@ -429,10 +432,12 @@ export function parseClassifierOutput(
 		const tierValue = tierLine.split(":")[1].trim().toLowerCase();
 		if (isRouterTier(tierValue)) {
 			const rawReasoning = reasoningLine ? reasoningLine.split(":")[1].trim() : "";
-			// Reject template placeholders like "[one sentence]" or "[high|medium|low]"
-			const reasoning = (rawReasoning && !rawReasoning.includes("|") && !rawReasoning.startsWith("["))
-				? rawReasoning
-				: "Classifier decision.";
+			// Reject template placeholders: "[one sentence]", "[high|medium|low]", "one sentence"
+			const isPlaceholder = !rawReasoning
+				|| rawReasoning.includes("|")
+				|| rawReasoning.startsWith("[")
+				|| rawReasoning.toLowerCase() === "one sentence";
+			const reasoning = isPlaceholder ? "Classifier decision." : rawReasoning;
 			return { tier: tierValue, reasoning };
 		}
 	}
