@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { RouterState } from "../state";
 import type { Actions } from "./shared";
 import { profileNames, resolveProfileName } from "../config";
-import { formatThinkingSummary, formatModelRef, formatScopedPin } from "../ui";
+import { formatThinkingSummary, formatModelRef, formatScopedPin, shortenModelRef } from "../ui";
 import { getCurrentVersion } from "../version-check";
 
 export const handleStatus = (
@@ -33,11 +33,22 @@ export const handleStatus = (
 		`Debug: ${state.debugEnabled ? "on" : "off"}`,
 		`Debug history: ${state.debugHistory.length} decisions`,
 	];
-	if (state.lastDecision) {
+	if (state.lastDecision && state.lastDecision.profile === state.selectedProfile) {
+		const u = state.lastDecision.usage;
+		const usageStr = u
+			? `↑${u.inputTokens.toLocaleString()} ↓${u.outputTokens.toLocaleString()}` +
+			  (u.cacheReadTokens > 0 ? ` 📦${u.cacheReadTokens.toLocaleString()}` : "") +
+			  ` $${(u.cost ?? 0).toFixed(4)}`
+			: "—";
 		lines.push(
-			`Last routed tier: ${state.lastDecision.tier}`,
-			`Last phase: ${state.lastDecision.phase}`,
-			`Last model: ${state.lastDecision.targetProvider}/${state.lastDecision.targetModelId} (${state.lastDecision.thinking})`,
+			`Route: ${state.lastDecision.tier} → ${state.lastDecision.targetProvider}/${state.lastDecision.targetModelId} (${state.lastDecision.thinking})`,
+		);
+		if (state.lastDecision.classifierModelRef) {
+			lines.push(`Classifier: ${shortenModelRef(state.lastDecision.classifierModelRef)}`);
+		}
+		lines.push(
+			`Phase: ${state.lastDecision.phase}`,
+			`Usage: ${usageStr}`,
 			`Reason: ${state.lastDecision.reasoning}`,
 		);
 	}

@@ -203,6 +203,8 @@ export interface RoutingDecision {
 	embargoTimeRemaining?: number;
 	/** Tool-mix bucket computed during routing (carried for tracing/logging) */
 	toolBucket?: string;
+	/** The canonical model ref that produced the classifier verdict (e.g. "anthropic/claude-3-haiku-20240307"). Only set when isClassifier=true. */
+	classifierModelRef?: string;
 }
 
 export interface RouterPersistedState {

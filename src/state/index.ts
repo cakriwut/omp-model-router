@@ -39,7 +39,7 @@ export interface SessionScope {
 	/** Signature of the last prompt the classifier scored (cache key). */
 	lastClassifierKey: string | undefined;
 	/** Verdict the classifier returned for lastClassifierKey. */
-	lastClassifierVerdict: { tier: RouterTier; reasoning: string } | undefined;
+	lastClassifierVerdict: { tier: RouterTier; reasoning: string; classifierModelRef?: string } | undefined;
 	/** Turns elapsed since classifier last ran (0 = ran this turn). */
 	classifierTurnsSinceRun: number;
 	/**

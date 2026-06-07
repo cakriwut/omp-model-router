@@ -14,10 +14,20 @@
 import type { RouterConfig, RouterTier, ScopedPin, ScopedPinSource } from "../types";
 import type { SessionScope } from "../state";
 
-/** Default pin timeout in milliseconds (10 minutes). */
+/** Default pin timeout in milliseconds (5 minutes). */
 export const DEFAULT_PIN_TIMEOUT_MS = 300_000;
 /** Default consecutive-disagreement threshold before a system pin pressure-lapses. */
 export const DEFAULT_PIN_PRESSURE_THRESHOLD = 3;
+/** Fraction of the base timeout applied when the pinned tier is "high". */
+const HIGH_TIER_TIMEOUT_FRACTION = 0.8;
+
+/**
+ * Effective timeout for a pin, accounting for tier.
+ * High-tier pins expire at 80% of the base timeout — they're more expensive
+ * and should revert to free routing sooner if the session changes character.
+ */
+const effectivePinTimeout = (baseTimeout: number, tier: RouterTier): number =>
+	tier === "high" ? Math.round(baseTimeout * HIGH_TIER_TIMEOUT_FRACTION) : baseTimeout;
 
 /**
  * Resolve the effective pin tier for the current routing decision.
@@ -52,7 +62,7 @@ export function resolveEffectivePin(
 
 	const pin = scope.scopedPin;
 	if (pin !== undefined) {
-		const timeout = config.pinTimeout ?? DEFAULT_PIN_TIMEOUT_MS;
+		const timeout = effectivePinTimeout(config.pinTimeout ?? DEFAULT_PIN_TIMEOUT_MS, pin.tier);
 		if (Date.now() - pin.setAt < timeout) {
 			// Pin is still alive — use it.
 			scopedPin = pin.tier;
@@ -102,7 +112,7 @@ export function setScopedPin(
 		// P2 sources: only set when no active pin exists.
 		const existing = scope.scopedPin;
 		if (existing !== undefined) {
-			const timeout = config.pinTimeout ?? DEFAULT_PIN_TIMEOUT_MS;
+			const timeout = effectivePinTimeout(config.pinTimeout ?? DEFAULT_PIN_TIMEOUT_MS, existing.tier);
 			if (Date.now() - existing.setAt < timeout) {
 				// Active pin exists — system decision is blocked.
 				return;

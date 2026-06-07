@@ -50,7 +50,7 @@ export const runClassifier = async (
 	toolCounts?: Record<string, number>,
 	pitfalls?: string,
 	contextWindow?: number,
-): Promise<{ tier: RouterTier; reasoning: string } | undefined> => {
+): Promise<{ tier: RouterTier; reasoning: string; classifierModelRef: string } | undefined> => {
 	const classifierModelRefs = Array.isArray(classifierModelRefsInput)
 		? classifierModelRefsInput
 		: [classifierModelRefsInput];
@@ -149,7 +149,7 @@ export const runClassifier = async (
 
 				if (result) {
 					// Success! Return immediately
-					return result;
+					return { ...result, classifierModelRef };
 				}
 				// Parsing failed — log raw output for diagnostics, then try next model
 				if (debug) {

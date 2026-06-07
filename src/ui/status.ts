@@ -13,6 +13,7 @@ import { resolveEffectivePin, DEFAULT_PIN_TIMEOUT_MS } from "../routing/pin";
 import type { SessionScope } from "../state";
 import {
 	shortenModelId,
+	shortenModelRef,
 	THINKING_COLOR,
 	THINKING_ICON,
 	PROFILE_PALETTE,
@@ -179,6 +180,9 @@ export const buildStatusText = (
 
 	const profileText = ` ⬡ ${selectedProfile}`;
 	const modelText = `${thinkingIcon} ${shortModel}`;
+	const classifierSuffix = lastDecision.classifierModelRef
+		? theme.fg("dim", ` ⚡${shortenModelRef(lastDecision.classifierModelRef)}`)
+		: "";
 	const costText = formatCost(theme, lastDecision);
 
 	if (isStreaming) {
@@ -193,6 +197,7 @@ export const buildStatusText = (
 				theme,
 			) +
 			pinSuffix +
+			classifierSuffix +
 			costText +
 			flagText
 		);
@@ -203,6 +208,7 @@ export const buildStatusText = (
 		pinSuffix +
 		"  " +
 		theme.fg(thinkingColor, modelText) +
+		classifierSuffix +
 		costText +
 		flagText
 	);
@@ -218,12 +224,12 @@ export const updateStatus = (
 	thinkingByProfile: RouterThinkingByProfile,
 	lastDecision: RoutingDecision | undefined,
 	lastNonRouterModel: string | undefined,
-	accumulatedCost: number,
 	widgetEnabled: boolean,
 	currentConfig: RouterConfig,
 	isStreaming = false,
 ) => {
 	const theme = ctx.ui.theme;
+	const accumulatedCost = scope.accumulatedCost;
 	const { scopedPin } = resolveEffectivePin(scope, currentConfig);
 	const activePin = scopedPin;
 	// Active scoped pin shown prominently; floor (defaultPin) is the silent default — no badge.
@@ -252,13 +258,16 @@ export const updateStatus = (
 			const flagText = flags.length > 0
 				? " " + flags.map((f) => theme.fg("warning", `[${f}]`)).join(" ")
 				: "";
+			const classifierSuffix = lastDecision.classifierModelRef
+				? theme.fg("dim", ` ⚡${shortenModelRef(lastDecision.classifierModelRef)}`)
+				: "";
 
 			segments = [
 				{ text: `⬡ ${selectedProfile}`, palette: PROFILE_PALETTE },
 				{ text: "  ", palette: PROFILE_PALETTE },
 				{ text: `${thinkingIcon} ${shortModel}`, palette: tierPalette },
 			];
-			suffix = pinSuffix + costText + flagText;
+			suffix = pinSuffix + classifierSuffix + costText + flagText;
 		}
 
 		if (activeShimmerWidget) {
@@ -322,6 +331,11 @@ export const updateStatus = (
 
 		widgetLines.push(
 			`Route: ${lastDecision.tier}${flagsStr} → ${lastDecision.targetProvider}/${lastDecision.targetModelId} (${thinking})`,
+		);
+		if (lastDecision.classifierModelRef) {
+			widgetLines.push(`Classifier: ${shortenModelRef(lastDecision.classifierModelRef)}`);
+		}
+		widgetLines.push(
 			`Phase: ${lastDecision.phase}`,
 			`Usage:${usageStr || " —"}`,
 		);

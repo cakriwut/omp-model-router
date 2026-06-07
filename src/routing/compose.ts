@@ -162,10 +162,11 @@ export const resolveRouting = async (
 		input.floor,
 	);
 
-	// ── Pressure lapse: if a system pin is active, check whether the heuristic
-	//    shadow (what the heuristic would choose without the pin) has disagreed
-	//    for N consecutive turns. If so, lapse the pin early and re-route freely.
-	if (input.pinnedTier && input.scope && config.pinConfig) {
+	// ── Pressure lapse: one pressure increment per turn, best available signal.
+	//    When classifier is configured, the classifier block below owns this (using
+	//    verdict.tier as the shadow). Only run the heuristic shadow here when no
+	//    classifier is configured so the pin is never left untested on heuristic-only sessions.
+	if (input.pinnedTier && input.scope && config.pinConfig && !config.classifierModel) {
 		const pin = input.scope.scopedPin;
 		if (pin && pin.source !== "user") {
 			// Compute shadow tier: what the heuristic would say with no pin.
@@ -274,7 +275,7 @@ export const resolveRouting = async (
 	const resolvedScope = input.scope ?? input.state?.scope;
 	const isSubAgent = (resolvedScope?.parentSessionId) !== undefined;
 	let bucket: string | undefined;
-	let verdict: { tier: RouterTier; reasoning: string } | undefined;
+	let verdict: { tier: RouterTier; reasoning: string; classifierModelRef?: string } | undefined;
 	if (
 		config.classifierModel &&
 		!isSubAgent &&
@@ -339,7 +340,7 @@ export const resolveRouting = async (
 					? config.classifierModel[0]
 					: config.classifierModel;
 				const detectedSignals = detectSignals(input.context);
-				void appendPromptRecord(config.promptLogPath, {
+			await appendPromptRecord(config.promptLogPath, {
 					timestamp:    new Date().toISOString(),
 					turnIndex:    input.calibration?.turnsProcessed ?? 0,
 					userMsgIndex: resolvedScope?.userMessagesSeen ?? 0,
@@ -388,6 +389,7 @@ export const resolveRouting = async (
 							config.thinkingOverrides,
 							true,
 						);
+						decision.classifierModelRef = verdict.classifierModelRef;
 						if (input.isBudgetExceeded && decision.tier === "high") {
 							decision.tier = "medium";
 							decision.phase = "implementation";
@@ -395,6 +397,9 @@ export const resolveRouting = async (
 							decision.isBudgetForced = true;
 						}
 						clearScopedPin(input.scope);
+					} else {
+						// Pin holds — classifier ran but didn't override; record it ran so widget can show it
+						decision.classifierModelRef = verdict.classifierModelRef;
 					}
 				}
 			} else {
@@ -410,6 +415,7 @@ export const resolveRouting = async (
 					config.thinkingOverrides,
 					true,
 				);
+				decision.classifierModelRef = verdict.classifierModelRef;
 				if (input.isBudgetExceeded && decision.tier === "high") {
 					decision.tier = "medium";
 					decision.phase = "implementation";
@@ -422,10 +428,39 @@ export const resolveRouting = async (
 				}
 			}
 		} else {
-			// Classifier was configured but failed — fall back to heuristic.
-			// This happens whether pinned or not; the pin doesn't prevent failure.
+			// Classifier configured but failed — fall back to heuristic.
 			decision.reasoning = `Classifier unavailable, using heuristic: ${decision.reasoning}`;
 			decision.isHeuristic = true;
+			// Still apply heuristic pressure so a pinned session isn't frozen by classifier failure.
+			if (input.pinnedTier && input.scope && config.pinConfig) {
+				const pin = input.scope.scopedPin;
+				if (pin && pin.source !== "user") {
+					const shadowDecision = decideRouting(
+						input.context,
+						config.profileName,
+						config.profile,
+						input.previousDecision,
+						undefined,
+						config.thinkingOverrides,
+						config.phaseBias,
+						config.rules,
+						input.isBudgetExceeded,
+						input.floor,
+					);
+					const threshold = config.pinConfig.pinPressureThreshold ?? DEFAULT_PIN_PRESSURE_THRESHOLD;
+					const lapsed = incrementPinPressure(input.scope, shadowDecision.tier, threshold, config.debug);
+					if (lapsed) {
+						const bustScope = input.scope ?? input.state?.scope;
+						if (bustScope) {
+							bustScope.lastClassifierKey = undefined;
+							bustScope.lastClassifierVerdict = undefined;
+							bustScope.classifierTurnsSinceRun = 0;
+						}
+						decision = shadowDecision;
+						input = { ...input, pinnedTier: undefined };
+					}
+				}
+			}
 		}
 	}
 	

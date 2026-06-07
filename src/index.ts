@@ -51,7 +51,6 @@ const routerExtension = (pi: ExtensionAPI) => {
 				state.thinkingByProfile,
 				state.lastDecision,
 				state.lastNonRouterModel,
-				state.accumulatedCost,
 				state.widgetEnabled,
 				state.currentConfig,
 				state.isStreaming,
