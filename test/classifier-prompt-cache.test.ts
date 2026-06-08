@@ -83,6 +83,7 @@ const baseRoutingConfig: RoutingConfig = {
 	phaseBias: 0.5,
 	classifierModel: "stub/classifier",
 	debug: false,
+	calibrationConfig: { enabled: true, mode: "adaptive", warmupTurns: 0, overrideThreshold: 0.5 },
 };
 
 // Create a minimal mock pi for RouterState

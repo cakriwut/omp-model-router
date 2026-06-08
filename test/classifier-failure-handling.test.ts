@@ -38,6 +38,7 @@ describe("Classifier failure handling", () => {
 			phaseBias: 0.5,
 			classifierModel: "nonexistent/invalid-model",
 			debug: true,
+			calibrationConfig: { enabled: true, mode: "adaptive", warmupTurns: 0, overrideThreshold: 0.5 },
 		};
 
 		const decision = await resolveRouting(input, config);
@@ -62,6 +63,7 @@ describe("Classifier failure handling", () => {
 			phaseBias: 0.5,
 			classifierModel: "anthropic/claude-haiku-4-5",
 			debug: false,
+			calibrationConfig: { enabled: true, mode: "adaptive", warmupTurns: 0, overrideThreshold: 0.5 },
 		};
 
 		const decision = await resolveRouting(input, config);
@@ -86,6 +88,7 @@ describe("Classifier failure handling", () => {
 			phaseBias: 0.5,
 			classifierModel: "anthropic/claude-haiku-4-5",
 			debug: true,
+			calibrationConfig: { enabled: true, mode: "adaptive", warmupTurns: 0, overrideThreshold: 0.5 },
 		};
 
 		const decision = await resolveRouting(input, config);
@@ -118,6 +121,7 @@ describe("Classifier failure handling", () => {
 			],
 			classifierModel: "anthropic/claude-haiku-4-5",
 			debug: true,
+			calibrationConfig: { enabled: true, mode: "adaptive", warmupTurns: 0, overrideThreshold: 0.5 },
 		};
 
 		const decision = await resolveRouting(input, config);

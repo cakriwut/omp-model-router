@@ -219,6 +219,8 @@ export interface RoutingDecision {
 	isRuleMatched?: boolean;
 	/** Classifier was configured but produced no verdict; heuristic decided */
 	isHeuristic?: boolean;
+	/** Classifier ran in telemetry mode: verdict collected but heuristic decided */
+	isTelemetry?: boolean;
 	isEmbargoed?: boolean;
 	embargoTimeRemaining?: number;
 	/** Tool-mix bucket computed during routing (carried for tracing/logging) */

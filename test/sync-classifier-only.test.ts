@@ -122,18 +122,21 @@ afterEach(() => {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("Sync classifier only", () => {
-	test("telemetry mode: matrix updated with classifier verdict", async () => {
-		// Mock → high. The calibration matrix should record heuristic vs classifier.
+	test("telemetry mode: matrix updated but heuristic decision stands", async () => {
+		// Mock → high. The calibration matrix should record heuristic vs classifier,
+		// but the routing decision must remain the heuristic tier (medium for a short message).
 		const cal = makeCalibration();
 		const input = makeInput({ calibration: cal });
 		const config = makeConfig("telemetry");
 
 		const decision = await resolveRouting(input, config);
 
-		// resolveRouting always applies the verdict when present — even in telemetry mode.
-		// The matrix records [heuristicIndex][classifierIndex].
+		// Matrix records [heuristicIndex][classifierIndex] regardless of mode
 		// Heuristic for a short message = "medium" (index 1), classifier = "high" (index 2).
 		expect(cal.matrix[1][2]).toBeGreaterThanOrEqual(1);
+		// Heuristic tier must NOT be overridden in telemetry mode
+		expect(decision.tier).toBe("medium");
+		expect(decision.isTelemetry).toBe(true);
 	});
 
 	test("adaptive mode: classifier verdict used for routing", async () => {

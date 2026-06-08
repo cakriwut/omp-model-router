@@ -369,15 +369,19 @@ export const resolveRouting = async (
 		}
 
 		if (verdict) {
-			// Record verdict into calibration matrix — always, hit or miss
+			// Record verdict into calibration matrix — always, regardless of mode
 			if (input.calibration && config.calibrationConfig?.enabled) {
 				updateCalibrationMatrix(input.calibration, decision.tier, verdict.tier);
 			}
 
-			// If pinned: use verdict for pin-pressure comparison, but don't override routing decision
-			// If not pinned: apply verdict to override routing decision
-			if (input.pinnedTier) {
-				// Pinned state: use classifier verdict for pin-pressure logic
+			const isAdaptive = config.calibrationConfig?.mode === "adaptive";
+
+			if (!isAdaptive) {
+				// Telemetry mode: classifier ran for data collection only; heuristic decision stands
+				decision.isTelemetry = true;
+				decision.classifierModelRef = verdict.classifierModelRef;
+			} else if (input.pinnedTier) {
+				// Adaptive + pinned: use verdict for pin-pressure comparison, but don't override routing decision
 				if (input.scope && config.pinConfig) {
 					const threshold =
 						config.pinConfig.pinPressureThreshold ??
@@ -415,7 +419,7 @@ export const resolveRouting = async (
 					}
 				}
 			} else {
-				// Not pinned: apply classifier verdict to override routing decision
+				// Adaptive + not pinned: apply classifier verdict to override routing decision
 				decision = buildRoutingDecision(
 					config.profileName,
 					config.profile,
