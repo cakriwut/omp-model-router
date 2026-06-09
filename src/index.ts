@@ -179,23 +179,36 @@ const routerExtension = (pi: ExtensionAPI) => {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		actions.reloadConfig();
-
-		// Wait for registerProvider to propagate (see switchToRouterProfile comment).
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		// ── Phase 1 (synchronous): populate config + state before any await ─────
+		// This ensures state.routerEnabled and state.currentModelRegistry are set
+		// correctly before the 50ms propagation await, eliminating the race where
+		// turn_start fires during that window and sees routerEnabled=false, causing
+		// the first prompt to use the lastNonRouterModel instead of the router.
+		actions.reloadConfig(); // loads config, calls registerRouterProvider() (no registry yet)
 
 		// Activate session scope (isolates cost/state per session)
 		const sessionId = ctx.sessionManager.getSessionId();
 		const sessionParent = resolveParentFromHeader(ctx);
 		state.activateSession(sessionId, sessionParent, sessionParent ? "header" : "none");
 
-		state.restoreFromSession(ctx);
+		state.restoreFromSession(ctx); // sets currentModelRegistry and routerEnabled (authoritative)
 		// Scoped pins are session-scoped and must not survive into a new conversation.
 		// activateSession() only creates a fresh scope for brand-new session IDs; if
 		// OMP reuses the same ID (e.g. reload within the same process), the existing
 		// scope — including any rule/heuristic/classifier pin from a previous run —
 		// would otherwise persist here. Clear it unconditionally on every session_start.
 		clearScopedPin(state.scope);
+
+		// Re-register provider now that currentModelRegistry is populated so model
+		// definitions (contextWindow, maxTokens, reasoning) are correct.
+		// The modelsKey guard ensures a no-op if nothing changed.
+		actions.registerRouterProvider();
+
+		// ── Phase 2 (async): wait for provider propagation, then switch model ───
+		// Wait for registerProvider to propagate to the model registry.
+		// The framework has no "provider registration complete" event; 50 ms
+		// is empirical slack so ctx.modelRegistry.find("router", …) resolves.
+		await new Promise((resolve) => setTimeout(resolve, 50));
 
 		await actions.ensureValidActiveRouterProfile(ctx);
 
@@ -252,19 +265,24 @@ const routerExtension = (pi: ExtensionAPI) => {
 	});
 
 	pi.on("session_branch", async (_event, ctx) => {
+		// ── Phase 1 (synchronous): populate config + state before any await ─────
 		actions.reloadConfig();
-
-		await new Promise((resolve) => setTimeout(resolve, 50));
 
 		// Activate scope for the branched session
 		const sessionId = ctx.sessionManager.getSessionId();
 		const sessionParent = resolveParentFromHeader(ctx);
 		state.activateSession(sessionId, sessionParent, sessionParent ? "header" : "none");
 
-		state.restoreFromSession(ctx);
+		state.restoreFromSession(ctx); // sets currentModelRegistry and routerEnabled
 		// On branch: clear rule/heuristic/classifier pins (stale phase inference);
 		// preserve user-set pins since those represent explicit user intent.
 		clearSystemPin(state.scope);
+
+		// Re-register with correct registry data.
+		actions.registerRouterProvider();
+
+		// ── Phase 2 (async): wait for provider propagation, then switch model ───
+		await new Promise((resolve) => setTimeout(resolve, 50));
 
 		await actions.ensureValidActiveRouterProfile(ctx);
 
