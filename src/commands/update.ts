@@ -103,7 +103,7 @@ export const handleUpdate = (
 
 			if (exitCode === 0) {
 				ctx.ui.notify(
-					`Updated to v${latest}. Restart session to use new version.`,
+					`Updated to v${info.latest}. Restart session to use new version.`,
 					"info",
 				);
 				state.updateAvailable = undefined;

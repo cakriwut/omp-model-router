@@ -182,6 +182,9 @@ export function getCurrentVersion(): string {
 
 /**
  * Check for a newer version on npm. Uses a file-based cache with 4h TTL.
+ * The cache is only trusted when the cached latest version is still >= current.
+ * If the current version has advanced beyond the cached latest (e.g. just
+ * installed a newer release), the cache is treated as stale and re-fetched.
  * Returns undefined if no update is available or detection is skipped.
  * Never throws.
  */
@@ -191,9 +194,17 @@ export async function checkForUpdate(): Promise<UpdateInfo | undefined> {
 	const current = getCurrentVersion();
 	if (current === "0.0.0") return undefined;
 
-	// Check cache first
+	// Check cache — only trusted when cached latest is strictly newer than
+	// current AND the TTL has not expired. If current has caught up to or
+	// surpassed the cached latest (e.g. user just installed a new version),
+	// treat cache as stale so we re-fetch and get the real latest.
 	const cached = readCache();
-	if (cached && Date.now() - cached.checkedAt < CACHE_TTL_MS) {
+	const cacheIsFresh =
+		cached !== undefined &&
+		Date.now() - cached.checkedAt < CACHE_TTL_MS &&
+		!isNewer(current, cached.latestVersion); // current hasn't surpassed cache
+
+	if (cacheIsFresh && cached) {
 		if (isNewer(cached.latestVersion, current)) {
 			return {
 				current,

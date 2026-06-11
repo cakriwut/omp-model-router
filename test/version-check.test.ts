@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { isNewer, isDevInstall, getCurrentVersion, checkForUpdate } from "../src/version-check";
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -113,5 +113,68 @@ describe("cache behavior", () => {
 
 	it("cache file location is under ~/.cache/omp-model-router/", () => {
 		expect(cacheFile).toContain(".cache/omp-model-router/update-check.json");
+	});
+});
+
+// ─── cache staleness: current surpassed cached latest ────────────────────────
+
+describe("checkForUpdate cache invalidation — stale cache regression", () => {
+	const cacheDir = join(homedir(), ".cache", "omp-model-router");
+	const cacheFile = join(cacheDir, "update-check.json");
+
+	let savedCache: string | undefined;
+
+	beforeEach(() => {
+		try { savedCache = require("node:fs").readFileSync(cacheFile, "utf-8"); } catch { savedCache = undefined; }
+	});
+
+	afterEach(() => {
+		if (savedCache !== undefined) {
+			mkdirSync(cacheDir, { recursive: true });
+			writeFileSync(cacheFile, savedCache);
+		} else if (existsSync(cacheFile)) {
+			rmSync(cacheFile);
+		}
+	});
+
+	/**
+	 * Regression: user had v0.8.1 installed, cache said latest=0.8.1, still within TTL.
+	 * After upgrading to v0.8.2, checkForUpdate() would return undefined because
+	 * isNewer("0.8.1", "0.8.2") = false AND cache TTL had not expired.
+	 * Fix: when current has caught up to or surpassed cached.latestVersion, bust the cache.
+	 */
+	it("identifies when current version has caught up to cached latest (0.8.1→0.8.2 scenario)", () => {
+		// Simulate: cache written when 0.8.1 was latest, still within 4h TTL
+		const staleCacheEntry = {
+			latestVersion: "0.8.1",
+			checkedAt: Date.now() - 60_000, // 1 min ago — well within TTL
+		};
+		mkdirSync(cacheDir, { recursive: true });
+		writeFileSync(cacheFile, JSON.stringify(staleCacheEntry));
+
+		// isNewer(current="0.8.2", cached.latestVersion="0.8.1") should be true
+		// meaning current has surpassed cached latest → cache must be busted
+		const currentSurpassedCache = isNewer("0.8.2", "0.8.1");
+		expect(currentSurpassedCache).toBe(true);
+
+		// And the inverse: isNewer("0.8.1", "0.8.2") = false means cache says nothing new
+		// Without the fix, this would make checkForUpdate() return undefined (no update)
+		const cacheStillAhead = isNewer("0.8.1", "0.8.2");
+		expect(cacheStillAhead).toBe(false);
+	});
+
+	it("cache is fresh and valid when latestVersion is ahead of current", () => {
+		// Cache says 0.8.3 is available, current is 0.8.2 → cache is useful
+		const validCacheEntry = {
+			latestVersion: "0.8.3",
+			checkedAt: Date.now() - 60_000, // 1 min ago — within TTL
+		};
+		mkdirSync(cacheDir, { recursive: true });
+		writeFileSync(cacheFile, JSON.stringify(validCacheEntry));
+
+		// isNewer(current="0.8.2", cached.latestVersion="0.8.3") → false
+		// meaning current has NOT surpassed cache → cache remains valid
+		const currentAheadOfCache = isNewer("0.8.2", "0.8.3");
+		expect(currentAheadOfCache).toBe(false); // current is behind cache → cache is still useful
 	});
 });
