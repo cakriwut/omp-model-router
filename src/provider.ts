@@ -9,6 +9,8 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
+import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -668,11 +670,14 @@ export const registerRouterProvider = (
 							decision.tier,
 						);
 						const effectiveThinking = thinkingOverride ?? decision.thinking;
-						const delegatedReasoning =
+						const delegatedReasoning: Effort | undefined =
 							targetModel.reasoning &&
 							effectiveThinking !== ThinkingLevel.Off &&
 							effectiveThinking !== ThinkingLevel.Inherit
-								? effectiveThinking
+								? clampThinkingLevelForModel(
+										targetModel,
+										effectiveThinking as Effort,
+								  )
 								: undefined;
 
 						// TODO: Hidden thinking label - API not available yet
