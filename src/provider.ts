@@ -886,10 +886,197 @@ export const registerRouterProvider = (
 					}
 				}
 
+				// ── Cross-tier fallback on retryable errors ────────────────────────
+				// When the entire primary chain (tier + explicit fallbacks) fails with
+				// retryable errors (429 account rate limit, 503, etc.), try models from
+				// other tiers in the same profile before giving up. This handles the
+				// common case of account-level rate limits exhausting all same-provider
+				// models in one tier.
+				if (!success && lastError) {
+					const lastErrMsg = lastError instanceof Error ? lastError.message : String(lastError);
+					const lastErrStatus = lastError instanceof StatusAwareError ? lastError.status : undefined;
+					const isLastRetryable = isRetryableStatus(lastErrStatus, lastErrMsg);
+
+					if (isLastRetryable) {
+						const triedModels = new Set(modelsToTry);
+						// Collect models from other tiers: lower first (cheaper), then higher
+						const tierOrder: Array<"high" | "medium" | "low"> = [];
+						const currentTierIdx = ROUTER_TIERS.indexOf(decision.tier);
+						// Lower tiers first (medium → low after high; low after medium)
+						for (let t = currentTierIdx + 1; t < ROUTER_TIERS.length; t++) {
+							tierOrder.push(ROUTER_TIERS[t]);
+						}
+						// Then higher tiers
+						for (let t = currentTierIdx - 1; t >= 0; t--) {
+							tierOrder.push(ROUTER_TIERS[t]);
+						}
+
+						const crossTierModels: string[] = [];
+						for (const tier of tierOrder) {
+							const tierConfig = effectiveProfile[tier];
+							if (tierConfig.model && !triedModels.has(tierConfig.model)) {
+								crossTierModels.push(tierConfig.model);
+								triedModels.add(tierConfig.model);
+							}
+							for (const fb of tierConfig.fallbacks ?? []) {
+								if (!triedModels.has(fb)) {
+									crossTierModels.push(fb);
+									triedModels.add(fb);
+								}
+							}
+						}
+
+						// Filter embargoed models
+						const viableCrossTier = embargoEnabled
+							? crossTierModels.filter((ref) => !state.isEmbargoed(ref))
+							: crossTierModels;
+
+						if (viableCrossTier.length > 0) {
+							if (state.currentConfig.debug) {
+								console.log(
+									`[model-router] ⚡ Cross-tier fallback: trying ${viableCrossTier.length} models from other tiers`,
+								);
+							}
+
+							for (let i = 0; i < viableCrossTier.length; i++) {
+								const modelRef = viableCrossTier[i];
+								const { provider: targetProvider, modelId: targetModelId } =
+									parseCanonicalModelRef(modelRef);
+
+								if (state.currentConfig.debug) {
+									console.log(
+										`[model-router] Cross-tier attempt ${i + 1}/${viableCrossTier.length}: ${modelRef}`,
+									);
+								}
+
+								if (targetProvider === "router") continue;
+
+								const targetModel = state.currentModelRegistry!.find(
+									targetProvider,
+									targetModelId,
+								);
+								if (!targetModel) {
+									if (state.currentConfig.debug) {
+										console.log(`  ✗ Skipped: model not in registry`);
+									}
+									continue;
+								}
+
+								const apiKey = await state.currentModelRegistry!.getApiKey(targetModel);
+								if (!apiKey) {
+									if (state.currentConfig.debug) {
+										console.log(`  ✗ Skipped: no API key`);
+									}
+									continue;
+								}
+
+								try {
+									const targetLimit = targetModel.contextWindow || 128_000;
+									const crossTierContext =
+										targetLimit < (model.contextWindow ?? Infinity)
+											? truncateContext(context, targetLimit)
+											: context;
+
+									const thinkingOverride = actions.getThinkingOverride(
+										effectiveProfileName,
+										decision.tier,
+									);
+									const effectiveThinking = thinkingOverride ?? decision.thinking;
+									const delegatedReasoning: Effort | undefined =
+										targetModel.reasoning &&
+										effectiveThinking !== ThinkingLevel.Off &&
+										effectiveThinking !== ThinkingLevel.Inherit
+											? clampThinkingLevelForModel(
+													targetModel,
+													effectiveThinking as Effort,
+											  )
+											: undefined;
+
+									const delegatedStream = streamSimple(targetModel, sanitizeContext(crossTierContext), {
+										...options,
+										apiKey,
+										headers: targetModel.headers,
+										...(delegatedReasoning ? { reasoning: delegatedReasoning } : {}),
+									});
+
+									const idleTimeoutMs = resolveStreamIdleTimeout(
+										state.currentConfig.streamIdleTimeoutMs,
+										targetProvider,
+									);
+									const maxDurationMs = state.currentConfig.maxStreamDurationMs !== undefined
+										? state.currentConfig.maxStreamDurationMs
+										: DEFAULT_MAX_STREAM_DURATION_MS;
+									let eventSource: AsyncIterable<import("@oh-my-pi/pi-ai").AssistantMessageEvent> = idleTimeoutMs > 0
+										? withIdleTimeout(delegatedStream, idleTimeoutMs)
+										: delegatedStream;
+									if (maxDurationMs > 0) {
+										eventSource = withMaxDuration(eventSource, maxDurationMs);
+									}
+
+									for await (const event of eventSource) {
+										if (event.type === "done") {
+											const u = event.message.usage;
+											const cost = u?.cost?.total ?? 0;
+											state.accumulatedCost += cost;
+											decision.usage = {
+												inputTokens: (decision.usage?.inputTokens ?? 0) + (u?.input ?? 0),
+												outputTokens: (decision.usage?.outputTokens ?? 0) + (u?.output ?? 0),
+												cacheReadTokens: (decision.usage?.cacheReadTokens ?? 0) + (u?.cacheRead ?? 0),
+												cacheWriteTokens: (decision.usage?.cacheWriteTokens ?? 0) + (u?.cacheWrite ?? 0),
+												cost: (decision.usage?.cost ?? 0) + cost,
+											};
+											state.recordModelCost(modelRef, decision.tier, {
+												inputTokens: u?.input ?? 0,
+												outputTokens: u?.output ?? 0,
+												cacheReadTokens: u?.cacheRead ?? 0,
+												cacheWriteTokens: u?.cacheWrite ?? 0,
+												cost,
+											});
+										}
+										if (event.type === "error") {
+											const errEvent = event as { error?: { errorMessage?: string; errorStatus?: number } };
+											const errMsg = errEvent.error?.errorMessage || "Model failed.";
+											const errStatus = errEvent.error?.errorStatus;
+											throw new StatusAwareError(errMsg, errStatus, parseRetryAfterMs(errMsg));
+										}
+										stream.push(event);
+									}
+									if (state.currentConfig.debug) {
+										console.log(`  ✓ Success with ${modelRef} (cross-tier fallback)`);
+									}
+									if (embargoEnabled && state.isEmbargoed(modelRef)) {
+										state.liftEmbargo(modelRef);
+									}
+									decision.isFallback = true;
+									decision.targetLabel = modelRef;
+									success = true;
+									break;
+								} catch (err) {
+									const errMsg = err instanceof Error ? err.message : String(err);
+									if (state.currentConfig.debug) {
+										console.log(`  ✗ Cross-tier failed: ${errMsg}`);
+									}
+									if (embargoEnabled) {
+										const errStatus = err instanceof StatusAwareError ? err.status : undefined;
+										const errRetryAfter = err instanceof StatusAwareError ? err.retryAfterMs : undefined;
+										if (isRetryableStatus(errStatus, errMsg)) {
+											const embargoCfg = state.currentConfig.embargo ?? { enabled: true };
+											const duration = computeEmbargoDuration(errRetryAfter, embargoCfg);
+											const reason = errStatus ? `HTTP ${errStatus}: ${errMsg.slice(0, 100)}` : errMsg.slice(0, 100);
+											state.embargoModel(modelRef, errStatus, reason, duration, errRetryAfter);
+										}
+									}
+									lastError = err;
+								}
+							}
+						}
+					}
+				}
+
 				if (!success) {
 					if (state.currentConfig.debug) {
 						console.log(
-							`[model-router] ❌ All ${modelsToTry.length} models failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+							`[model-router] ❌ All models failed (${modelsToTry.length} primary + cross-tier). Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
 						);
 					}
 					throw lastError || new Error("Failed to delegate to any model in the chain.");
