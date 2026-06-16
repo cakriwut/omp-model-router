@@ -141,6 +141,11 @@ export interface RoutingConfig {
 	 * Receives the canonical model ref (e.g. "anthropic/claude-3-haiku-20240307") and usage.
 	 */
 	recordClassifierCost?: (modelRef: string, usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number }) => void;
+	/**
+	 * TEST-ONLY: inject a fake runClassifier to avoid mock.module() leaking across files.
+	 * When set, bypasses the dynamic import and uses this function directly.
+	 */
+	_classifierOverride?: (...args: Parameters<Awaited<typeof import("./index.js")>["runClassifier"]>) => ReturnType<Awaited<typeof import("./index.js")>["runClassifier"]>;
 }
 
 /**
@@ -314,7 +319,8 @@ export const resolveRouting = async (
 			scope.classifierCacheHits += 1;
 		} else {
 			const classifierSpawnTime = Date.now();
-			const { runClassifier, resolveClassifierContextWindow } = await import("./index.js");
+			const { resolveClassifierContextWindow, runClassifier: importedRunClassifier } = await import("./index.js");
+			const runClassifier = config._classifierOverride ?? importedRunClassifier;
 			const classifierContextWindow = resolveClassifierContextWindow(
 				config.classifierModel,
 				input.modelRegistry,

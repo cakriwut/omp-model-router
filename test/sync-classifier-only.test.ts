@@ -1,8 +1,9 @@
 /**
  * Tests for sync-only classifier behavior via resolveRouting.
- * Mocks runClassifier to return controlled verdicts.
+ * Uses _classifierOverride (dependency injection) to avoid mock.module() leaking
+ * across test files in the same bun process.
  */
-import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -10,19 +11,14 @@ import type { RouterTier } from "../src/types";
 import type { SessionCalibration } from "../src/calibration/types";
 import type { PromptLogRecord } from "../src/calibration/trace";
 import type { SessionScope } from "../src/state";
+import { resolveRouting, type RoutingInput, type RoutingConfig } from "../src/routing/compose";
 
-// ─── Mock runClassifier ──────────────────────────────────────────────────────
+// ─── Controlled verdict injected per-test via _classifierOverride ─────────────
 
 let mockVerdict: { tier: RouterTier; reasoning: string } | undefined = {
 	tier: "high",
 	reasoning: "complex multi-file refactor",
 };
-
-mock.module("../src/routing/index.js", () => ({
-	runClassifier: async () => mockVerdict,
-}));
-
-import { resolveRouting, type RoutingInput, type RoutingConfig } from "../src/routing/compose";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -101,6 +97,7 @@ function makeConfig(mode: "adaptive" | "telemetry", promptLogPath?: string): Rou
 			globalPriorWeight: 0.1,
 		},
 		promptLogPath,
+		_classifierOverride: async () => mockVerdict,
 	};
 }
 
