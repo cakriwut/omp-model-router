@@ -89,6 +89,14 @@ export class RouterState {
 	currentCwd = process.cwd();
 
 	/**
+	 * Set when streamSimple throws an internal error (e.g. registry not ready).
+	 * Prevents turn_start from permanently disabling the router when OMP falls
+	 * back to a non-router model due to a transient provider error.
+	 * Cleared on next successful stream or on session_start.
+	 */
+	lastStreamWasInternalError = false;
+
+	/**
 	 * Per-session ExtensionContext references, keyed by sessionId.
 	 * Populated in turn_start, cleared in turn_end.
 	 * Using a Map instead of a single field prevents parallel sub-agents
