@@ -17,6 +17,10 @@ const RETRYABLE_TEXT_PATTERNS = [
 	/capacity/i,
 	/service.unavailable/i,
 	/stream idle timeout/i,
+	// pi-ai wraps retry-exhausted errors: "Retry failed after N attempts: ... Original error: 429"
+	/retry failed after \d+ attempt/i,
+	// provider signaled a wait longer than pi-ai's maxDelayMs
+	/exceeds retry\.maxDelayMs/i,
 ];
 
 /**
@@ -43,6 +47,9 @@ export function isRetryableStatus(
 
 const RETRY_AFTER_MS_RE = /retry-after-ms=(\d+)/;
 
+/** Matches "Original error: 429" in pi-ai wrapped retry-exhausted messages. */
+const ORIGINAL_STATUS_RE = /Original error:\s*(\d{3})/;
+
 /**
  * Extract the `retry-after-ms=<value>` hint embedded in error messages by
  * pi-ai's `formatErrorMessageWithRetryAfter` utility.
@@ -52,6 +59,18 @@ const RETRY_AFTER_MS_RE = /retry-after-ms=(\d+)/;
  */
 export function parseRetryAfterMs(errorMessage: string): number | undefined {
 	const match = errorMessage.match(RETRY_AFTER_MS_RE);
+	if (!match) return undefined;
+	const value = parseInt(match[1], 10);
+	return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * Extract the original HTTP status code from pi-ai's wrapped retry-exhausted
+ * error messages: `"Retry failed after N attempts: ... Original error: 429"`.
+ * Returns undefined when the message is not that format.
+ */
+export function parseOriginalStatus(errorMessage: string): number | undefined {
+	const match = errorMessage.match(ORIGINAL_STATUS_RE);
 	if (!match) return undefined;
 	const value = parseInt(match[1], 10);
 	return Number.isFinite(value) && value > 0 ? value : undefined;

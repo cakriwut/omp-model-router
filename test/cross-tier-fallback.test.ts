@@ -3,7 +3,7 @@
  * errors (e.g. account-level 429), the router should try models from other tiers.
  */
 import { describe, test, expect } from "bun:test";
-import { isRetryableStatus } from "../src/embargo";
+import { isRetryableStatus, parseOriginalStatus, parseRetryAfterMs } from "../src/embargo";
 
 describe("Cross-tier fallback", () => {
 	describe("error detection for rate limit messages", () => {
@@ -37,6 +37,52 @@ describe("Cross-tier fallback", () => {
 
 		test("detects 529 status (Anthropic overloaded)", () => {
 			expect(isRetryableStatus(529, "Overloaded")).toBe(true);
+		});
+	});
+
+	describe("pi-ai wrapped retry-exhausted error detection", () => {
+		const WRAPPED_429 =
+			"Retry failed after 1 attempts: Provider requested 3600000ms wait, exceeds retry.maxDelayMs (300000ms). Original error: 429\n" +
+			' {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."},"request_id":"req_011Cc9u6eXfLrEDaRaDqr3hU"} retry-after-ms=3600000';
+
+		test("isRetryableStatus detects wrapped retry-exhausted 429", () => {
+			expect(isRetryableStatus(undefined, WRAPPED_429)).toBe(true);
+		});
+
+		test("parseOriginalStatus extracts 429 from wrapped message", () => {
+			expect(parseOriginalStatus(WRAPPED_429)).toBe(429);
+		});
+
+		test("parseRetryAfterMs extracts retry-after-ms from wrapped message", () => {
+			expect(parseRetryAfterMs(WRAPPED_429)).toBe(3600000);
+		});
+
+		test("parseOriginalStatus returns undefined for non-wrapped messages", () => {
+			expect(parseOriginalStatus("Some random error")).toBeUndefined();
+			expect(parseOriginalStatus("Rate limit exceeded")).toBeUndefined();
+		});
+
+		test("isRetryableStatus detects wrapped exceeds-maxDelayMs pattern", () => {
+			const msg = "Retry failed after 2 attempts: exceeds retry.maxDelayMs (300000ms). Original error: 503";
+			expect(isRetryableStatus(undefined, msg)).toBe(true);
+		});
+
+		test("parseOriginalStatus extracts 503 from wrapped message", () => {
+			const msg = "Retry failed after 2 attempts: exceeds retry.maxDelayMs (300000ms). Original error: 503";
+			expect(parseOriginalStatus(msg)).toBe(503);
+		});
+
+		test("isRetryableStatus with recovered status — 429 is retryable", () => {
+			const msg = "Retry failed after 1 attempts: Provider requested ...ms wait. Original error: 429";
+			const status = parseOriginalStatus(msg);
+			expect(isRetryableStatus(status, msg)).toBe(true);
+		});
+
+		test("isRetryableStatus with recovered status — 400 is NOT retryable", () => {
+			const msg = "Retry failed after 1 attempts: some error. Original error: 400";
+			const status = parseOriginalStatus(msg);
+			// 400 is in NON_RETRYABLE_STATUSES — status check wins
+			expect(isRetryableStatus(status, msg)).toBe(false);
 		});
 	});
 

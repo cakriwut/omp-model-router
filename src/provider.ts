@@ -31,6 +31,7 @@ import {
 	StatusAwareError,
 	isRetryableStatus,
 	parseRetryAfterMs,
+	parseOriginalStatus,
 	computeEmbargoDuration,
 } from "./embargo";
 
@@ -447,16 +448,33 @@ export const registerRouterProvider = (
 				const sessionScope = _snapSessionId ? state.getSessionScope(_snapSessionId) : state.scope;
 				const sessionCtx = _snapSessionId ? state.getSessionContext(_snapSessionId) : undefined;
 				try {
+					// ── Recover currentModelRegistry if not yet set ──────────────────
+					// During team/sub-agent execution, streamSimple may fire before
+					// session_start completes for the child session. Recover from the
+					// session-level ctx stored by turn_start rather than hard-failing.
 					if (!state.currentModelRegistry) {
-						throw new Error(
-							"Router provider not initialized yet. Wait for session_start and retry.",
-						);
+						const recoveredRegistry = sessionCtx?.modelRegistry;
+						if (recoveredRegistry) {
+							state.currentModelRegistry = recoveredRegistry;
+							if (state.currentConfig.debug) {
+								console.log(
+									`[model-router] Recovered modelRegistry from session context (session=${_snapSessionId})`,
+								);
+							}
+						} else {
+							state.lastStreamWasInternalError = true;
+							throw new Error(
+								"Router provider not initialized yet. Wait for session_start and retry.",
+							);
+						}
 					}
 					const profile = state.currentConfig.profiles[model.id];
 					if (!profile) {
 						throw new Error(`Unknown router profile: ${model.id}`);
 					}
 
+					// Clear internal error flag — we successfully initialized.
+					state.lastStreamWasInternalError = false;
 
 				// ── Task-type profile selection ───────────────────────────────────────
 				// If the active profile is generic (no taskType declared), detect the
@@ -870,8 +888,11 @@ export const registerRouterProvider = (
 
 						// Embargo model on retryable errors
 						if (embargoEnabled) {
-							const errStatus = err instanceof StatusAwareError ? err.status : undefined;
-							const errRetryAfter = err instanceof StatusAwareError ? err.retryAfterMs : undefined;
+							// pi-ai wraps retry-exhausted errors as plain Error — recover original status/retryAfter
+							const wrappedStatus = parseOriginalStatus(errMsg);
+							const wrappedRetryAfter = parseRetryAfterMs(errMsg);
+							const errStatus = err instanceof StatusAwareError ? err.status : wrappedStatus;
+							const errRetryAfter = err instanceof StatusAwareError ? err.retryAfterMs : wrappedRetryAfter;
 							if (isRetryableStatus(errStatus, errMsg)) {
 								const embargoCfg = state.currentConfig.embargo ?? { enabled: true };
 								const duration = computeEmbargoDuration(errRetryAfter, embargoCfg);
@@ -894,7 +915,9 @@ export const registerRouterProvider = (
 				// models in one tier.
 				if (!success && lastError) {
 					const lastErrMsg = lastError instanceof Error ? lastError.message : String(lastError);
-					const lastErrStatus = lastError instanceof StatusAwareError ? lastError.status : undefined;
+					const lastErrStatus = lastError instanceof StatusAwareError
+						? lastError.status
+						: parseOriginalStatus(lastErrMsg);
 					const isLastRetryable = isRetryableStatus(lastErrStatus, lastErrMsg);
 
 					if (isLastRetryable) {
@@ -1085,6 +1108,7 @@ export const registerRouterProvider = (
 
 					stream.end();
 				} catch (error) {
+					state.lastStreamWasInternalError = true;
 					stream.push({
 						type: "error",
 						reason: "error",
