@@ -25,7 +25,6 @@ import {
 	getLastUserText,
 	detectTaskType,
 } from "./routing";
-import { sanitizeToolSchemas } from "./utils/schema-compat";
 import type { RouterState } from "./state";
 import { loadPitfalls } from "./calibration/pitfalls";
 import {
@@ -710,7 +709,7 @@ export const registerRouterProvider = (
 						// 	}
 						// }
 
-						const delegatedStream = streamSimple(targetModel, sanitizeToolSchemas(sanitizeContext(effectiveContext)), {
+						const delegatedStream = streamSimple(targetModel, sanitizeContext(effectiveContext), {
 							...options,
 							apiKey,
 							headers: targetModel.headers,
@@ -817,7 +816,7 @@ export const registerRouterProvider = (
 									state.currentConfig.streamIdleTimeoutMs,
 									targetProvider,
 								);
-								const retryContext = sanitizeToolSchemas(sanitizeContext(effectiveContext));
+								const retryContext = sanitizeContext(effectiveContext);
 								try {
 									const retryStream = streamSimple(targetModel, retryContext, {
 										...options,
@@ -1016,7 +1015,7 @@ export const registerRouterProvider = (
 											  )
 											: undefined;
 
-									const delegatedStream = streamSimple(targetModel, sanitizeToolSchemas(sanitizeContext(crossTierContext)), {
+									const delegatedStream = streamSimple(targetModel, sanitizeContext(crossTierContext), {
 										...options,
 										apiKey,
 										headers: targetModel.headers,

@@ -198,7 +198,6 @@ const routerExtension = (pi: ExtensionAPI) => {
 		// scope — including any rule/heuristic/classifier pin from a previous run —
 		// would otherwise persist here. Clear it unconditionally on every session_start.
 		clearScopedPin(state.scope);
-		state.lastStreamWasInternalError = false;
 
 		// Re-register provider now that currentModelRegistry is populated so model
 		// definitions (contextWindow, maxTokens, reasoning) are correct.
@@ -373,13 +372,9 @@ const routerExtension = (pi: ExtensionAPI) => {
 		// Honor user-initiated model switches: if router is marked enabled but the
 		// active model is no longer "router", the user changed it via /model. Treat
 		// it as an opt-out — disable router so we don't force-restore it on turn_end.
-		// Exception: if the last stream failed with an internal error (e.g. registry
-		// not ready during sub-agent startup), OMP may have fallen back to a
-		// non-router model transiently. Don't treat that as a user opt-out.
 		if (
 			state.routerEnabled &&
 			!state.isInternalModelSwitch &&
-			!state.lastStreamWasInternalError &&
 			ctx.model &&
 			ctx.model.provider !== "router"
 		) {
@@ -389,11 +384,6 @@ const routerExtension = (pi: ExtensionAPI) => {
 			state.persist();
 			// ctx.ui.setHiddenThinkingLabel?.(); // API not available yet
 			actions.updateStatus(ctx);
-		}
-
-		// Once the model is back on "router" (OMP recovered), clear the error flag.
-		if (state.lastStreamWasInternalError && ctx.model?.provider === "router") {
-			state.lastStreamWasInternalError = false;
 		}
 
 		if (state.routerEnabled) {
