@@ -323,6 +323,76 @@ describe("sanitizeContext", () => {
 	});
 });
 
+// ─── Tests: empty tool description fix ─────────────────────────────────────
+//
+// Bug (2026-06-19): OMP latest update emits description: "" for built-in tools.
+// Bedrock rejects this with HTTP 400:
+//   "10 validation errors detected: Value '' at 'toolConfig.tools.N.member.toolSpec.description'
+//    failed to satisfy constraint: Member must have length greater than or equal to 1"
+// Fix: sanitizeContext() replaces empty description with the tool name.
+//
+describe("sanitizeContext - empty tool description fix", () => {
+	it("replaces empty description with tool name", () => {
+		const ctx: Context = {
+			messages: [],
+			tools: [
+				{ name: "read", description: "", parameters: {} as any },
+				{ name: "bash", description: "", parameters: {} as any },
+				{ name: "edit", description: "Edit files", parameters: {} as any },
+			],
+		};
+		const result = sanitizeContext(ctx);
+		expect(result.tools![0].description).toBe("read");
+		expect(result.tools![1].description).toBe("bash");
+		expect(result.tools![2].description).toBe("Edit files"); // unchanged
+	});
+
+	it("returns the same context object when all descriptions are non-empty", () => {
+		const ctx: Context = {
+			messages: [],
+			tools: [
+				{ name: "read", description: "Read a file", parameters: {} as any },
+			],
+		};
+		const result = sanitizeContext(ctx);
+		expect(result).toBe(ctx); // same reference — no allocation
+	});
+
+	it("handles context with no tools", () => {
+		const ctx: Context = { messages: [] };
+		const result = sanitizeContext(ctx);
+		expect(result).toBe(ctx);
+	});
+
+	it("handles context with empty tools array", () => {
+		const ctx: Context = { messages: [], tools: [] };
+		const result = sanitizeContext(ctx);
+		expect(result).toBe(ctx);
+	});
+
+	it("fixes both empty descriptions AND malformed tool names in one pass", () => {
+		const ctx: Context = {
+			messages: [
+				{
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "c1", name: "bad tool name!", arguments: {} },
+					],
+				},
+			],
+			tools: [
+				{ name: "read", description: "", parameters: {} as any },
+			],
+		};
+		const result = sanitizeContext(ctx);
+		// Tool description fixed
+		expect(result.tools![0].description).toBe("read");
+		// Message tool call name fixed
+		const block = result.messages[0].content[0] as any;
+		expect(VALID_TOOL_NAME_RE.test(block.name)).toBe(true);
+	});
+});
+
 // ─── Tests: VALID_TOOL_NAME_RE pattern ───────────────────────────────────────
 
 describe("VALID_TOOL_NAME_RE", () => {

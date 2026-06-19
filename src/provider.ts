@@ -276,35 +276,47 @@ export const sanitizeToolName = (name: string): string => {
  * that fail API validation when replayed in conversation history.
  */
 export const sanitizeContext = (context: Context): Context => {
-	// Pre-scan: check if any message has an invalid tool call name before allocating.
-	// The common path (no malformed names) returns the original context as-is.
-	let needsSanitize = false;
+	// Pre-scan: check if any message has an invalid tool call name, or if any
+	// tool has an empty description (Bedrock HTTP 400: empty description rejected).
+	let needsMsgSanitize = false;
 	outer: for (const msg of context.messages) {
 		if (!Array.isArray(msg.content)) continue;
 		for (const block of msg.content as any[]) {
 			if (block.type === "toolCall" && block.name && !VALID_TOOL_NAME_RE.test(block.name)) {
-				needsSanitize = true;
+				needsMsgSanitize = true;
 				break outer;
 			}
 		}
 	}
-	if (!needsSanitize) return context;
 
-	// Slow path: at least one invalid name found — rebuild only the affected messages.
-	const messages = context.messages.map((msg) => {
-		if (!Array.isArray(msg.content)) return msg;
-		let contentModified = false;
-		const content = (msg.content as any[]).map((block: any) => {
-			if (block.type === "toolCall" && block.name && !VALID_TOOL_NAME_RE.test(block.name)) {
-				contentModified = true;
-				return { ...block, name: sanitizeToolName(block.name) };
-			}
-			return block;
-		});
-		if (contentModified) return { ...msg, content };
-		return msg;
-	});
-	return { ...context, messages };
+	const hasEmptyDescriptions = context.tools?.some((t) => !t.description) ?? false;
+
+	if (!needsMsgSanitize && !hasEmptyDescriptions) return context;
+
+	// Fix messages: rebuild only those with invalid tool call names.
+	const messages = needsMsgSanitize
+		? context.messages.map((msg) => {
+			if (!Array.isArray(msg.content)) return msg;
+			let contentModified = false;
+			const content = (msg.content as any[]).map((block: any) => {
+				if (block.type === "toolCall" && block.name && !VALID_TOOL_NAME_RE.test(block.name)) {
+					contentModified = true;
+					return { ...block, name: sanitizeToolName(block.name) };
+				}
+				return block;
+			});
+			if (contentModified) return { ...msg, content };
+			return msg;
+		})
+		: context.messages;
+
+	// Fix tools: replace empty descriptions with the tool name so Bedrock
+	// (and other providers that require non-empty description) don't reject the request.
+	const tools = hasEmptyDescriptions
+		? context.tools!.map((t) => (t.description ? t : { ...t, description: t.name }))
+		: context.tools;
+
+	return { ...context, messages, tools };
 };
 
 /**
