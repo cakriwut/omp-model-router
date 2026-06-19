@@ -1,14 +1,26 @@
 /**
  * Schema compatibility shim: converts OMP's internal schema format to standard JSON Schema.
  *
- * Background: OMP ≥0.79.x introduced a new internal schema representation for some
- * built-in tools (eval, resolve, report_tool_issue). The pi-ai provider layer (used
- * by omp-model-router) passes tool parameters directly to the OpenAI/Anthropic APIs
- * expecting valid JSON Schema. When a tool uses the internal format instead of TypeBox
- * output, the API returns HTTP 400 "Invalid schema for function '<name>'".
+ * Background: OMP ≥0.79.x switched from TypeBox to ArkType for built-in tool schemas
+ * (eval, resolve, report_tool_issue, etc.). The pi-ai provider layer (used by
+ * omp-model-router) was written for TypeBox and passes `tool.parameters` directly to
+ * the OpenAI/Anthropic/Bedrock APIs expecting valid JSON Schema.
  *
- * This module detects and converts the internal format to valid JSON Schema so the
- * delegated streamSimple call always receives schema-compliant tool definitions.
+ * Two failure modes exist:
+ *
+ *   1. Live ArkType `Type` instance — `tool.parameters` is a callable function. When
+ *      pi-ai serializes the request body (JSON.stringify), ArkType's toJSON() emits
+ *      its internal JSON AST (sequence/branches/domain/proto nodes). The API receives
+ *      this non-standard format and returns HTTP 400.
+ *
+ *   2. ArkType JSON AST (already serialized) — same non-standard nodes as a plain
+ *      object, detected by structural inspection.
+ *
+ * This module handles both cases:
+ *   - ArkType live instances: detected via `isArkTypeInstance`, converted via
+ *     `schema.toJsonSchema()` (ArkType's native JSON Schema emitter).
+ *   - ArkType JSON AST objects: detected via `isInternalSchema`, converted via
+ *     `arkJsonAstToWire` (ported from OMP's wire.ts).
  *
  * Internal schema shape (observed from 400-log analysis, OMP v0.79.7):
  *
@@ -34,7 +46,20 @@
  *   All nodes may carry a `meta` string (description) that is mapped to "description".
  */
 
-/** Detect whether a value looks like the OMP internal schema format. */
+/**
+ * Detect whether a value is a live ArkType `Type` instance.
+ * ArkType schemas are callable functions with a `toJsonSchema` method.
+ * This is distinct from Zod (plain object with `_zod`) and TypeBox (plain object).
+ */
+export function isArkTypeInstance(schema: unknown): schema is { toJsonSchema(opts?: unknown): Record<string, unknown> } {
+	return (
+		typeof schema === "function" &&
+		typeof (schema as Record<string, unknown>)["toJsonSchema"] === "function" &&
+		typeof (schema as Record<string, unknown>)["assert"] === "function"
+	);
+}
+
+/** Detect whether a value looks like the OMP internal ArkType JSON AST format. */
 export function isInternalSchema(schema: unknown): boolean {
 	if (!schema || typeof schema !== "object" || Array.isArray(schema)) return false;
 	const s = schema as Record<string, unknown>;
@@ -61,8 +86,8 @@ export function isInternalSchema(schema: unknown): boolean {
 
 type JsonSchema = Record<string, unknown>;
 
-/** Convert a single internal-schema node to JSON Schema. */
-function convertNode(node: unknown): JsonSchema {
+/** Convert a single ArkType JSON AST node to JSON Schema (ported from OMP wire.ts). */
+function arkJsonAstToWire(node: unknown): JsonSchema {
 	// Bare array → enum of units
 	if (Array.isArray(node)) {
 		const units = (node as Array<{ unit?: unknown; meta?: string }>)
@@ -82,7 +107,7 @@ function convertNode(node: unknown): JsonSchema {
 
 	// ── Array node ────────────────────────────────────────────────────────────
 	if ("sequence" in n && n["sequence"] && typeof n["sequence"] === "object") {
-		const itemSchema = convertNode(n["sequence"]);
+		const itemSchema = arkJsonAstToWire(n["sequence"]);
 		const result: JsonSchema = { type: "array", items: itemSchema };
 		if (meta) result["description"] = meta;
 		const minLen = n["minLength"];
@@ -106,7 +131,7 @@ function convertNode(node: unknown): JsonSchema {
 		const indexEntries = n["index"] as Array<{ signature?: unknown; value?: unknown }>;
 		let valueSchema: JsonSchema = {};
 		if (indexEntries.length > 0 && indexEntries[0].value !== undefined) {
-			valueSchema = convertNode(indexEntries[0].value);
+			valueSchema = arkJsonAstToWire(indexEntries[0].value);
 		}
 		const result: JsonSchema = { type: "object", additionalProperties: valueSchema };
 		if (meta) result["description"] = meta;
@@ -127,12 +152,12 @@ function convertNode(node: unknown): JsonSchema {
 
 		for (const entry of reqEntries) {
 			if (!entry.key) continue;
-			properties[entry.key] = convertNode(entry.value);
+			properties[entry.key] = arkJsonAstToWire(entry.value);
 			requiredKeys.push(entry.key);
 		}
 		for (const entry of optEntries) {
 			if (!entry.key) continue;
-			properties[entry.key] = convertNode(entry.value);
+			properties[entry.key] = arkJsonAstToWire(entry.value);
 		}
 
 		const result: JsonSchema = {
@@ -167,11 +192,69 @@ function convertNode(node: unknown): JsonSchema {
 
 /**
  * Convert an OMP internal schema to standard JSON Schema.
- * If the schema is already valid JSON Schema (TypeBox output), returns it unchanged.
+ * Handles three cases:
+ *   1. Live ArkType `Type` instance → call toJsonSchema() then post-process
+ *   2. ArkType JSON AST (plain object) → convert via arkJsonAstToWire
+ *   3. Already valid JSON Schema (TypeBox/Zod output) → return unchanged
  */
 export function convertToJsonSchema(schema: unknown): unknown {
-	if (!isInternalSchema(schema)) return schema;
-	return convertNode(schema);
+	// Case 1: live ArkType instance — convert via native toJsonSchema()
+	if (isArkTypeInstance(schema)) {
+		try {
+			const raw = schema.toJsonSchema({ target: "draft-2020-12", fallback: (ctx: { base: unknown }) => ctx.base }) as Record<string, unknown>;
+			delete raw.$schema;
+			postProcessSchema(raw);
+			return raw;
+		} catch {
+			// fallback: try treating as JSON AST after schema.toJSON() serialization
+			const serialized = (schema as unknown as { toJSON?(): unknown }).toJSON?.();
+			if (serialized && isInternalSchema(serialized)) return arkJsonAstToWire(serialized);
+			return schema;
+		}
+	}
+	// Case 2: ArkType JSON AST (plain object)
+	if (isInternalSchema(schema)) return arkJsonAstToWire(schema);
+	// Case 3: already valid JSON Schema
+	return schema;
+}
+
+/**
+ * Post-process a converted JSON Schema:
+ *  - infer missing `type` on bare enum nodes (Gemini/Vertex reject enum without type)
+ *  - close declared object nodes with additionalProperties: false
+ */
+function postProcessSchema(node: unknown): void {
+	if (Array.isArray(node)) {
+		for (const child of node) postProcessSchema(child);
+		return;
+	}
+	if (!node || typeof node !== "object") return;
+	const obj = node as Record<string, unknown>;
+
+	// Infer type for bare enum (no type field)
+	if (!("type" in obj) && Array.isArray(obj.enum)) {
+		const types = new Set((obj.enum as unknown[]).map((v) => typeof v));
+		if (types.size === 1) {
+			const t = [...types][0];
+			if (t === "string" || t === "number" || t === "boolean") obj.type = t;
+		}
+	}
+
+	// Recurse into schema-valued positions
+	for (const key of ["items", "additionalProperties", "not", "if", "then", "else"]) {
+		if (key in obj) postProcessSchema(obj[key]);
+	}
+	for (const key of ["properties", "$defs", "definitions"]) {
+		const map = obj[key];
+		if (map && typeof map === "object" && !Array.isArray(map)) {
+			for (const v of Object.values(map as Record<string, unknown>)) postProcessSchema(v);
+		}
+	}
+	for (const key of ["anyOf", "oneOf", "allOf", "prefixItems"]) {
+		if (Array.isArray(obj[key])) {
+			for (const child of obj[key] as unknown[]) postProcessSchema(child);
+		}
+	}
 }
 
 /**
@@ -186,7 +269,7 @@ export function sanitizeToolSchemas<T extends { tools?: Array<{ name: string; de
 
 	let needsConversion = false;
 	for (const tool of tools) {
-		if (isInternalSchema(tool.parameters)) {
+		if (isArkTypeInstance(tool.parameters) || isInternalSchema(tool.parameters)) {
 			needsConversion = true;
 			break;
 		}
@@ -194,7 +277,7 @@ export function sanitizeToolSchemas<T extends { tools?: Array<{ name: string; de
 	if (!needsConversion) return context;
 
 	const convertedTools = tools.map((tool) => {
-		if (!isInternalSchema(tool.parameters)) return tool;
+		if (!isArkTypeInstance(tool.parameters) && !isInternalSchema(tool.parameters)) return tool;
 		return { ...tool, parameters: convertToJsonSchema(tool.parameters) };
 	});
 

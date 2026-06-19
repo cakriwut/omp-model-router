@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { isInternalSchema, convertToJsonSchema, sanitizeToolSchemas } from "../src/utils/schema-compat";
+import { isArkTypeInstance, isInternalSchema, convertToJsonSchema, sanitizeToolSchemas } from "../src/utils/schema-compat";
 
 // ─── Fixtures from real HTTP 400 logs (OMP v0.79.7) ─────────────────────────
 
@@ -296,5 +296,105 @@ describe("sanitizeToolSchemas", () => {
 	it("handles context with empty tools array", () => {
 		const ctx = { tools: [] };
 		expect(sanitizeToolSchemas(ctx)).toBe(ctx);
+	});
+});
+
+// ─── isArkTypeInstance ────────────────────────────────────────────────────────
+
+describe("isArkTypeInstance", () => {
+	it("detects a mock ArkType instance (callable + toJsonSchema + assert)", () => {
+		const mockArk = Object.assign(() => {}, {
+			toJsonSchema: () => ({}),
+			assert: () => {},
+		});
+		expect(isArkTypeInstance(mockArk)).toBe(true);
+	});
+
+	it("rejects plain objects", () => {
+		expect(isArkTypeInstance({ toJsonSchema: () => {} })).toBe(false);
+	});
+
+	it("rejects functions without toJsonSchema", () => {
+		expect(isArkTypeInstance(() => {})).toBe(false);
+	});
+
+	it("rejects null/undefined/primitives", () => {
+		expect(isArkTypeInstance(null)).toBe(false);
+		expect(isArkTypeInstance("string")).toBe(false);
+	});
+});
+
+describe("convertToJsonSchema – live ArkType instance", () => {
+	it("calls toJsonSchema() and removes $schema", () => {
+		const mockArk = Object.assign(() => {}, {
+			toJsonSchema: (_opts?: unknown) => ({
+				$schema: "https://json-schema.org/draft/2020-12/schema",
+				type: "object",
+				properties: {
+					cells: {
+						type: "array",
+						items: {
+							type: "object",
+							properties: {
+								language: { enum: ["py", "js"] },
+								code: { type: "string" },
+							},
+							required: ["language", "code"],
+						},
+						minItems: 1,
+					},
+				},
+				required: ["cells"],
+			}),
+			assert: () => {},
+		});
+
+		const result = convertToJsonSchema(mockArk) as any;
+		expect(result.$schema).toBeUndefined(); // $schema stripped
+		expect(result.type).toBe("object");
+		expect(result.properties.cells.type).toBe("array");
+		expect(result.properties.cells.minItems).toBe(1);
+	});
+
+	it("infers type on bare enum after toJsonSchema()", () => {
+		const mockArk = Object.assign(() => {}, {
+			toJsonSchema: () => ({
+				type: "object",
+				properties: {
+					lang: { enum: ["py", "js"] }, // no type
+				},
+			}),
+			assert: () => {},
+		});
+		const result = convertToJsonSchema(mockArk) as any;
+		// postProcessSchema should add type: "string" to the bare enum
+		expect(result.properties.lang.type).toBe("string");
+	});
+});
+
+describe("sanitizeToolSchemas – ArkType instance tools", () => {
+	it("converts ArkType instance tool parameters", () => {
+		const mockArk = Object.assign(() => {}, {
+			toJsonSchema: () => ({
+				type: "object",
+				properties: { cells: { type: "array" } },
+				required: ["cells"],
+			}),
+			assert: () => {},
+		});
+
+		const ctx = {
+			tools: [
+				{ name: "read", description: "read", parameters: typeboxSchema },
+				{ name: "eval", description: "eval", parameters: mockArk },
+			],
+		};
+
+		const result = sanitizeToolSchemas(ctx) as typeof ctx;
+		expect(result).not.toBe(ctx);
+		expect(result.tools[0]).toBe(ctx.tools[0]); // unchanged
+		const evalResult = result.tools[1].parameters as any;
+		expect(evalResult.type).toBe("object");
+		expect(evalResult.properties.cells.type).toBe("array");
 	});
 });
