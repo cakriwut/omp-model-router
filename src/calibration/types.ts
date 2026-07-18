@@ -26,6 +26,9 @@ export interface SessionCalibration {
 
 	/** Path to trace JSONL file (if traceEnabled) */
 	traceFilePath?: string;
+
+	/** Path to prompt log JSONL file (if logging prompts) */
+	promptLogPath?: string;
 }
 
 /**
