@@ -84,7 +84,7 @@ export const handleProfile = (
 					state.selectedProfile,
 					// Inline options: enable edit sub-view navigation
 					{
-						config: state.currentConfig,
+						config: () => state.currentConfig,
 						modelRegistry: ctx.modelRegistry,
 						onSave: (savedProfileName, profile) => {
 							// Persist and reload config

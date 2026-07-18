@@ -28,7 +28,7 @@ interface ProfileEntry {
 
 /** Options for enabling inline sub-view editing within the list. */
 export interface ProfileListInlineOptions {
-	config: RouterConfig;
+	config: () => RouterConfig;
 	modelRegistry: ModelRegistry;
 	onSave: (profileName: string, profile: RouterProfile) => void;
 	onCalibrationSave?: (calibration: CalibrationConfig) => void;
@@ -268,7 +268,8 @@ export class ProfileListComponent implements Component {
 	#handleEdit(profileName: string): void {
 		// If inline options are available, open the editor as a sub-view.
 		if (this.#inlineOptions) {
-			const profile = this.#inlineOptions.config.profiles[profileName];
+			const entry = this.#profiles.find(e => e.name === profileName);
+			const profile = entry?.profile;
 			if (!profile) return;
 
 			const done = (result: RouterProfile | undefined): void => {
@@ -313,7 +314,7 @@ export class ProfileListComponent implements Component {
 			this.#theme,
 			this.#keybindings,
 			done,
-			this.#inlineOptions.config.calibration,
+			this.#inlineOptions.config().calibration,
 			this.#inlineOptions.modelRegistry,
 		);
 	}
